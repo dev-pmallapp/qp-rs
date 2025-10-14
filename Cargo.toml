@@ -1,0 +1,52 @@
+[workspace]
+members = [
+    "qp/core",
+    "qp/mem",
+    "qp/qf",
+]
+exclude = [
+    "examples/*",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["QP Rust Port Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/QuantumLeaps/qp-rs"
+description = "Rust port of the QP real-time embedded framework"
+keywords = ["embedded", "no-std", "state-machine", "rtos", "real-time"]
+categories = ["embedded", "concurrency", "no-std"]
+
+[workspace.dependencies]
+# Core dependencies
+cortex-m = "0.7"
+nb = "1.0"
+embedded-hal = "1.0"
+heapless = "0.8"
+defmt = "0.3"
+critical-section = "1.1"
+
+# Development dependencies  
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+embedded-time = "0.12"
+
+# Test dependencies
+criterion = "0.5"
+
+[profile.dev]
+debug = true
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+debug = true
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,15 @@
+[package]
+name = "blinky"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qp-core = { path = "../../qp/core" }
+qp-mem = { path = "../../qp/mem" }
+panic-halt = "0.2"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

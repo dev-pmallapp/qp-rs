@@ -1,0 +1,28 @@
+[package]
+name = "qp-qf"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Framework layer (QF) - Active objects and event management for QP"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+std = ["qp-core/std"]
+defmt = ["dep:defmt", "qp-core/defmt"]
+
+[dependencies]
+qp-core = { path = "../core" }
+qp-mem = { path = "../mem" }
+heapless = { workspace = true }
+critical-section = { workspace = true }
+nb = { workspace = true }
+
+# Optional dependencies
+defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Add test dependencies here

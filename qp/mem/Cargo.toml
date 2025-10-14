@@ -1,0 +1,22 @@
+[package]
+name = "qp-mem"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Memory management for the QP framework"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+defmt = ["dep:defmt", "qp-core/defmt"]
+
+[dependencies]
+qp-core = { path = "../core" }
+heapless = { workspace = true }
+critical-section = { workspace = true }
+
+# Optional dependencies
+defmt = { workspace = true, optional = true }
