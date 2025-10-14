@@ -1,0 +1,18 @@
+[package]
+name = "dpp-linux"
+version = "0.1.0"
+edition = "2021"
+
+# This is a standalone example, not part of the workspace
+[workspace]
+
+[dependencies]
+qp-core = { path = "../../qp/core" }
+qp-qep = { path = "../../qp/qep" }
+qp-qf = { path = "../../qp/qf" }
+qp-qv = { path = "../../qp/qv" }
+qp-posix = { path = "../../qp/posix" }
+
+[[bin]]
+name = "dpp-linux"
+path = "src/main.rs"

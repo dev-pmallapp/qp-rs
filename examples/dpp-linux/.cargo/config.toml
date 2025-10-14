@@ -1,0 +1,8 @@
+# Build configuration for Linux DPP example
+
+[build]
+# Use the native target (not RISC-V like other examples)
+# This allows using std library on Linux
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = []
