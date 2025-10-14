@@ -7,13 +7,15 @@ members = [
     "qp/qv",
     "qp/qk",
     "qp/qs",
-    "qp/posix",
     "examples",
 ]
 exclude = [
     "examples/blinky",
     "examples/dpp-esp32c6",
     "examples/dpp-linux",
+    "ports/posix",
+    "ports/esp32c6",
+    "boards/esp32c6",
 ]
 resolver = "2"
 
