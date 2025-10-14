@@ -11,7 +11,8 @@ categories.workspace = true
 
 [features]
 default = []
-defmt = ["dep:defmt", "qp-core/defmt"]
+std = []
+defmt = ["dep:defmt"]
 
 [dependencies]
 qp-core = { path = "../core" }
