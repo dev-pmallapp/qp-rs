@@ -257,6 +257,8 @@ fn main() {
     let mut cycle = 0u32;
     let mut philo_idx = 0usize;
     let mut eating_count = [0u32; N_PHILO];
+    let mut think_time = [0u32; N_PHILO];  // Time spent thinking
+    let mut eat_time = [0u32; N_PHILO];     // Time spent eating
 
     // Main simulation loop
     loop {
@@ -268,11 +270,15 @@ fn main() {
 
         // Determine philosopher's state and act accordingly
         if state_fn as usize == Philosopher::thinking as usize {
-            // Philosopher is thinking, periodically gets hungry
-            if cycle % 7 == (philo_idx as u32) {
-                println!("[{}] Philosopher {} thinking -> HUNGRY", cycle, philo_idx);
+            think_time[philo_idx] += 1;
+            
+            // Philosopher is thinking, gets hungry after some time
+            if think_time[philo_idx] >= 50 + (philo_idx as u32 * 10) {
+                println!("[{}] Philosopher {} thinking -> HUNGRY (thought for {} cycles)", 
+                    cycle, philo_idx, think_time[philo_idx]);
                 
                 philo.hsm.set_state(Philosopher::hungry);
+                think_time[philo_idx] = 0;
                 
                 // Request forks from table
                 if table.on_hungry(philo_idx as u8) {
@@ -284,19 +290,23 @@ fn main() {
                 }
             }
         } else if state_fn as usize == Philosopher::hungry as usize {
-            // Try to get forks again
+            // Try to get forks again each cycle
             if table.on_hungry(philo_idx as u8) {
                 println!("[{}] Philosopher {} got forks -> EATING", cycle, philo_idx);
                 philo.hsm.set_state(Philosopher::eating);
                 eating_count[philo_idx] += 1;
             }
         } else if state_fn as usize == Philosopher::eating as usize {
-            // Philosopher is eating, periodically finishes
-            if cycle % 5 == (philo_idx as u32) {
-                println!("[{}] Philosopher {} eating -> DONE", cycle, philo_idx);
+            eat_time[philo_idx] += 1;
+            
+            // Philosopher is eating, finishes after some time
+            if eat_time[philo_idx] >= 30 + (philo_idx as u32 * 5) {
+                println!("[{}] Philosopher {} eating -> DONE (ate for {} cycles)", 
+                    cycle, philo_idx, eat_time[philo_idx]);
                 
                 // Release forks
                 table.on_done(philo_idx as u8);
+                eat_time[philo_idx] = 0;
                 
                 philo.hsm.set_state(Philosopher::thinking);
                 
