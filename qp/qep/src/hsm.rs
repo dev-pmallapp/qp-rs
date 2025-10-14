@@ -1,6 +1,6 @@
 //! Hierarchical state machine implementation details
 
-use qp_core::{QEvent, QResult, QStateHandler, QStateReturn};
+use qp_core::{QEvent, QStateHandler, QStateReturn};
 use crate::{QHsm, MAX_STATE_DEPTH};
 
 impl QHsm {
