@@ -2,6 +2,7 @@
 members = [
     "qp/core",
     "qp/mem",
+    "qp/qep",
     "qp/qf",
 ]
 exclude = [

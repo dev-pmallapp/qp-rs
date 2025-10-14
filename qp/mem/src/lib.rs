@@ -13,6 +13,9 @@ pub mod events;
 // pub use pools::*;
 pub use events::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Memory pool statistics for debugging and monitoring
 #[derive(Debug, Clone, Copy)]
 pub struct QPoolStats {

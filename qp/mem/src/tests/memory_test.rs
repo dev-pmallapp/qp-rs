@@ -1,6 +1,6 @@
 //! Memory management tests for qp-mem
 
-use qp_mem::{QPoolStats, define_event};
+use crate::{QPoolStats, define_event};
 use qp_core::{QEvent, QSignal};
 
 #[test]

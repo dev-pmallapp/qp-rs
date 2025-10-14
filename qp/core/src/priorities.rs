@@ -1,7 +1,7 @@
 //! Priority management for active objects and events
 
 use core::fmt;
-use crate::QError;
+use crate::{QError, QResult};
 
 /// Type-safe priority level for active objects
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,8 +18,8 @@ impl QPriority {
     pub const INVALID: QPriority = QPriority(0);
     
     /// Create a new priority level
-    pub const fn new(priority: u8) -> Result<Self, QError> {
-        if priority == 0 || priority > 255 {
+    pub fn new(priority: u8) -> QResult<Self> {
+        if priority == 0 {
             Err(QError::InvalidPriority)
         } else {
             Ok(QPriority(priority))

@@ -1,6 +1,6 @@
 //! Active object tests for qp-qf
 
-use qp_core::{QPriority};
+use crate::QPriority;
 
 #[test]
 fn test_priority_in_qf() {

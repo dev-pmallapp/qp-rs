@@ -3,7 +3,10 @@
 use crate::{QEvent, QResult};
 
 /// State machine return codes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 
+/// Note: PartialEq/Eq are intentionally not derived because function pointer
+/// comparisons are not reliable (addresses may vary between codegen units).
+#[derive(Debug, Clone, Copy)]
 pub enum QStateReturn {
     /// Event was handled in this state
     Handled,

@@ -1,7 +1,7 @@
 //! Event tests for qp-core
 //! These tests run on x86 host with std for testing, but verify no_std compatible code
 
-use qp_core::{QEvent, QSignal};
+use crate::{QEvent, QSignal};
 
 // Define test event types
 #[derive(Debug, Clone, Copy)]

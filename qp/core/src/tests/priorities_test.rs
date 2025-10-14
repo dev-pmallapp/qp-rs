@@ -1,6 +1,6 @@
 //! Priority tests for qp-core  
 
-use qp_core::QPriority;
+use crate::QPriority;
 
 #[test]
 fn test_priority_creation() {

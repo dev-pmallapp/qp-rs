@@ -148,7 +148,7 @@ impl QEventFactory {
     }
     
     /// Create an event with data payload
-    pub fn event<E>(&self, signal: QSignal, data: E) -> QResult<QEvt>
+    pub fn event<E>(&self, _signal: QSignal, data: E) -> QResult<QEvt>
     where
         E: QEvent + 'static,
     {

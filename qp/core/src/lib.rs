@@ -19,6 +19,9 @@ pub use states::*;
 pub use priorities::*;
 pub use time::*;
 
+#[cfg(test)]
+mod tests;
+
 /// QP framework version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

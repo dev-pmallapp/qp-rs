@@ -21,6 +21,9 @@ pub use queue::*;
 pub use registry::*;
 pub use lifecycle::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Maximum number of active objects in the system
 pub const MAX_ACTIVE_OBJECTS: usize = 32;
 
