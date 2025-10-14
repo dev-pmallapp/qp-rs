@@ -11,7 +11,7 @@ qp-core = { path = "../../qp/core" }
 qp-qep = { path = "../../qp/qep" }
 qp-qf = { path = "../../qp/qf" }
 qp-qv = { path = "../../qp/qv" }
-qp-posix = { path = "../../qp/posix" }
+qp-posix = { path = "../../ports/posix" }
 
 [[bin]]
 name = "dpp-linux"

@@ -26,7 +26,7 @@ use qp_core::{QEvent, QSignal, QStateHandler, QStateReturn, QStateMachine};
 use qp_qep::QHsm;
 
 /// Number of philosophers
-const N_PHILO: usize = 5;
+const N_PHILO: usize = 10;
 
 /// Signals for the DPP application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

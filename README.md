@@ -14,18 +14,32 @@ This project is in early development. The following components have been impleme
 - [x] **Time Management**: Time events, durations, and tick counting
 - [x] **Memory Management**: Static memory pools and event allocation
 
+### ✅ Phase 2 - Event Processing
+
+- [x] **QEP (Event Processor)**: Hierarchical state machine engine
+- [x] **QF (Framework)**: Active object container and event management
+- [x] **QV Kernel**: Cooperative scheduler (stub implementation)
+- [x] **QK Kernel**: Preemptive scheduler (stub implementation)
+- [x] **QS (Spy)**: Software tracing (stub implementation)
+
+### ✅ Phase 3 - Platform Ports & Examples
+
+- [x] **ESP32-C6 Port**: RISC-V embedded target with esp-hal
+- [x] **POSIX Port**: Linux/Unix systems with std library
+- [x] **DPP Example (ESP32-C6)**: Dining Philosophers on embedded hardware
+- [x] **DPP Example (Linux)**: Dining Philosophers on native POSIX
+
 ### 🚧 In Progress
 
-- [ ] **Event Processing Engine (QEP)**: State machine implementation
-- [ ] **Framework Layer (QF)**: Active object traits and management
-- [ ] **Real-Time Kernels**: QV, QK, QXK scheduler implementations
+- [ ] **QV/QK Integration**: Full scheduler implementation with event dispatching
+- [ ] **Active Object Lifecycle**: Complete active object management
 
 ### 📋 Planned
 
-- [ ] **Platform Ports**: ARM Cortex-M, RISC-V support
-- [ ] **Examples**: Blinky, Dining Philosophers Problem
-- [ ] **Testing Framework**: Unit tests and integration tests
-- [ ] **Documentation**: API docs and tutorials
+- [ ] **Platform Ports**: ARM Cortex-M (STM32), additional RISC-V boards
+- [ ] **More Examples**: Blinky, Calculator, IoT sensor network
+- [ ] **Testing Framework**: Comprehensive unit and integration tests
+- [ ] **Documentation**: Tutorials, migration guides, API reference
 
 ### Architecture
 
@@ -37,9 +51,8 @@ The framework is organized into several crates:
 - **`qp-qf`**: Framework (QF) - active objects and event management
 - **`qp-qv`**: Vanilla kernel (QV) - cooperative scheduling
 - **`qp-qk`**: Preemptive kernel (QK) - priority-based preemption
-- **`qp-qxk`**: Extended kernel (QXK) - dual-mode scheduling
 - **`qp-qs`**: Spy (QS) - software tracing infrastructure
-- **`qp-bsp`**: Board Support Package abstractions
+- **`qp-posix`**: POSIX port for Linux/Unix systems with std support
 
 ### Design Principles
 
@@ -97,6 +110,46 @@ cargo test
 # Or use the comprehensive test script (dev container)
 ./scripts/test-all.sh
 ```
+
+### Examples
+
+#### Dining Philosophers Problem (DPP)
+
+The classic concurrency problem demonstrating resource management and state machines.
+
+**Linux/POSIX:**
+```bash
+cd examples/dpp-linux
+cargo run --release --target x86_64-unknown-linux-gnu
+```
+
+**ESP32-C6 (embedded):**
+```bash
+cd examples/dpp-esp32c6
+cargo build --release
+espflash flash --monitor target/riscv32imac-unknown-none-elf/release/dpp-esp32c6
+```
+
+See `examples/ARCHITECTURE.md` for details on the dual structure (workspace vs standalone).
+
+### Features
+
+- ✅ **Hierarchical State Machines**: Full UML statechart support
+- ✅ **Active Objects**: Event-driven concurrent objects
+- ✅ **Multiple Kernels**: QV (cooperative), QK (preemptive), stubs for QXK
+- ✅ **Platform Ports**: ESP32-C6 (RISC-V), Linux/Unix (POSIX)
+- ✅ **Memory Safety**: Rust ownership prevents common embedded bugs
+- ✅ **`no_std` Support**: Bare-metal embedded targets
+- ✅ **Tracing**: Software tracing infrastructure (QS)
+
+### Platform Support
+
+| Platform | Status | Example |
+|----------|--------|---------|
+| Linux/Unix (POSIX) | ✅ Working | `examples/dpp-linux` |
+| ESP32-C6 (RISC-V) | ✅ Working | `examples/dpp-esp32c6` |
+| STM32 (ARM Cortex-M) | 📋 Planned | - |
+| nRF52 (ARM Cortex-M) | 📋 Planned | - |
 
 Run the blinky example:
 

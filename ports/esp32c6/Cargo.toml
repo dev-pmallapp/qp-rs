@@ -1,0 +1,23 @@
+[package]
+name = "qp-port-esp32c6"
+version = "0.1.0"
+edition = "2021"
+authors = ["QP-RS Contributors"]
+description = "QP Framework port for ESP32-C6 - middleware layer"
+license = "MIT OR Apache-2.0"
+
+# This is a standalone port, not part of the workspace
+[workspace]
+
+[dependencies]
+# QP Framework core
+qp-core = { path = "../../qp/core" }
+qp-qep = { path = "../../qp/qep" }
+qp-qf = { path = "../../qp/qf" }
+qp-qv = { path = "../../qp/qv" }
+
+# Board-level hardware access
+qp-bsp-esp32c6 = { path = "../../boards/esp32c6" }
+
+[features]
+default = []
