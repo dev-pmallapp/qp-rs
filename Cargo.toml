@@ -4,6 +4,9 @@ members = [
     "qp/mem",
     "qp/qep",
     "qp/qf",
+    "qp/qv",
+    "qp/qk",
+    "qp/qs",
 ]
 exclude = [
     "examples/*",

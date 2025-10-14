@@ -1,0 +1,36 @@
+[package]
+name = "qp-bsp-esp32c6"
+version = "0.1.0"
+edition = "2021"
+authors = ["QP Rust Port Team"]
+license = "MIT OR Apache-2.0"
+description = "Board Support Package for ESP32-C6 using QP framework"
+
+[dependencies]
+qp-core = { path = "../../qp/core" }
+qp-qep = { path = "../../qp/qep" }
+qp-qf = { path = "../../qp/qf" }
+qp-qv = { path = "../../qp/qv" }
+
+# ESP32-C6 HAL
+esp-hal = { version = "0.16", features = ["esp32c6"] }
+esp-backtrace = { version = "0.11", features = [
+    "esp32c6",
+    "exception-handler",
+    "panic-handler",
+    "println",
+] }
+esp-println = { version = "0.9", features = ["esp32c6"] }
+
+# Embedded HAL
+embedded-hal = "1.0"
+heapless = "0.8"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
