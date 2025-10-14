@@ -13,8 +13,10 @@ Examples are organized as a workspace member with platform-specific features. Th
 
 ### Dining Philosophers Problem (DPP)
 
-**File**: `dpp.rs`  
+**Source**: `dpp.rs` (reference), `dpp-esp32c6/` (buildable)  
 **Platforms**: ESP32-C6 (RISC-V)
+
+⚠️ **For ESP32-C6, use the standalone project `dpp-esp32c6/`** - the workspace example won't link.
 
 A classic concurrency problem demonstrating:
 - 5 philosophers with state machines (thinking/hungry/eating)
@@ -26,18 +28,16 @@ A classic concurrency problem demonstrating:
 
 ### For ESP32-C6
 
-```bash
-# From workspace root
-cargo build --example dpp --features esp32c6 --target riscv32imac-unknown-none-elf --release -p qp-examples
+**Use the standalone project** (workspace examples don't link for embedded targets):
 
-# Or from examples directory
-cd examples
-cargo build --example dpp --features esp32c6 --target riscv32imac-unknown-none-elf --release
+```bash
+cd examples/dpp-esp32c6
+cargo build --release
 ```
 
 ### Flashing to Hardware
 
-The standalone projects in subdirectories (e.g., `dpp-esp32c6/`) are complete board-specific packages with proper linker scripts and can be flashed directly:
+The standalone projects (e.g., `dpp-esp32c6/`) are complete board-specific packages with proper linker scripts:
 
 ```bash
 cd examples/dpp-esp32c6
@@ -60,11 +60,30 @@ espflash flash --monitor target/riscv32imac-unknown-none-elf/release/dpp-esp32c6
 
 ## Platform Features
 
-- `esp32c6` - ESP32-C6 RISC-V microcontroller
-- Future: `stm32`, `nrf52`, `linux`, etc.
+Currently available:
+- `esp32c6` - ESP32-C6 RISC-V microcontroller (use `dpp-esp32c6/` standalone project)
 
-## Notes
+Future (for hosted/native examples):
+- `linux` - Native Linux examples with std
+- `windows` - Native Windows examples with std
 
-- Examples require `#![no_std]` and `#![no_main]` for embedded targets
-- Each platform may have specific setup requirements (see standalone projects)
-- The `.cargo/config.toml` sets default target for RISC-V builds
+## Important Notes
+
+### Why Standalone Projects for Embedded?
+
+Embedded targets (ESP32-C6, STM32, etc.) **cannot use workspace examples** because they need:
+- Board-specific linker scripts (memory.x, link.x)
+- Interrupt vector tables
+- Memory layout definitions
+- Build scripts that generate platform-specific code
+
+**Solution**: Use standalone project directories like `dpp-esp32c6/` which have complete build setups.
+
+### When Will Workspace Examples Work?
+
+The workspace examples approach (`examples/dpp.rs` with features) will work for:
+- Native/hosted platforms (Linux, Windows, macOS) with `std`
+- QEMU simulation targets
+- Test environments
+
+For now, `dpp.rs` serves as a reference implementation that's kept in sync with the standalone projects.
