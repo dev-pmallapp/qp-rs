@@ -1,0 +1,39 @@
+[package]
+name = "qp-examples"
+version = "0.1.0"
+edition = "2021"
+authors = ["QP Rust Port Team"]
+license = "MIT OR Apache-2.0"
+description = "Examples for the QP framework"
+publish = false
+
+[[example]]
+name = "dpp"
+path = "dpp.rs"
+required-features = ["esp32c6"]
+
+[features]
+default = []
+esp32c6 = ["dep:esp-hal", "dep:esp-backtrace", "dep:esp-println", "dep:embedded-hal"]
+# Future: stm32, linux, etc.
+
+[dependencies]
+qp-core = { path = "../qp/core" }
+qp-qep = { path = "../qp/qep" }
+qp-qf = { path = "../qp/qf" }
+qp-qv = { path = "../qp/qv" }
+heapless = "0.8"
+
+# ESP32-C6 specific dependencies (optional)
+esp-hal = { version = "0.21", features = ["esp32c6"], optional = true }
+esp-backtrace = { version = "0.14", features = ["esp32c6", "exception-handler", "panic-handler", "println"], optional = true }
+esp-println = { version = "0.12", features = ["esp32c6"], optional = true }
+embedded-hal = { version = "1.0", optional = true }
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
