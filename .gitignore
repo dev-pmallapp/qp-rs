@@ -1,5 +1,5 @@
 # Rust
-/target/
+*/**/target/
 examples/**/target/
 Cargo.lock
 *.pdb

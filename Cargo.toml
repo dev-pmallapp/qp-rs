@@ -8,6 +8,7 @@ members = [
     "qp/qk",
     "qp/qs",
     "examples",
+    "tools/qspy",
 ]
 exclude = [
     "examples/blinky",
