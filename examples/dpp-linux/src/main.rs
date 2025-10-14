@@ -10,12 +10,21 @@
 //! - Hierarchical state machines for philosopher behavior
 //! - Event-driven communication between philosophers and table
 //! - POSIX port with std library support
+//! - QS software tracing (optional, enabled by default)
+//!
+//! Build without QS:
+//! ```bash
+//! cargo build --release --no-default-features
+//! ```
 
 use std::thread;
 use std::time::Duration;
 
 use qp_core::{QEvent, QSignal, QStateHandler, QStateReturn, QStateMachine};
 use qp_qep::QHsm;
+
+#[cfg(feature = "qs")]
+use qp_qs::{self as qs, QSRecordType};
 
 /// Number of philosophers
 const N_PHILO: usize = 5;
@@ -38,6 +47,28 @@ impl From<DPPSignal> for QSignal {
     fn from(sig: DPPSignal) -> Self {
         QSignal::new(sig as u16)
     }
+}
+
+impl DPPSignal {
+    /// Get signal name for debugging/tracing
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Hungry => "HUNGRY_SIG",
+            Self::Done => "DONE_SIG",
+            Self::Eat => "EAT_SIG",
+            Self::Timeout => "TIMEOUT_SIG",
+        }
+    }
+}
+
+/// Produce signal dictionary for QS tracing
+#[cfg(feature = "qs")]
+fn produce_sig_dict() {
+    println!("[QS] Signal Dictionary:");
+    println!("  {} = {}", DPPSignal::Eat as u16, DPPSignal::Eat.name());
+    println!("  {} = {}", DPPSignal::Done as u16, DPPSignal::Done.name());
+    println!("  {} = {}", DPPSignal::Timeout as u16, DPPSignal::Timeout.name());
+    println!("  {} = {}", DPPSignal::Hungry as u16, DPPSignal::Hungry.name());
 }
 
 /// Event with philosopher ID
@@ -110,9 +141,13 @@ impl Philosopher {
     }
 
     /// Thinking state
-    fn thinking(_me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
+    fn thinking(me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
         let sig_val = e.signal().0;
         if sig_val == DPPSignal::Timeout as u16 {
+            // Trace the transition
+            #[cfg(feature = "qs")]
+            qs::qs_sm_tran!(me, Self::thinking, Self::hungry);
+            
             // Transition to hungry
             QStateReturn::Transition(Self::hungry)
         } else {
@@ -121,9 +156,13 @@ impl Philosopher {
     }
 
     /// Hungry state - waiting for forks
-    fn hungry(_me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
+    fn hungry(me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
         let sig_val = e.signal().0;
         if sig_val == DPPSignal::Eat as u16 {
+            // Trace the transition
+            #[cfg(feature = "qs")]
+            qs::qs_sm_tran!(me, Self::hungry, Self::eating);
+            
             // Transition to eating
             QStateReturn::Transition(Self::eating)
         } else {
@@ -132,9 +171,13 @@ impl Philosopher {
     }
 
     /// Eating state
-    fn eating(_me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
+    fn eating(me: &mut dyn QStateMachine, e: &dyn QEvent) -> QStateReturn {
         let sig_val = e.signal().0;
         if sig_val == DPPSignal::Timeout as u16 {
+            // Trace the transition
+            #[cfg(feature = "qs")]
+            qs::qs_sm_tran!(me, Self::eating, Self::thinking);
+            
             // Transition to thinking
             QStateReturn::Transition(Self::thinking)
         } else {
@@ -223,8 +266,38 @@ fn main() {
     println!("\n╔════════════════════════════════════════╗");
     println!("║  QP Framework - Dining Philosophers    ║");
     println!("║  Running on Linux (POSIX)              ║");
+    #[cfg(feature = "qs")]
+    println!("║  QS Tracing: ENABLED                   ║");
+    #[cfg(not(feature = "qs"))]
+    println!("║  QS Tracing: DISABLED                  ║");
     println!("╚════════════════════════════════════════╝\n");
 
+    // Initialize QS tracing
+    #[cfg(feature = "qs")]
+    {
+        // Initialize UDP output to QSpy host tool
+        match qs::init_udp("127.0.0.1", 7701) {
+            Ok(_) => println!("QS: Initialized UDP output to QSpy at 127.0.0.1:7701"),
+            Err(e) => {
+                eprintln!("QS: Failed to initialize UDP: {}", e);
+                eprintln!("QS: Make sure QSpy is running in another terminal:");
+                eprintln!("    cd tools/qspy && cargo run --release");
+                std::process::exit(1);
+            }
+        }
+        qs::enable();
+        produce_sig_dict();
+        
+        // Send an initial test trace
+        if qs::begin(QSRecordType::QS_SM_INIT) {
+            qs::str("QS_INIT");
+            qs::u32(0x12345678);
+            qs::end();
+        }
+        qs::flush().ok();
+        println!();
+    }
+    
     // Initialize QP POSIX port
     qp_posix::init();
 
@@ -277,12 +350,37 @@ fn main() {
                 println!("[{}] Philosopher {} thinking -> HUNGRY (thought for {} cycles)", 
                     cycle, philo_idx, think_time[philo_idx]);
                 
+                // Trace the transition
+                #[cfg(feature = "qs")]
+                {
+                    if qs::begin(QSRecordType::QS_SM_TRAN) {
+                        qs::u8(philo_idx as u8);
+                        qs::str("THINKING->HUNGRY");
+                        qs::u32(think_time[philo_idx]);
+                        qs::end();
+                    }
+                    qs::flush().ok(); // Flush immediately for real-time tracing
+                }
+                
                 philo.hsm.set_state(Philosopher::hungry);
                 think_time[philo_idx] = 0;
                 
                 // Request forks from table
                 if table.on_hungry(philo_idx as u8) {
                     println!("[{}] Philosopher {} got forks -> EATING", cycle, philo_idx);
+                    
+                    // Trace the transition
+                    #[cfg(feature = "qs")]
+                    {
+                        if qs::begin(QSRecordType::QS_SM_TRAN) {
+                            qs::u8(philo_idx as u8);
+                            qs::str("HUNGRY->EATING");
+                            qs::u32(cycle);
+                            qs::end();
+                        }
+                        qs::flush().ok(); // Flush immediately for real-time tracing
+                    }
+                    
                     philo.hsm.set_state(Philosopher::eating);
                     eating_count[philo_idx] += 1;
                 } else {
@@ -304,6 +402,18 @@ fn main() {
                 println!("[{}] Philosopher {} eating -> DONE (ate for {} cycles)", 
                     cycle, philo_idx, eat_time[philo_idx]);
                 
+                // Trace the transition
+                #[cfg(feature = "qs")]
+                {
+                    if qs::begin(QSRecordType::QS_SM_TRAN) {
+                        qs::u8(philo_idx as u8);
+                        qs::str("EATING->THINKING");
+                        qs::u32(eat_time[philo_idx]);
+                        qs::end();
+                    }
+                    qs::flush().ok(); // Flush immediately for real-time tracing
+                }
+                
                 // Release forks
                 table.on_done(philo_idx as u8);
                 eat_time[philo_idx] = 0;
@@ -317,7 +427,7 @@ fn main() {
         // Move to next philosopher (round-robin)
         philo_idx = (philo_idx + 1) % N_PHILO;
 
-        // Print status periodically
+        // Print status and flush QS trace periodically
         if cycle % 100 == 0 {
             println!("\n╔════════ Status at cycle {} ════════╗", cycle);
             println!("║ Eating:      [{} {} {} {} {}]",
@@ -336,6 +446,12 @@ fn main() {
                 eating_count[0], eating_count[1], eating_count[2],
                 eating_count[3], eating_count[4]);
             println!("╚═════════════════════════════════════════╝\n");
+            
+            // Flush QS trace buffer
+            #[cfg(feature = "qs")]
+            if let Err(e) = qs::flush() {
+                eprintln!("Warning: Failed to flush QS trace: {}", e);
+            }
         }
 
         // Delay between cycles

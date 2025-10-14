@@ -27,6 +27,7 @@
 pub mod critical;
 pub mod time;
 pub mod scheduler;
+pub mod qs;
 
 pub use critical::{CriticalSection, enter_critical, exit_critical};
 pub use time::{ClockTick, set_tick_rate, start_ticker};
@@ -38,6 +39,7 @@ pub use scheduler::run;
 /// Sets up signal handlers and initializes timing infrastructure.
 pub fn init() {
     time::init();
+    qs::init();
     
     // Install SIGINT handler for clean shutdown
     #[cfg(unix)]

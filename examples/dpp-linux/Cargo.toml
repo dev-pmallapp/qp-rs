@@ -6,11 +6,16 @@ edition = "2021"
 # This is a standalone example, not part of the workspace
 [workspace]
 
+[features]
+default = ["qs"]
+qs = ["dep:qp-qs"]  # Enable QS software tracing
+
 [dependencies]
 qp-core = { path = "../../qp/core" }
 qp-qep = { path = "../../qp/qep" }
 qp-qf = { path = "../../qp/qf" }
 qp-qv = { path = "../../qp/qv" }
+qp-qs = { path = "../../qp/qs", features = ["std"], optional = true }
 qp-posix = { path = "../../ports/posix" }
 
 [[bin]]
