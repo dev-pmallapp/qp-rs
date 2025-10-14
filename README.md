@@ -28,6 +28,8 @@ This project is in early development. The following components have been impleme
 - [x] **POSIX Port**: Linux/Unix systems with std library
 - [x] **DPP Example (ESP32-C6)**: Dining Philosophers on embedded hardware
 - [x] **DPP Example (Linux)**: Dining Philosophers on native POSIX
+- [x] **QSpy Host Tool**: UDP-based trace receiver and formatter (Rust port)
+- [x] **QS Integration**: UDP tracing from DPP to QSpy with signal dictionaries
 
 ### 🚧 In Progress
 
@@ -117,11 +119,21 @@ cargo test
 
 The classic concurrency problem demonstrating resource management and state machines.
 
-**Linux/POSIX:**
+**Linux/POSIX with QSpy Tracing:**
+
+Terminal 1 - Start QSpy host tool:
+```bash
+cd tools/qspy
+cargo run --release
+```
+
+Terminal 2 - Run DPP example:
 ```bash
 cd examples/dpp-linux
 cargo run --release --target x86_64-unknown-linux-gnu
 ```
+
+QSpy provides real-time formatted trace output via UDP. See `examples/dpp-linux/UDP_QS_INTEGRATION.md`.
 
 **ESP32-C6 (embedded):**
 ```bash
@@ -130,7 +142,7 @@ cargo build --release
 espflash flash --monitor target/riscv32imac-unknown-none-elf/release/dpp-esp32c6
 ```
 
-See `examples/ARCHITECTURE.md` for details on the dual structure (workspace vs standalone).
+See `examples/README.md` for detailed instructions and `examples/ARCHITECTURE.md` for the project structure.
 
 ### Features
 
@@ -140,7 +152,8 @@ See `examples/ARCHITECTURE.md` for details on the dual structure (workspace vs s
 - ✅ **Platform Ports**: ESP32-C6 (RISC-V), Linux/Unix (POSIX)
 - ✅ **Memory Safety**: Rust ownership prevents common embedded bugs
 - ✅ **`no_std` Support**: Bare-metal embedded targets
-- ✅ **Tracing**: Software tracing infrastructure (QS)
+- ✅ **Software Tracing**: QS framework with UDP output to QSpy host tool
+- ✅ **QSpy Tool**: Real-time trace visualization with colored output (Rust port)
 
 ### Platform Support
 

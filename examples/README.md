@@ -4,31 +4,50 @@ This directory contains example applications demonstrating the QP framework on v
 
 ## Structure
 
-Examples are organized as a workspace member with platform-specific features. This allows:
-- Single source file per example
-- Platform selection via features
-- Reusable across different boards/OSes
+All examples are **standalone projects** in their own directories. This approach is required for embedded targets which need:
+- Board-specific linker scripts (memory.x, link.x)
+- Interrupt vector tables and startup code
+- Platform-specific build scripts
+- Proper memory layout definitions
 
 ## Available Examples
 
 ### Dining Philosophers Problem (DPP)
 
-**Source**: `dpp.rs` (reference), `dpp-esp32c6/` (buildable)  
-**Platforms**: ESP32-C6 (RISC-V)
-
-⚠️ **For ESP32-C6, use the standalone project `dpp-esp32c6/`** - the workspace example won't link.
+**Linux**: `dpp-linux/` - Native implementation using POSIX port  
+**ESP32-C6**: `dpp-esp32c6/` - Embedded implementation for RISC-V microcontroller
 
 A classic concurrency problem demonstrating:
 - 5 philosophers with state machines (thinking/hungry/eating)
 - Resource management (fork allocation)
 - Deadlock prevention
 - Event-driven architecture
+- QS software tracing
 
 ## Building Examples
 
+### For Linux/POSIX
+
+Native implementation with QS tracing via UDP to QSpy host tool:
+
+```bash
+cd examples/dpp-linux
+cargo build --release --target x86_64-unknown-linux-gnu
+
+# Terminal 1: Start QSpy host tool
+cd ../../tools/qspy
+cargo run --release
+
+# Terminal 2: Run DPP example
+cd ../../examples/dpp-linux
+cargo run --release --target x86_64-unknown-linux-gnu
+```
+
+**Note**: QSpy receives traces via UDP on port 7701 and displays formatted output with colored syntax. See `dpp-linux/UDP_QS_INTEGRATION.md` for details.
+
 ### For ESP32-C6
 
-**Use the standalone project** (workspace examples don't link for embedded targets):
+Embedded implementation for RISC-V microcontroller:
 
 ```bash
 cd examples/dpp-esp32c6
@@ -37,53 +56,54 @@ cargo build --release
 
 ### Flashing to Hardware
 
-The standalone projects (e.g., `dpp-esp32c6/`) are complete board-specific packages with proper linker scripts:
-
 ```bash
 cd examples/dpp-esp32c6
-cargo build --release
 espflash flash --monitor target/riscv32imac-unknown-none-elf/release/dpp-esp32c6
 ```
 
 ## Adding New Examples
 
-1. Create example file: `examples/myexample.rs`
-2. Add to `Cargo.toml`:
-   ```toml
-   [[example]]
-   name = "myexample"
-   path = "myexample.rs"
-   required-features = ["platform"]
-   ```
-3. Add platform-specific dependencies as optional
-4. Use `#![cfg(feature = "platform")]` in example code
+Create a new standalone project:
 
-## Platform Features
+```bash
+cd examples
+cargo new --name myexample myexample-platform
+cd myexample-platform
+```
 
-Currently available:
-- `esp32c6` - ESP32-C6 RISC-V microcontroller (use `dpp-esp32c6/` standalone project)
+Add dependencies to the new project's `Cargo.toml`:
+```toml
+[dependencies]
+qp-core = { path = "../../qp/core" }
+qp-qep = { path = "../../qp/qep" }
+qp-qf = { path = "../../qp/qf" }
+qp-qv = { path = "../../qp/qv" }
+# Port-specific dependencies
+posix = { path = "../../ports/posix" }  # for Linux
+# OR
+esp32c6 = { path = "../../ports/esp32c6" }  # for ESP32-C6
+```
 
-Future (for hosted/native examples):
-- `linux` - Native Linux examples with std
-- `windows` - Native Windows examples with std
+## Platform Ports
 
-## Important Notes
+Each example depends on a platform port from `ports/`:
 
-### Why Standalone Projects for Embedded?
+- **POSIX** (`ports/posix/`) - Linux/Unix with std library
+  - Critical sections via std::sync::Mutex
+  - QS tracing to stdout
+  - Used by: `dpp-linux/`
 
-Embedded targets (ESP32-C6, STM32, etc.) **cannot use workspace examples** because they need:
+- **ESP32-C6** (`ports/esp32c6/`) - RISC-V embedded middleware
+  - Critical sections via interrupt disable
+  - QS tracing to UART (planned)
+  - Used by: `dpp-esp32c6/`
+
+## Why Standalone Projects?
+
+All examples are standalone projects because embedded targets require:
 - Board-specific linker scripts (memory.x, link.x)
 - Interrupt vector tables
 - Memory layout definitions
-- Build scripts that generate platform-specific code
+- Build scripts for platform-specific code generation
 
-**Solution**: Use standalone project directories like `dpp-esp32c6/` which have complete build setups.
-
-### When Will Workspace Examples Work?
-
-The workspace examples approach (`examples/dpp.rs` with features) will work for:
-- Native/hosted platforms (Linux, Windows, macOS) with `std`
-- QEMU simulation targets
-- Test environments
-
-For now, `dpp.rs` serves as a reference implementation that's kept in sync with the standalone projects.
+This approach works consistently across all platforms (native and embedded).
