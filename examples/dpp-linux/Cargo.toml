@@ -8,7 +8,7 @@ edition = "2021"
 
 [features]
 default = ["qs"]
-qs = ["dep:qp-qs"]  # Enable QS software tracing
+qs = ["dep:qp-qs", "qp-posix/qs"]  # Enable QS software tracing
 
 [dependencies]
 qp-core = { path = "../../qp/core" }
