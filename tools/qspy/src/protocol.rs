@@ -13,6 +13,191 @@ pub const QSPY_UDP_PORT: u16 = 7701;
 /// Timeout for socket operations (seconds)
 pub const QSPY_TIMEOUT_SEC: u64 = 1;
 
+/// Target Configuration received from QS_TARGET_INFO record
+#[derive(Debug, Clone)]
+pub struct TargetConfig {
+    /// QP version (e.g., 0x0810 = v8.1.0)
+    pub qp_version: u16,
+    
+    /// Build timestamp (6 bytes - seconds since epoch)
+    pub build_time: [u8; 6],
+    
+    /// Timestamp size: 1, 2, or 4 bytes
+    pub qs_time_size: u8,
+    
+    /// Signal size: 1, 2, or 4 bytes
+    pub signal_size: u8,
+    
+    /// Event size: 2, 4, or 8 bytes
+    pub event_size: u8,
+    
+    /// Queue counter size: 1, 2, or 4 bytes
+    pub queue_ctr_size: u8,
+    
+    /// Pool counter size: 1, 2, or 4 bytes
+    pub pool_ctr_size: u8,
+    
+    /// Pool block size: 1, 2, or 4 bytes
+    pub pool_blk_size: u8,
+    
+    /// Time event counter size: 1, 2, or 4 bytes
+    pub time_evt_ctr_size: u8,
+    
+    /// Object pointer size: 2, 4, or 8 bytes
+    pub obj_ptr_size: u8,
+    
+    /// Function pointer size: 2, 4, or 8 bytes
+    pub fun_ptr_size: u8,
+    
+    /// Target name/description
+    pub target_name: String,
+}
+
+impl Default for TargetConfig {
+    fn default() -> Self {
+        Self {
+            qp_version: 0,
+            build_time: [0; 6],
+            qs_time_size: 4,       // Default to 4 bytes
+            signal_size: 2,        // Default to 2 bytes
+            event_size: 4,         // Default to 4 bytes
+            queue_ctr_size: 2,     // Default to 2 bytes
+            pool_ctr_size: 2,      // Default to 2 bytes
+            pool_blk_size: 2,      // Default to 2 bytes
+            time_evt_ctr_size: 4,  // Default to 4 bytes
+            obj_ptr_size: 8,       // Default to 8 bytes (64-bit)
+            fun_ptr_size: 8,       // Default to 8 bytes (64-bit)
+            target_name: String::from("Unknown"),
+        }
+    }
+}
+
+impl TargetConfig {
+    /// Parse target configuration from QS_TARGET_INFO record data
+    /// QP/C 8.1.1 format:
+    /// 1. Info byte (1) - bit 7: endianness
+    /// 2. QP_RELEASE (4) - u32 version 0x00MMNNPP
+    /// 3. Packed sizes (5) - nibble-packed configuration
+    /// 4. Bounds (2) - MAX_ACTIVE, MAX_EPOOL|MAX_TICK_RATE
+    /// 5. Build time (3) - sec, min, hour
+    /// 6. Build date (3) - day, month, year%100
+    /// 7. Target name (optional, null-terminated)
+    pub fn from_data(data: &[u8]) -> Option<Self> {
+        if data.len() < 18 {  // Minimum size without target name
+            return None;
+        }
+        
+        let mut config = Self::default();
+        let mut offset = 0;
+        
+        // 1. Info byte (endianness in bit 7)
+        let _info = data[offset];
+        offset += 1;
+        
+        // 2. QP version (4 bytes, u32 little-endian) - format: 0x00MMNNPP
+        let qp_release = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3]
+        ]);
+        // Convert to u16 for display: major*100 + minor*10 + patch
+        let major = ((qp_release >> 16) & 0xFF) as u16;
+        let minor = ((qp_release >> 8) & 0xFF) as u16;
+        let patch = (qp_release & 0xFF) as u16;
+        config.qp_version = (major * 100 + minor * 10 + patch) as u16;
+        offset += 4;
+        
+        // 3. Packed sizes (5 bytes) - sizes are in nibbles
+        // Byte 1: signal_size | event_size
+        config.signal_size = data[offset] & 0x0F;
+        config.event_size = (data[offset] >> 4) & 0x0F;
+        offset += 1;
+        
+        // Byte 2: queue_ctr_size | time_evt_ctr_size
+        config.queue_ctr_size = data[offset] & 0x0F;
+        config.time_evt_ctr_size = (data[offset] >> 4) & 0x0F;
+        offset += 1;
+        
+        // Byte 3: pool_blk_size | pool_ctr_size
+        config.pool_blk_size = data[offset] & 0x0F;
+        config.pool_ctr_size = (data[offset] >> 4) & 0x0F;
+        offset += 1;
+        
+        // Byte 4: obj_ptr_size | fun_ptr_size
+        config.obj_ptr_size = data[offset] & 0x0F;
+        config.fun_ptr_size = (data[offset] >> 4) & 0x0F;
+        offset += 1;
+        
+        // Byte 5: time_size
+        config.qs_time_size = data[offset];
+        offset += 1;
+        
+        // 4. Bounds (2 bytes) - skip for now
+        offset += 2;
+        
+        // 5. Build time (3 bytes): sec, min, hour
+        if offset + 3 <= data.len() {
+            config.build_time[5] = data[offset];     // sec
+            config.build_time[4] = data[offset + 1]; // min
+            config.build_time[3] = data[offset + 2]; // hour
+            offset += 3;
+        }
+        
+        // 6. Build date (3 bytes): day, month, year%100
+        if offset + 3 <= data.len() {
+            config.build_time[2] = data[offset];     // day
+            config.build_time[1] = data[offset + 1]; // month
+            config.build_time[0] = data[offset + 2]; // year%100
+            offset += 3;
+        }
+        
+        // 7. Target name (remaining bytes, null-terminated)
+        if offset < data.len() {
+            let name_bytes = &data[offset..];
+            // Find null terminator or end of data
+            let name_end = name_bytes.iter().position(|&b| b == 0)
+                .unwrap_or(name_bytes.len());
+            config.target_name = String::from_utf8_lossy(&name_bytes[..name_end]).to_string();
+        }
+        
+        Some(config)
+    }
+    
+    /// Read a value based on configured size
+    pub fn read_sized_value(&self, data: &[u8], size: u8) -> Option<u64> {
+        match size {
+            1 if data.len() >= 1 => Some(data[0] as u64),
+            2 if data.len() >= 2 => Some(u16::from_le_bytes([data[0], data[1]]) as u64),
+            4 if data.len() >= 4 => Some(u32::from_le_bytes([
+                data[0], data[1], data[2], data[3]
+            ]) as u64),
+            8 if data.len() >= 8 => Some(u64::from_le_bytes([
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7]
+            ])),
+            _ => None,
+        }
+    }
+    
+    /// Read timestamp based on configured size
+    pub fn read_timestamp(&self, data: &[u8]) -> Option<u64> {
+        self.read_sized_value(data, self.qs_time_size)
+    }
+    
+    /// Read object pointer based on configured size
+    pub fn read_obj_ptr(&self, data: &[u8]) -> Option<u64> {
+        self.read_sized_value(data, self.obj_ptr_size)
+    }
+    
+    /// Read function pointer based on configured size
+    pub fn read_fun_ptr(&self, data: &[u8]) -> Option<u64> {
+        self.read_sized_value(data, self.fun_ptr_size)
+    }
+    
+    /// Read signal based on configured size
+    pub fn read_signal(&self, data: &[u8]) -> Option<u64> {
+        self.read_sized_value(data, self.signal_size)
+    }
+}
+
 /// QS Record Types - matches the target-side QS implementation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

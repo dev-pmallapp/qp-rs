@@ -1,0 +1,166 @@
+./qspy  -t -u
+
+===============================================================
+QSPY 8.1.1 Copyright (c) 2005-2025 Quantum Leaps
+Documentation: https://www.state-machine.com/qtools/qspy.html
+Current timestamp: 251015_103958
+-t 6601
+
+License file     : NONE (assumed GPL)
+Data use         : 0 KB (100 KB LIMIT)
+   <COMMS> TCP-IP   Connected to Host=127.0.0.1,Port=37554
+           Trg-RST  QP-Ver=811,Build=251015_084726
+           Obj-Dict 0x000000000040BB20->QS_RX
+           Obj-Dict 0x000000000040B368->l_clock_tick
+           Obj-Dict 0x000000000040F340->the_Ticker0
+           Usr-Dict 00000100->PHILO_STAT
+           Usr-Dict 00000101->PAUSED_STAT
+           Sig-Dict 00000004,Obj=0x0000000000000000->EAT_SIG
+           Sig-Dict 00000005,Obj=0x0000000000000000->DONE_SIG
+           Sig-Dict 00000006,Obj=0x0000000000000000->PAUSE_SIG
+           Sig-Dict 00000007,Obj=0x0000000000000000->SERVE_SIG
+           Sig-Dict 00000008,Obj=0x0000000000000000->TEST_SIG
+           Sig-Dict 00000010,Obj=0x0000000000000000->TIMEOUT_SIG
+           Sig-Dict 00000011,Obj=0x0000000000000000->HUNGRY_SIG
+           Obj-Dict 0x000000000040F5E0->EvtPool1
+           Fun-Dict 0x0000000000403180->QHsm_top
+           Obj-Dict 0x000000000040F540->Table_inst
+0831002531 AO-Subsc Obj=Table_inst,Sig=PAUSE_SIG
+0831002533 AO-Subsc Obj=Table_inst,Sig=SERVE_SIG
+0831002534 AO-Subsc Obj=Table_inst,Sig=TEST_SIG
+           Obj-Dict 0x000000000040F3C0->Philo_inst[0]
+           Obj-Dict 0x000000000040F3D8->Philo_inst[0].timeEvt
+           Fun-Dict 0x0000000000402783->Philo_initial
+           Fun-Dict 0x000000000040283A->Philo_thinking
+           Fun-Dict 0x0000000000402987->Philo_hungry
+           Fun-Dict 0x00000000004028C5->Philo_eating
+===RTC===> St-Init  Obj=Philo_inst[0],State=QHsm_top->Philo_thinking
+0831002887 TE0-Arm  Obj=Philo_inst[0].timeEvt,AO=Table_inst,Tim=84,Int=0
+===RTC===> St-Entry Obj=Philo_inst[0],State=Philo_thinking
+0831002890 Init===> Obj=Philo_inst[0],State=Philo_thinking
+0831003009 PHILO_STAT 0 thinking
+           Obj-Dict 0x000000000040F408->Philo_inst[1]
+           Obj-Dict 0x000000000040F420->Philo_inst[1].timeEvt
+===RTC===> St-Init  Obj=Philo_inst[1],State=QHsm_top->Philo_thinking
+0831003054 TE0-Arm  Obj=Philo_inst[1].timeEvt,AO=Table_inst,Tim=107,Int=0
+===RTC===> St-Entry Obj=Philo_inst[1],State=Philo_thinking
+0831003057 Init===> Obj=Philo_inst[1],State=Philo_thinking
+0831003096 PHILO_STAT 1 thinking
+           Obj-Dict 0x000000000040F450->Philo_inst[2]
+           Obj-Dict 0x000000000040F468->Philo_inst[2].timeEvt
+===RTC===> St-Init  Obj=Philo_inst[2],State=QHsm_top->Philo_thinking
+0831003135 TE0-Arm  Obj=Philo_inst[2].timeEvt,AO=Table_inst,Tim=102,Int=0
+===RTC===> St-Entry Obj=Philo_inst[2],State=Philo_thinking
+0831003137 Init===> Obj=Philo_inst[2],State=Philo_thinking
+0831003170 PHILO_STAT 2 thinking
+           Obj-Dict 0x000000000040F498->Philo_inst[3]
+           Obj-Dict 0x000000000040F4B0->Philo_inst[3].timeEvt
+===RTC===> St-Init  Obj=Philo_inst[3],State=QHsm_top->Philo_thinking
+0831003209 TE0-Arm  Obj=Philo_inst[3].timeEvt,AO=Table_inst,Tim=148,Int=0
+===RTC===> St-Entry Obj=Philo_inst[3],State=Philo_thinking
+0831003211 Init===> Obj=Philo_inst[3],State=Philo_thinking
+0831003242 PHILO_STAT 3 thinking
+           Obj-Dict 0x000000000040F4E0->Philo_inst[4]
+           Obj-Dict 0x000000000040F4F8->Philo_inst[4].timeEvt
+===RTC===> St-Init  Obj=Philo_inst[4],State=QHsm_top->Philo_thinking
+0831003376 TE0-Arm  Obj=Philo_inst[4].timeEvt,AO=Table_inst,Tim=51,Int=0
+===RTC===> St-Entry Obj=Philo_inst[4],State=Philo_thinking
+0831003378 Init===> Obj=Philo_inst[4],State=Philo_thinking
+0831003410 PHILO_STAT 4 thinking
+           Fun-Dict 0x0000000000402B5A->Table_active
+           Fun-Dict 0x0000000000402D31->Table_serving
+           Fun-Dict 0x0000000000402BC1->Table_paused
+===RTC===> St-Init  Obj=Table_inst,State=QHsm_top->Table_serving
+===RTC===> St-Entry Obj=Table_inst,State=Table_serving
+0831003469 Init===> Obj=Table_inst,State=Table_serving
+           QF_RUN
+           TE0-ADis Obj=Philo_inst[4].timeEvt,AO=Table_inst
+0836022053 TE0-Post Obj=Philo_inst[4].timeEvt,Sig=TIMEOUT_SIG,AO=Table_inst
+0836022056 AO-Post  Sdr=the_Ticker0,Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+0836022824 AO-GetL  Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+0836022853 Disp===> Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_serving
+0836022865 Disp===> Obj=Philo_inst[4],Sig=TIMEOUT_SIG,State=Philo_thinking
+0836022871 TE0-DisA Obj=Philo_inst[4].timeEvt,AO=Table_inst
+===RTC===> St-Exit  Obj=Philo_inst[4],State=Philo_thinking
+0836022881 MP-Get   Obj=EvtPool1,Free=9,Min=9
+0836022884 QF-New   Sig=HUNGRY_SIG,Size=12
+0836022889 AO-LIFO  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo_inst[4],State=Philo_hungry
+0836022894 ===>Tran Obj=Philo_inst[4],Sig=TIMEOUT_SIG,State=Philo_thinking->Philo_hungry
+0836022896 =>Intern Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_active
+0836022899 AO-GetL  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0836022900 Disp===> Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0836023564 PHILO_STAT 4 hungry
+0836023571 Disp===> Obj=Philo_inst[4],Sig=EAT_SIG,State=Philo_hungry
+0836023579 TE0-Arm  Obj=Philo_inst[4].timeEvt,AO=Table_inst,Tim=188,Int=0
+===RTC===> St-Entry Obj=Philo_inst[4],State=Philo_eating
+0836023584 ===>Tran Obj=Philo_inst[4],Sig=EAT_SIG,State=Philo_hungry->Philo_eating
+0836023668 PHILO_STAT 4 eating
+0836023671 =>Intern Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0836023673 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0836023675 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo_inst[0].timeEvt,AO=Table_inst
+0839322171 TE0-Post Obj=Philo_inst[0].timeEvt,Sig=TIMEOUT_SIG,AO=Table_inst
+0839322174 AO-Post  Sdr=the_Ticker0,Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+0839322901 AO-GetL  Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+0839322931 Disp===> Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_serving
+0839322944 Disp===> Obj=Philo_inst[0],Sig=TIMEOUT_SIG,State=Philo_thinking
+0839322952 TE0-DisA Obj=Philo_inst[0].timeEvt,AO=Table_inst
+===RTC===> St-Exit  Obj=Philo_inst[0],State=Philo_thinking
+0839322963 MP-Get   Obj=EvtPool1,Free=9,Min=9
+0839322966 QF-New   Sig=HUNGRY_SIG,Size=12
+0839322970 AO-LIFO  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo_inst[0],State=Philo_hungry
+0839322975 ===>Tran Obj=Philo_inst[0],Sig=TIMEOUT_SIG,State=Philo_thinking->Philo_hungry
+0839322979 =>Intern Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_active
+0839322982 AO-GetL  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0839322983 Disp===> Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0839323720 PHILO_STAT 0 hungry
+0839323727 =>Intern Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0839323731 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0839323733 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo_inst[2].timeEvt,AO=Table_inst
+0841121611 TE0-Post Obj=Philo_inst[2].timeEvt,Sig=TIMEOUT_SIG,AO=Table_inst
+0841121617 AO-Post  Sdr=the_Ticker0,Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+0841122297 AO-GetL  Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+0841122323 Disp===> Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_serving
+0841122337 Disp===> Obj=Philo_inst[2],Sig=TIMEOUT_SIG,State=Philo_thinking
+0841122346 TE0-DisA Obj=Philo_inst[2].timeEvt,AO=Table_inst
+===RTC===> St-Exit  Obj=Philo_inst[2],State=Philo_thinking
+0841122355 MP-Get   Obj=EvtPool1,Free=9,Min=9
+0841122358 QF-New   Sig=HUNGRY_SIG,Size=12
+0841122362 AO-LIFO  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo_inst[2],State=Philo_hungry
+0841122366 ===>Tran Obj=Philo_inst[2],Sig=TIMEOUT_SIG,State=Philo_thinking->Philo_hungry
+0841122370 =>Intern Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_active
+0841122373 AO-GetL  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0841122374 Disp===> Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0841122942 PHILO_STAT 2 hungry
+0841122951 Disp===> Obj=Philo_inst[2],Sig=EAT_SIG,State=Philo_hungry
+0841122958 TE0-Arm  Obj=Philo_inst[2].timeEvt,AO=Table_inst,Tim=181,Int=0
+===RTC===> St-Entry Obj=Philo_inst[2],State=Philo_eating
+0841122962 ===>Tran Obj=Philo_inst[2],Sig=EAT_SIG,State=Philo_hungry->Philo_eating
+0841123036 PHILO_STAT 2 eating
+0841123038 =>Intern Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0841123041 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0841123042 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo_inst[1].timeEvt,AO=Table_inst
+0841622117 TE0-Post Obj=Philo_inst[1].timeEvt,Sig=TIMEOUT_SIG,AO=Table_inst
+0841622123 AO-Post  Sdr=the_Ticker0,Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+0841622990 AO-GetL  Obj=Table_inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+0841623025 Disp===> Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_serving
+0841623040 Disp===> Obj=Philo_inst[1],Sig=TIMEOUT_SIG,State=Philo_thinking
+0841623048 TE0-DisA Obj=Philo_inst[1].timeEvt,AO=Table_inst
+===RTC===> St-Exit  Obj=Philo_inst[1],State=Philo_thinking
+0841623261 MP-Get   Obj=EvtPool1,Free=9,Min=9
+0841623264 QF-New   Sig=HUNGRY_SIG,Size=12
+0841623269 AO-LIFO  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo_inst[1],State=Philo_hungry
+0841623276 ===>Tran Obj=Philo_inst[1],Sig=TIMEOUT_SIG,State=Philo_thinking->Philo_hungry
+0841623279 =>Intern Obj=Table_inst,Sig=TIMEOUT_SIG,State=Table_active
+0841623283 AO-GetL  Obj=Table_inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0841623285 Disp===> Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0841624011 PHILO_STAT 1 hungry
+0841624018 =>Intern Obj=Table_inst,Sig=HUNGRY_SIG,State=Table_serving
+0841624022 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+0841624024 MP-Put   Obj=EvtPool1,Free=10

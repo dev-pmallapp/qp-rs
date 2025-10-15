@@ -1,0 +1,55 @@
+
+===============================================================
+QSPY 8.1.1 Copyright (c) 2005-2025 Quantum Leaps
+Documentation: https://www.state-machine.com/qtools/qspy.html
+Current timestamp: 251015_113129
+
+Usage: qspy [options]     <arg> = required, [arg] = optional
+
+OPTION            DEFAULT COMMENT
+                  (key)
+---------------------------------------------------------------
+-h                        help (show this message)
+-q [num]          (key-q) quiet mode (no QS data output)
+-u [UDP_port|0]   7701    UDP socket with optional port, 0-no UDP
+-l <license file>         optional license file (*.qlc)
+-v <QS_version>   7.0     compatibility with QS version (>=6.6)
+-r <c0|c1|c2>     c1      rendering (c0=no-color, c1-color1, )
+-k                        suppress keyboard input
+-o                (key-o) save screen output to a file
+-s                (key-s) save binary QS data to a file
+-m                        produce Matlab output to a file
+-g <obj_list>             produce Sequence diagram to a file
+-t [TCP_port]     6601    TCP/IP input with optional port
+-c <serial_port>  /dev/ttyS0 serial port input (default)
+-b <baud_rate>    115200  baud rate for the com port
+-f <file_name>            file input (postprocessing)
+-d [file_name]            dictionary files
+-T <tstamp_size>  4       QS timestamp size     (bytes)
+-O <pointer_size> 4       object pointer size   (bytes)
+-F <pointer_size> 4       function pointer size (bytes)
+-S <signal_size>  2       event signal size     (bytes)
+-E <event_size>   2       event size size       (bytes)
+-Q <counter_size> 1       queue counter size    (bytes)
+-P <counter_size> 2       pool counter size     (bytes)
+-B <block_size>   2       pool block-size size  (bytes)
+-C <counter_size> 4       QTimeEvt counter size (bytes)
+
+Keyboard shortcuts (valid when -k option is absent):
+KEY(s)             ACTION
+----------------------------------------------------------------
+<Esc>/x/X          Exit QSPY
+    h              display keyboard help and QSPY status
+    c              clear the screen
+    q              toggle quiet mode (no Target data from QS)
+    r              send RESET   command to the target
+    i              send INFO    command to the target
+    t              send TICK[0] command to the target
+    u              send TICK[1] command to the target
+    d              trigger saving dictionaries to a file
+    o              toggle screen file output (close/re-open)
+    s/b            toggle binary file output (close/re-open)
+    m              toggle Matlab file output (close/re-open)
+    g              toggle Message sequence output (close/re-open)
+
+QSPY Done

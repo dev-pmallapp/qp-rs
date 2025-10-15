@@ -2,7 +2,8 @@
 //!
 //! Formats QS trace records for display
 
-use crate::protocol::{QSRecord, RecordGroup};
+use crate::protocol::{QSRecord, RecordGroup, TargetConfig};
+use crate::decoder::RecordDecoder;
 use colored::Colorize;
 use std::collections::HashSet;
 
@@ -10,6 +11,7 @@ pub struct RecordFormatter {
     show_timestamps: bool,
     json_format: bool,
     filters: Option<HashSet<RecordGroup>>,
+    decoder: RecordDecoder,
 }
 
 impl RecordFormatter {
@@ -18,7 +20,16 @@ impl RecordFormatter {
             show_timestamps,
             json_format,
             filters: None,
+            decoder: RecordDecoder::new(),
         }
+    }
+    
+    pub fn set_config(&mut self, config: TargetConfig) {
+        self.decoder.set_config(config);
+    }
+    
+    pub fn decoder_mut(&mut self) -> &mut RecordDecoder {
+        &mut self.decoder
     }
 
     pub fn set_filters(&mut self, filter_names: &[String]) {
@@ -91,10 +102,15 @@ impl RecordFormatter {
             String::new()
         };
 
-        // Format data
-        let data_str = self.format_data(record);
+        // Format data using decoder
+        let data_str = self.decoder.decode(record);
 
-        println!("{}{:16} {}", timestamp_str, colored_name, data_str);
+        // Use \r\n for proper line breaks in raw terminal mode
+        print!("{}{:16} {}\r\n", timestamp_str, colored_name, data_str);
+        
+        // Flush stdout to ensure proper line breaks
+        use std::io::{self, Write};
+        let _ = io::stdout().flush();
     }
 
     fn format_json(&self, record: &QSRecord) {
