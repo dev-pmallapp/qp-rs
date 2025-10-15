@@ -244,7 +244,7 @@ pub fn clear() {
 #[macro_export]
 macro_rules! qs_sm_init {
     ($obj:expr, $state:expr) => {
-        if $crate::begin($crate::QSRecordType::QS_SM_INIT) {
+        if $crate::begin($crate::QSRecordType::QS_QEP_STATE_INIT) {
             $crate::u32($obj as u32);
             $crate::u32($state as u32);
             $crate::end();
@@ -256,7 +256,7 @@ macro_rules! qs_sm_init {
 #[macro_export]
 macro_rules! qs_sm_dispatch {
     ($obj:expr, $signal:expr) => {
-        if $crate::begin($crate::QSRecordType::QS_SM_DISPATCH) {
+        if $crate::begin($crate::QSRecordType::QS_QEP_DISPATCH) {
             $crate::u32($obj as u32);
             $crate::u16($signal);
             $crate::end();
@@ -268,7 +268,7 @@ macro_rules! qs_sm_dispatch {
 #[macro_export]
 macro_rules! qs_sm_tran {
     ($obj:expr, $source:expr, $target:expr) => {
-        if $crate::begin($crate::QSRecordType::QS_SM_TRAN) {
+        if $crate::begin($crate::QSRecordType::QS_QEP_TRAN) {
             $crate::u32($obj as u32);
             $crate::u32($source as u32);
             $crate::u32($target as u32);

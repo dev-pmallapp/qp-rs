@@ -11,13 +11,21 @@ categories.workspace = true
 
 [features]
 default = []
-std = []
+std = ["critical-section/std"]
 defmt = ["dep:defmt"]
 
 [dependencies]
 qp-core = { path = "../core" }
 heapless = { workspace = true }
-critical-section = { workspace = true }
 
 # Optional dependencies
 defmt = { workspace = true, optional = true }
+
+[dependencies.critical-section]
+workspace = true
+features = []
+optional = false
+
+[[example]]
+name = "basic_tracing"
+required-features = ["std"]
