@@ -1,236 +1,166 @@
 //! QS (Quantum Spy) Tracing for POSIX Port
 //!
-//! Platform-specific QS implementation that outputs traces to stdout/stderr
-//! using standard library I/O facilities.
+//! Platform-specific QS implementation that integrates with qp-qs crate
+//! and provides convenient helper functions for dictionary generation.
 
-use std::io::{self, Write};
-use std::sync::Mutex;
+#[cfg(feature = "qs")]
+use qp_qs as qs;
 
-/// QS trace record types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum QSRecordType {
-    // State Machine records
-    QS_SM_INIT = 1,
-    QS_SM_DISPATCH = 2,
-    QS_SM_TRAN = 3,
-    QS_SM_STATE_ENTRY = 4,
-    QS_SM_STATE_EXIT = 5,
-    
-    // Active Object records
-    QS_AO_POST = 10,
-    QS_AO_GET = 11,
-    
-    // Time Event records
-    QS_TE_ARM = 20,
-    QS_TE_DISARM = 21,
-    QS_TE_POST = 22,
-    
-    // Scheduler records
-    QS_SCHED_LOCK = 30,
-    QS_SCHED_UNLOCK = 31,
-    QS_SCHED_IDLE = 32,
-    
-    // User-defined records
-    QS_USER = 100,
+#[cfg(feature = "qs")]
+use std::mem::transmute;
+
+/// QS Dictionary record types (for transmute when qs feature is enabled)
+/// Based on QP/C 8.1.1 enum QS_GlbPre
+#[cfg(feature = "qs")]
+mod dict_types {
+    pub const QS_ENUM_DICT: u8 = 54;
+    pub const QS_SIG_DICT: u8 = 60;
+    pub const QS_OBJ_DICT: u8 = 61;
+    pub const QS_FUN_DICT: u8 = 62;
+    pub const QS_USR_DICT: u8 = 63;
 }
-
-/// QS output configuration
-struct QSOutput {
-    enabled: bool,
-    filter: u64, // Bitmask for filtering record types
-}
-
-static QS_OUTPUT: Mutex<QSOutput> = Mutex::new(QSOutput {
-    enabled: true,
-    filter: 0xFFFFFFFFFFFFFFFF, // All enabled by default
-});
 
 /// Initialize QS tracing
+#[cfg(feature = "qs")]
 pub fn init() {
-    let mut output = QS_OUTPUT.lock().unwrap();
-    output.enabled = true;
-    println!("QS: Tracing initialized (POSIX port)");
+    // QS is initialized via init_tcp/init_udp in application code
+    println!("QS: Tracing ready (POSIX port)");
 }
 
-/// Enable QS tracing
-pub fn enable() {
-    let mut output = QS_OUTPUT.lock().unwrap();
-    output.enabled = true;
+#[cfg(not(feature = "qs"))]
+pub fn init() {
+    println!("QS: Tracing disabled (compile with --features qs to enable)");
 }
 
-/// Disable QS tracing
-pub fn disable() {
-    let mut output = QS_OUTPUT.lock().unwrap();
-    output.enabled = false;
+/// Initialize QS with TCP connection to QSPY
+#[cfg(feature = "qs")]
+pub fn init_tcp(host: &str, port: u16) -> std::io::Result<()> {
+    qs::init_tcp(host, port)?;
+    qs::enable();
+    Ok(())
 }
 
-/// Check if a record type is enabled
-pub fn is_enabled(record: QSRecordType) -> bool {
-    let output = QS_OUTPUT.lock().unwrap();
-    if !output.enabled {
-        return false;
+#[cfg(not(feature = "qs"))]
+pub fn init_tcp(_host: &str, _port: u16) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Initialize QS with UDP connection to QSPY
+#[cfg(feature = "qs")]
+pub fn init_udp(host: &str, port: u16) -> std::io::Result<()> {
+    qs::init_udp(host, port)?;
+    qs::enable();
+    Ok(())
+}
+
+#[cfg(not(feature = "qs"))]
+pub fn init_udp(_host: &str, _port: u16) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Send TARGET_INFO record
+#[cfg(feature = "qs")]
+pub fn send_target_info(qp_version: &str, target_name: &str) {
+    qs::target_info(
+        qp_version,
+        target_name,
+        if cfg!(target_endian = "little") { 0 } else { 1 }
+    );
+    qs::flush().ok();
+}
+
+#[cfg(not(feature = "qs"))]
+pub fn send_target_info(_qp_version: &str, _target_name: &str) {}
+
+/// Send signal dictionary entry
+///
+/// # Arguments
+/// * `signal` - Signal value (typically from an enum as u32)
+/// Send signal dictionary entry
+///
+/// # Arguments
+/// * `signal` - The signal number (u16, matching QP/C QSignal)
+/// * `obj` - Object pointer to associate with this signal (for scoping)
+/// * `name` - Signal name string
+///
+/// # Example
+/// ```ignore
+/// send_sig_dict(MySignal::Timeout as u16, &my_obj as *const _ as usize, "TIMEOUT_SIG");
+/// ```
+#[cfg(feature = "qs")]
+pub fn send_sig_dict(signal: u16, obj: usize, name: &str) {
+    let sig_dict_type = unsafe { transmute::<u8, _>(dict_types::QS_SIG_DICT) };
+    if qs::begin(sig_dict_type, 0) {
+        qs::u16(signal);
+        qs::obj_ptr(obj);
+        qs::str(name);
+        qs::end();
     }
-    let bit = 1u64 << (record as u8);
-    (output.filter & bit) != 0
 }
 
-/// Set filter for record types
-pub fn set_filter(filter: u64) {
-    let mut output = QS_OUTPUT.lock().unwrap();
-    output.filter = filter;
-}
+#[cfg(not(feature = "qs"))]
+pub fn send_sig_dict(_signal: u16, _obj: usize, _name: &str) {}
 
-/// Begin a QS trace record
-pub fn begin(record: QSRecordType) {
-    if !is_enabled(record) {
-        return;
+/// Send object dictionary entry
+#[cfg(feature = "qs")]
+pub fn send_obj_dict(obj_ptr: usize, name: &str) {
+    // QS_OBJ_DICT = 70
+    let obj_dict_type = unsafe { transmute::<u8, _>(dict_types::QS_OBJ_DICT) };
+    if qs::begin(obj_dict_type, 0) {
+        qs::u32(obj_ptr as u32); // Use lower 32 bits for compatibility
+        qs::str(name);
+        qs::end();
     }
-    
-    print!("QS: [{:?}] ", record);
-    io::stdout().flush().ok();
 }
 
-/// End a QS trace record
-pub fn end() {
-    println!();
+#[cfg(not(feature = "qs"))]
+pub fn send_obj_dict(_obj_ptr: usize, _name: &str) {}
+
+/// Flush all pending QS records
+#[cfg(feature = "qs")]
+pub fn flush() -> std::io::Result<()> {
+    qs::flush()
 }
 
-/// Output a string
-pub fn str(s: &str) {
-    print!("{}", s);
-    io::stdout().flush().ok();
+#[cfg(not(feature = "qs"))]
+pub fn flush() -> std::io::Result<()> {
+    Ok(())
 }
 
-/// Output an unsigned integer
-pub fn u8(val: u8) {
-    print!("{} ", val);
-    io::stdout().flush().ok();
+/// Re-export QS primitives when feature is enabled
+#[cfg(feature = "qs")]
+pub use qs::{begin, end, u8, u16, u32, str};
+
+/// Stub implementations when QS is disabled
+#[cfg(not(feature = "qs"))]
+pub mod stubs {
+    pub fn begin<T>(_record_type: T, _qs_id: u8) -> bool { false }
+    pub fn end() {}
+    pub fn u8(_val: u8) {}
+    pub fn u16(_val: u16) {}
+    pub fn u32(_val: u32) {}
+    pub fn str(_s: &str) {}
 }
 
-/// Output a 16-bit unsigned integer
-pub fn u16(val: u16) {
-    print!("{} ", val);
-    io::stdout().flush().ok();
-}
+#[cfg(not(feature = "qs"))]
+pub use stubs::*;
 
-/// Output a 32-bit unsigned integer
-pub fn u32(val: u32) {
-    print!("{} ", val);
-    io::stdout().flush().ok();
-}
-
-/// Output a signed integer
-pub fn i32(val: i32) {
-    print!("{} ", val);
-    io::stdout().flush().ok();
-}
-
-/// Output a pointer address
-pub fn ptr(ptr: *const ()) {
-    print!("{:p} ", ptr);
-    io::stdout().flush().ok();
-}
-
-/// Convenience macro for QS tracing
+/// Helper macro for bulk signal dictionary transmission
+///
+/// # Example
+/// ```ignore
+/// send_signal_dict![
+///     (MySignal::Timeout, "TIMEOUT_SIG"),
+///     (MySignal::Start, "START_SIG"),
+///     (MySignal::Stop, "STOP_SIG"),
+/// ];
+/// ```
 #[macro_export]
-macro_rules! qs_trace {
-    ($record:expr, $($arg:tt)*) => {{
-        if $crate::qs::is_enabled($record) {
-            $crate::qs::begin($record);
-            print!($($arg)*);
-            $crate::qs::end();
-        }
-    }};
-}
-
-/// State machine initialization trace
-pub fn sm_init(sm_name: &str, state_name: &str) {
-    if !is_enabled(QSRecordType::QS_SM_INIT) {
-        return;
-    }
-    begin(QSRecordType::QS_SM_INIT);
-    print!("SM={} INIT={}", sm_name, state_name);
-    end();
-}
-
-/// State machine transition trace
-pub fn sm_tran(sm_name: &str, from: &str, to: &str) {
-    if !is_enabled(QSRecordType::QS_SM_TRAN) {
-        return;
-    }
-    begin(QSRecordType::QS_SM_TRAN);
-    print!("SM={} FROM={} TO={}", sm_name, from, to);
-    end();
-}
-
-/// State machine dispatch trace
-pub fn sm_dispatch(sm_name: &str, state: &str, signal: u16) {
-    if !is_enabled(QSRecordType::QS_SM_DISPATCH) {
-        return;
-    }
-    begin(QSRecordType::QS_SM_DISPATCH);
-    print!("SM={} STATE={} SIG={}", sm_name, state, signal);
-    end();
-}
-
-/// Active object post trace
-pub fn ao_post(ao_name: &str, signal: u16, queue_len: usize) {
-    if !is_enabled(QSRecordType::QS_AO_POST) {
-        return;
-    }
-    begin(QSRecordType::QS_AO_POST);
-    print!("AO={} SIG={} QLEN={}", ao_name, signal, queue_len);
-    end();
-}
-
-/// User-defined trace
-pub fn user(id: u8, msg: &str) {
-    if !is_enabled(QSRecordType::QS_USER) {
-        return;
-    }
-    begin(QSRecordType::QS_USER);
-    print!("ID={} MSG={}", id, msg);
-    end();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_qs_init() {
-        init();
-        assert!(is_enabled(QSRecordType::QS_SM_INIT));
-    }
-
-    #[test]
-    fn test_qs_enable_disable() {
-        enable();
-        assert!(is_enabled(QSRecordType::QS_SM_INIT));
-        
-        disable();
-        assert!(!is_enabled(QSRecordType::QS_SM_INIT));
-        
-        enable();
-    }
-
-    #[test]
-    fn test_qs_filter() {
-        set_filter(0); // Disable all
-        assert!(!is_enabled(QSRecordType::QS_SM_INIT));
-        
-        set_filter(0xFFFFFFFFFFFFFFFF); // Enable all
-        assert!(is_enabled(QSRecordType::QS_SM_INIT));
-    }
-
-    #[test]
-    fn test_qs_traces() {
-        init();
-        sm_init("TestSM", "InitialState");
-        sm_tran("TestSM", "StateA", "StateB");
-        sm_dispatch("TestSM", "StateB", 1);
-        ao_post("TestAO", 5, 3);
-        user(1, "Test message");
-    }
+macro_rules! send_signal_dict {
+    [$(($signal:expr, $name:expr)),* $(,)?] => {
+        $(
+            $crate::qs::send_sig_dict($signal as u32, $name);
+        )*
+        $crate::qs::flush().ok();
+    };
 }

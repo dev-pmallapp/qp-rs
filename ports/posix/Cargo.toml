@@ -14,9 +14,11 @@ qp-core = { path = "../../qp/core" }
 qp-qep = { path = "../../qp/qep" }
 qp-qf = { path = "../../qp/qf" }
 qp-qv = { path = "../../qp/qv" }
+qp-qs = { path = "../../qp/qs", features = ["std"], optional = true }
 ctrlc = "3.4"
 
 [dev-dependencies]
 
 [features]
 default = []
+qs = ["dep:qp-qs"]
