@@ -6,6 +6,7 @@
 //! Rust.
 
 use std::env;
+use std::net::TcpListener;
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -274,20 +275,66 @@ fn build_kernel() -> (Arc<Kernel>, Vec<Arc<TimeEvent>>, PosixPort) {
 }
 
 fn init_port() -> PosixPort {
+    let cmd_addr = env::var("QSPY_CMD_ADDR").unwrap_or_else(|_| "0.0.0.0:6601".to_string());
+    start_command_listener(&cmd_addr);
+
     if let Ok(raw_addr) = env::var("QSPY_ADDR") {
         let addr = raw_addr.trim().to_string();
-        match PosixPort::connect(&addr) {
+        return match PosixPort::connect(&addr) {
             Ok(port) => {
                 println!("QS tracing connected to tcp://{addr}");
                 port
             }
             Err(err) => {
-                eprintln!("failed to connect to qspy at {addr}: {err}; falling back to stdout");
-                PosixPort::new()
+                eprintln!(
+                    "failed to connect to qspy at {addr}: {err}; falling back to UDP default"
+                );
+                connect_udp_default()
             }
+        };
+    }
+
+    connect_udp_default()
+}
+
+fn connect_udp_default() -> PosixPort {
+    let udp_addr = env::var("QSPY_UDP_ADDR").unwrap_or_else(|_| "127.0.0.1:7701".to_string());
+    match PosixPort::connect_udp(&udp_addr) {
+        Ok(port) => {
+            println!("QS tracing connected to udp://{udp_addr}");
+            port
         }
-    } else {
-        PosixPort::new()
+        Err(err) => {
+            eprintln!("failed to connect to qspy at {udp_addr}: {err}; falling back to stdout");
+            PosixPort::new()
+        }
+    }
+}
+
+fn start_command_listener(addr: &str) {
+    match TcpListener::bind(addr) {
+        Ok(listener) => {
+            println!("QS command listener bound to tcp://{addr}");
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(stream) => {
+                            if let Ok(peer) = stream.peer_addr() {
+                                println!("QS command connection from {peer}");
+                            }
+                            // Commands not yet implemented; the connection is dropped.
+                        }
+                        Err(err) => {
+                            eprintln!("QS command listener error: {err}");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        Err(err) => {
+            eprintln!("failed to bind QS command listener at {addr}: {err}");
+        }
     }
 }
 

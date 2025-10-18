@@ -9,11 +9,12 @@ use std::net::ToSocketAddrs;
 
 use qf::{QsConfig, TraceError, TraceHook, Tracer, TracerHandle};
 use qs::predefined::{self, TargetInfo};
-use qs::{stdout_backend, TcpBackend, WriterBackend};
+use qs::{stdout_backend, TcpBackend, UdpBackend, WriterBackend};
 
 enum BackendHandle {
     Stdout(TracerHandle<WriterBackend<std::io::Stdout>>),
     Tcp(TracerHandle<TcpBackend>),
+    Udp(TracerHandle<UdpBackend>),
 }
 
 /// Convenience wrapper that owns a QS tracer and exposes a trace hook.
@@ -39,11 +40,21 @@ impl PosixPort {
         })
     }
 
+    /// Connects to a remote qspy listener over UDP.
+    pub fn connect_udp<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        let backend = UdpBackend::connect(addr)?;
+        let handle = Tracer::new(QsConfig::default(), backend).into_handle();
+        Ok(Self {
+            backend: BackendHandle::Udp(handle),
+        })
+    }
+
     /// Returns the QS trace hook to be passed into the kernel.
     pub fn trace_hook(&self) -> TraceHook {
         match &self.backend {
             BackendHandle::Stdout(handle) => handle.hook(),
             BackendHandle::Tcp(handle) => handle.hook(),
+            BackendHandle::Udp(handle) => handle.hook(),
         }
     }
 
@@ -58,6 +69,9 @@ impl PosixPort {
                 handle.emit_with_flag(record_type, payload, with_timestamp)
             }
             BackendHandle::Tcp(handle) => {
+                handle.emit_with_flag(record_type, payload, with_timestamp)
+            }
+            BackendHandle::Udp(handle) => {
                 handle.emit_with_flag(record_type, payload, with_timestamp)
             }
         }
