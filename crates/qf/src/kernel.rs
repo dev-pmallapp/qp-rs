@@ -1,13 +1,24 @@
 //! Cooperative kernel and scheduling services (SRS §3.4).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
 use crate::active::{ActiveObjectId, ActiveObjectRef};
 use crate::event::{DynEvent, Signal};
 use qs::{TraceError, TraceHook};
+
+const QS_SCHED_LOCK: u8 = 50;
+const QS_SCHED_UNLOCK: u8 = 51;
+const QS_SCHED_NEXT: u8 = 52;
+const QS_SCHED_IDLE: u8 = 53;
+
+#[derive(Default)]
+struct SchedulerState {
+    prev_prio: u8,
+    sched_ceiling: u8,
+}
 
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
@@ -64,6 +75,7 @@ pub struct Kernel {
     objects: Vec<ActiveObjectRef>,
     by_id: HashMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
+    scheduler: Mutex<SchedulerState>,
 }
 
 impl Kernel {
@@ -104,12 +116,62 @@ impl Kernel {
     }
 
     pub fn dispatch_once(&self) -> bool {
-        for ao in self.objects.iter().rev() {
-            if ao.dispatch_one() {
-                return true;
+        let candidate = self
+            .objects
+            .iter()
+            .rev()
+            .find(|ao| ao.has_events())
+            .cloned();
+
+        if let Some(ao) = candidate {
+            let mut note = None;
+            let mut should_dispatch = true;
+
+            {
+                let mut scheduler = self.scheduler.lock().unwrap();
+                let prio = ao.priority();
+                if prio <= scheduler.sched_ceiling {
+                    should_dispatch = false;
+                    if scheduler.prev_prio != 0 {
+                        let prev = scheduler.prev_prio;
+                        scheduler.prev_prio = 0;
+                        note = Some((QS_SCHED_IDLE, vec![prev]));
+                    }
+                } else {
+                    let prev = scheduler.prev_prio;
+                    if prio != prev {
+                        note = Some((QS_SCHED_NEXT, vec![prio, prev]));
+                    }
+                    scheduler.prev_prio = prio;
+                }
             }
+
+            if let Some((record, payload)) = note {
+                self.emit_scheduler_record(record, payload);
+            }
+
+            if !should_dispatch {
+                return false;
+            }
+
+            ao.dispatch_one()
+        } else {
+            let mut note = None;
+            {
+                let mut scheduler = self.scheduler.lock().unwrap();
+                if scheduler.prev_prio != 0 {
+                    let prev = scheduler.prev_prio;
+                    scheduler.prev_prio = 0;
+                    note = Some((QS_SCHED_IDLE, vec![prev]));
+                }
+            }
+
+            if let Some((record, payload)) = note {
+                self.emit_scheduler_record(record, payload);
+            }
+
+            false
         }
-        false
     }
 
     pub fn trace_hook(&self) -> Option<TraceHook> {
@@ -128,6 +190,54 @@ impl Kernel {
             objects,
             by_id,
             trace,
+            scheduler: Mutex::new(SchedulerState::default()),
+        }
+    }
+
+    fn emit_scheduler_record(&self, record_type: u8, payload: Vec<u8>) {
+        let len = payload.len();
+        #[cfg(debug_assertions)]
+        {
+            println!("QS sched record type={record_type} len={len}");
+        }
+        if let Some(trace) = &self.trace {
+            if let Err(err) = trace(record_type, &payload, true) {
+                eprintln!("failed to emit scheduler record {record_type}: {err}");
+            }
+        }
+    }
+}
+
+impl Kernel {
+    pub fn lock_scheduler(&self, ceiling: u8) {
+        let mut note = None;
+        {
+            let mut scheduler = self.scheduler.lock().unwrap();
+            if ceiling > scheduler.sched_ceiling {
+                let prev = scheduler.sched_ceiling;
+                scheduler.sched_ceiling = ceiling;
+                note = Some(vec![prev, ceiling]);
+            }
+        }
+
+        if let Some(payload) = note {
+            self.emit_scheduler_record(QS_SCHED_LOCK, payload);
+        }
+    }
+
+    pub fn unlock_scheduler(&self) {
+        let mut note = None;
+        {
+            let mut scheduler = self.scheduler.lock().unwrap();
+            if scheduler.sched_ceiling != 0 {
+                let prev = scheduler.sched_ceiling;
+                scheduler.sched_ceiling = 0;
+                note = Some(vec![prev, 0]);
+            }
+        }
+
+        if let Some(payload) = note {
+            self.emit_scheduler_record(QS_SCHED_UNLOCK, payload);
         }
     }
 }

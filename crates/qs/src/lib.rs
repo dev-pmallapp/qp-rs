@@ -131,6 +131,10 @@ impl<B: TraceBackend> Tracer<B> {
         };
 
         self.seq = self.seq.wrapping_add(1);
+        #[cfg(debug_assertions)]
+        {
+            println!("QS TX record_type={record_type} len={}", payload.len());
+        }
         let record = QsRecord {
             seq: self.seq,
             record_type,

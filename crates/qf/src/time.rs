@@ -95,9 +95,6 @@ impl TimeEvent {
             }
             let event = DynEvent::empty_dyn(inner.cfg.signal);
             drop(inner);
-            if let Some(trace) = self.trace.lock().unwrap().clone() {
-                let _ = trace(0x32, &[0x01], true); // QS_QF_TIMEEVT_POST placeholder
-            }
             Some((target, event))
         } else {
             None
