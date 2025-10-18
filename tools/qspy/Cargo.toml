@@ -1,0 +1,13 @@
+[package]
+name = "qspy"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Rust host-side decoder and TCP listener for QS tracing"
+publish = false
+
+[dependencies]
+thiserror = "1"
+
+[dev-dependencies]
+qs = { path = "../../crates/qs" }
