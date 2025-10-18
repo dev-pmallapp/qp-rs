@@ -1,0 +1,24 @@
+[package]
+name = "qf"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Quantum Platform active object framework core (Rust port of QF)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+log = "0.4"
+thiserror = "1"
+spin = { version = "0.9", optional = true }
+parking_lot = { version = "0.12", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+qs = { path = "../qs" }
+
+[features]
+default = ["std"]
+std = ["parking_lot"]
+lock-free = ["spin"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+once_cell = "1"
