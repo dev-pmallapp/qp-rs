@@ -1,0 +1,177 @@
+   <COMMS> TCP-IP   Connected to Host=127.0.0.1,Port=43412
+           Trg-RST  QP-Ver=740,Build=251018_111321
+           Obj-Dict 0x0000000000410900->QS_RX
+           Obj-Dict 0x000000000040C358->l_clock_tick
+           Usr-Dict 00000100->PHILO_STAT
+           Usr-Dict 00000101->PAUSED_STAT
+           Sig-Dict 00000004,Obj=0x0000000000000000->EAT_SIG
+           Sig-Dict 00000005,Obj=0x0000000000000000->DONE_SIG
+           Sig-Dict 00000006,Obj=0x0000000000000000->PAUSE_SIG
+           Sig-Dict 00000007,Obj=0x0000000000000000->SERVE_SIG
+           Sig-Dict 00000008,Obj=0x0000000000000000->TEST_SIG
+           Sig-Dict 00000010,Obj=0x0000000000000000->TIMEOUT_SIG
+           Sig-Dict 00000011,Obj=0x0000000000000000->HUNGRY_SIG
+           Obj-Dict 0x0000000000410500->EvtPool1
+           Fun-Dict 0x0000000000402A56->QP::QHsm::top
+           Obj-Dict 0x00000000004104A0->Table::inst
+3833696481 AO-Subsc Obj=Table::inst,Sig=PAUSE_SIG
+3833696483 AO-Subsc Obj=Table::inst,Sig=SERVE_SIG
+3833696484 AO-Subsc Obj=Table::inst,Sig=TEST_SIG
+           Obj-Dict 0x0000000000410340->Philo::inst[0]
+           Obj-Dict 0x0000000000410358->Philo::inst[0].m_timeEvt
+           Fun-Dict 0x0000000000402854->Philo::initial
+           Fun-Dict 0x00000000004028EE->Philo::thinking
+           Fun-Dict 0x000000000040296A->Philo::hungry
+           Fun-Dict 0x0000000000402A20->Philo::eating
+===RTC===> St-Init  Obj=Philo::inst[0],State=QP::QHsm::top->Philo::thinking
+3833697190 TE0-Arm  Obj=Philo::inst[0].m_timeEvt,AO=Table::inst,Tim=84,Int=0
+===RTC===> St-Entry Obj=Philo::inst[0],State=Philo::thinking
+3833697193 Init===> Obj=Philo::inst[0],State=Philo::thinking
+3833697711 PHILO_STAT 0 thinking
+           Obj-Dict 0x0000000000410380->Philo::inst[1]
+           Obj-Dict 0x0000000000410398->Philo::inst[1].m_timeEvt
+===RTC===> St-Init  Obj=Philo::inst[1],State=QP::QHsm::top->Philo::thinking
+3833697775 TE0-Arm  Obj=Philo::inst[1].m_timeEvt,AO=Table::inst,Tim=107,Int=0
+===RTC===> St-Entry Obj=Philo::inst[1],State=Philo::thinking
+3833697778 Init===> Obj=Philo::inst[1],State=Philo::thinking
+3833697825 PHILO_STAT 1 thinking
+           Obj-Dict 0x00000000004103C0->Philo::inst[2]
+           Obj-Dict 0x00000000004103D8->Philo::inst[2].m_timeEvt
+===RTC===> St-Init  Obj=Philo::inst[2],State=QP::QHsm::top->Philo::thinking
+3833697864 TE0-Arm  Obj=Philo::inst[2].m_timeEvt,AO=Table::inst,Tim=102,Int=0
+===RTC===> St-Entry Obj=Philo::inst[2],State=Philo::thinking
+3833697865 Init===> Obj=Philo::inst[2],State=Philo::thinking
+3833697896 PHILO_STAT 2 thinking
+           Obj-Dict 0x0000000000410400->Philo::inst[3]
+           Obj-Dict 0x0000000000410418->Philo::inst[3].m_timeEvt
+===RTC===> St-Init  Obj=Philo::inst[3],State=QP::QHsm::top->Philo::thinking
+3833697926 TE0-Arm  Obj=Philo::inst[3].m_timeEvt,AO=Table::inst,Tim=148,Int=0
+===RTC===> St-Entry Obj=Philo::inst[3],State=Philo::thinking
+3833697927 Init===> Obj=Philo::inst[3],State=Philo::thinking
+3833697955 PHILO_STAT 3 thinking
+           Obj-Dict 0x0000000000410440->Philo::inst[4]
+           Obj-Dict 0x0000000000410458->Philo::inst[4].m_timeEvt
+===RTC===> St-Init  Obj=Philo::inst[4],State=QP::QHsm::top->Philo::thinking
+3833697985 TE0-Arm  Obj=Philo::inst[4].m_timeEvt,AO=Table::inst,Tim=51,Int=0
+===RTC===> St-Entry Obj=Philo::inst[4],State=Philo::thinking
+3833697986 Init===> Obj=Philo::inst[4],State=Philo::thinking
+3833698010 PHILO_STAT 4 thinking
+           Fun-Dict 0x0000000000402C2A->Table::active
+           Fun-Dict 0x0000000000403022->Table::serving
+           Fun-Dict 0x00000000004031A0->Table::paused
+===RTC===> St-Init  Obj=Table::inst,State=QP::QHsm::top->Table::serving
+===RTC===> St-Entry Obj=Table::inst,State=Table::serving
+3833698059 Init===> Obj=Table::inst,State=Table::serving
+           QF_RUN
+           TE0-ADis Obj=Philo::inst[4].m_timeEvt,AO=Table::inst
+3838741566 TE0-Post Obj=Philo::inst[4].m_timeEvt,Sig=TIMEOUT_SIG,AO=Table::inst
+3838741576 AO-Post  Sdr=l_clock_tick,Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+3838742662 AO-GetL  Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+3838742676 Disp===> Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::serving
+3838742690 Disp===> Obj=Philo::inst[4],Sig=TIMEOUT_SIG,State=Philo::thinking
+3838742699 TE0-DisA Obj=Philo::inst[4].m_timeEvt,AO=Table::inst
+===RTC===> St-Exit  Obj=Philo::inst[4],State=Philo::thinking
+3838742713 MP-Get   Obj=EvtPool1,Free=9,Min=9
+3838742715 QF-New   Sig=HUNGRY_SIG,Size=6
+3838742717 AO-LIFO  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo::inst[4],State=Philo::hungry
+3838742722 ===>Tran Obj=Philo::inst[4],Sig=TIMEOUT_SIG,State=Philo::thinking->Philo::hungry
+3838742725 =>Intern Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::active
+3838742728 AO-GetL  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3838742728 Disp===> Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3838743403 PHILO_STAT 4 hungry
+3838743419 Disp===> Obj=Philo::inst[4],Sig=EAT_SIG,State=Philo::hungry
+3838743429 TE0-Arm  Obj=Philo::inst[4].m_timeEvt,AO=Table::inst,Tim=188,Int=0
+===RTC===> St-Entry Obj=Philo::inst[4],State=Philo::eating
+3838743434 ===>Tran Obj=Philo::inst[4],Sig=EAT_SIG,State=Philo::hungry->Philo::eating
+3838743518 PHILO_STAT 4 eating
+3838743522 =>Intern Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3838743526 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3838743528 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo::inst[0].m_timeEvt,AO=Table::inst
+3842040878 TE0-Post Obj=Philo::inst[0].m_timeEvt,Sig=TIMEOUT_SIG,AO=Table::inst
+3842040886 AO-Post  Sdr=l_clock_tick,Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+3842041625 AO-GetL  Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+3842041636 Disp===> Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::serving
+3842041649 Disp===> Obj=Philo::inst[0],Sig=TIMEOUT_SIG,State=Philo::thinking
+3842041659 TE0-DisA Obj=Philo::inst[0].m_timeEvt,AO=Table::inst
+===RTC===> St-Exit  Obj=Philo::inst[0],State=Philo::thinking
+3842041672 MP-Get   Obj=EvtPool1,Free=9,Min=9
+3842041673 QF-New   Sig=HUNGRY_SIG,Size=6
+3842041674 AO-LIFO  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo::inst[0],State=Philo::hungry
+3842041679 ===>Tran Obj=Philo::inst[0],Sig=TIMEOUT_SIG,State=Philo::thinking->Philo::hungry
+3842041681 =>Intern Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::active
+3842041684 AO-GetL  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3842041685 Disp===> Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3842042236 PHILO_STAT 0 hungry
+3842042242 =>Intern Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3842042244 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3842042246 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo::inst[2].m_timeEvt,AO=Table::inst
+3843840826 TE0-Post Obj=Philo::inst[2].m_timeEvt,Sig=TIMEOUT_SIG,AO=Table::inst
+3843840833 AO-Post  Sdr=l_clock_tick,Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+3843841459 AO-GetL  Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+3843841470 Disp===> Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::serving
+3843841482 Disp===> Obj=Philo::inst[2],Sig=TIMEOUT_SIG,State=Philo::thinking
+3843841489 TE0-DisA Obj=Philo::inst[2].m_timeEvt,AO=Table::inst
+===RTC===> St-Exit  Obj=Philo::inst[2],State=Philo::thinking
+3843841504 MP-Get   Obj=EvtPool1,Free=9,Min=9
+3843841505 QF-New   Sig=HUNGRY_SIG,Size=6
+3843841506 AO-LIFO  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo::inst[2],State=Philo::hungry
+3843841510 ===>Tran Obj=Philo::inst[2],Sig=TIMEOUT_SIG,State=Philo::thinking->Philo::hungry
+3843841512 =>Intern Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::active
+3843841514 AO-GetL  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3843841514 Disp===> Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3843841907 PHILO_STAT 2 hungry
+3843841912 Disp===> Obj=Philo::inst[2],Sig=EAT_SIG,State=Philo::hungry
+3843841918 TE0-Arm  Obj=Philo::inst[2].m_timeEvt,AO=Table::inst,Tim=181,Int=0
+===RTC===> St-Entry Obj=Philo::inst[2],State=Philo::eating
+3843841921 ===>Tran Obj=Philo::inst[2],Sig=EAT_SIG,State=Philo::hungry->Philo::eating
+3843841968 PHILO_STAT 2 eating
+3843841971 =>Intern Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3843841973 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3843841974 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo::inst[1].m_timeEvt,AO=Table::inst
+3844340912 TE0-Post Obj=Philo::inst[1].m_timeEvt,Sig=TIMEOUT_SIG,AO=Table::inst
+3844340928 AO-Post  Sdr=l_clock_tick,Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+3844341592 AO-GetL  Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+3844341612 Disp===> Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::serving
+3844341635 Disp===> Obj=Philo::inst[1],Sig=TIMEOUT_SIG,State=Philo::thinking
+3844341650 TE0-DisA Obj=Philo::inst[1].m_timeEvt,AO=Table::inst
+===RTC===> St-Exit  Obj=Philo::inst[1],State=Philo::thinking
+3844341678 MP-Get   Obj=EvtPool1,Free=9,Min=9
+3844341679 QF-New   Sig=HUNGRY_SIG,Size=6
+3844341682 AO-LIFO  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo::inst[1],State=Philo::hungry
+3844341685 ===>Tran Obj=Philo::inst[1],Sig=TIMEOUT_SIG,State=Philo::thinking->Philo::hungry
+3844341689 =>Intern Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::active
+3844341690 AO-GetL  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3844341693 Disp===> Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3844342498 PHILO_STAT 1 hungry
+3844342504 =>Intern Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3844342508 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3844342509 MP-Put   Obj=EvtPool1,Free=10
+           TE0-ADis Obj=Philo::inst[3].m_timeEvt,AO=Table::inst
+3848441001 TE0-Post Obj=Philo::inst[3].m_timeEvt,Sig=TIMEOUT_SIG,AO=Table::inst
+3848441097 AO-Post  Sdr=l_clock_tick,Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>,Que<Free=5,Min=5>
+3848441820 AO-GetL  Obj=Table::inst,Evt<Sig=TIMEOUT_SIG,Pool=0,Ref=0>
+3848441836 Disp===> Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::serving
+3848441849 Disp===> Obj=Philo::inst[3],Sig=TIMEOUT_SIG,State=Philo::thinking
+3848441863 TE0-DisA Obj=Philo::inst[3].m_timeEvt,AO=Table::inst
+===RTC===> St-Exit  Obj=Philo::inst[3],State=Philo::thinking
+3848441878 MP-Get   Obj=EvtPool1,Free=9,Min=9
+3848441881 QF-New   Sig=HUNGRY_SIG,Size=6
+3848441883 AO-LIFO  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>,Que<Free=5,Min=5>
+===RTC===> St-Entry Obj=Philo::inst[3],State=Philo::hungry
+3848441889 ===>Tran Obj=Philo::inst[3],Sig=TIMEOUT_SIG,State=Philo::thinking->Philo::hungry
+3848441892 =>Intern Obj=Table::inst,Sig=TIMEOUT_SIG,State=Table::active
+3848441897 AO-GetL  Obj=Table::inst,Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3848441898 Disp===> Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3848442626 PHILO_STAT 3 hungry
+3848442636 =>Intern Obj=Table::inst,Sig=HUNGRY_SIG,State=Table::serving
+3848442641 QF-gc    Evt<Sig=HUNGRY_SIG,Pool=1,Ref=1>
+3848442644 MP-Put   Obj=EvtPool1,Free=10
+   <COMMS> TCP-IP   Disconn from Host=127.0.0.1,Port=43412
+   

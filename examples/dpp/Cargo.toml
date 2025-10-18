@@ -1,0 +1,13 @@
+[package]
+name = "dpp"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Dining Philosophers Problem demo built on the qf crate"
+publish = false
+
+[dependencies]
+qf = { path = "../../crates/qf" }
+qf-port-posix = { path = "../../ports/posix" }
+qs = { path = "../../crates/qs" }
+rand = { version = "0.8", features = ["small_rng"] }
