@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/qf",
+    "crates/qs",
+    "examples/dpp",
+    "ports/posix",
+    "tools/qspy",
+]
+resolver = "2"

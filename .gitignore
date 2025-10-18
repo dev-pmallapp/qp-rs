@@ -1,0 +1,5 @@
+# Generated build artifacts
+/target/
+
+# Cargo lockfile is optional for workspaces with multiple crates
+# (keep tracked if desired)
