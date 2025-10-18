@@ -1,0 +1,11 @@
+[package]
+name = "qf-port-posix"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "POSIX-specific glue for the qf framework"
+publish = false
+
+[dependencies]
+qf = { path = "../../crates/qf" }
+qs = { path = "../../crates/qs" }
