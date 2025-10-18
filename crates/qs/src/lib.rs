@@ -6,7 +6,7 @@
 //! can interpret the stream.
 
 use std::io::{self, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -263,5 +263,28 @@ impl TraceBackend for TcpBackend {
     fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
         let mut guard = self.stream.lock().unwrap();
         guard.write_all(frame).map_err(TraceError::from)
+    }
+}
+
+/// Backend that streams QS frames over a UDP socket.
+pub struct UdpBackend {
+    socket: Arc<Mutex<UdpSocket>>,
+}
+
+impl UdpBackend {
+    /// Binds a local UDP socket and connects it to the provided remote address.
+    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        socket.connect(addr)?;
+        Ok(Self {
+            socket: Arc::new(Mutex::new(socket)),
+        })
+    }
+}
+
+impl TraceBackend for UdpBackend {
+    fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
+        let guard = self.socket.lock().unwrap();
+        guard.send(frame).map(|_| ()).map_err(TraceError::from)
     }
 }
