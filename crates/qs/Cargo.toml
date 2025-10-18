@@ -1,0 +1,10 @@
+[package]
+name = "qs"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Quantum Spy (QS) tracing for Quantum Platform ports"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "1"
