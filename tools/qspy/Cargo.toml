@@ -7,6 +7,8 @@ description = "Rust host-side decoder and TCP listener for QS tracing"
 publish = false
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+qs = { path = "../../crates/qs" }
 thiserror = "1"
 
 [dev-dependencies]

@@ -1,67 +1,115 @@
 use std::error::Error;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self};
+use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::thread;
 
-use qspy::{HdlcDecoder, QsFrame};
+use clap::Parser;
+use qspy::{FrameInterpreter, HdlcDecoder};
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Rust reimplementation of Quantum Spy")]
+struct Opts {
+    #[arg(long = "udp", default_value = "0.0.0.0:7701", value_name = "ADDR")]
+    udp_addr: String,
+
+    #[arg(long = "cmd", default_value = "127.0.0.1:6601", value_name = "ADDR")]
+    cmd_addr: String,
+
+    #[arg(long = "no-cmd")]
+    no_cmd: bool,
+}
+
+impl Opts {
+    fn command_address(&self) -> Option<&str> {
+        if self.no_cmd {
+            None
+        } else {
+            Some(&self.cmd_addr)
+        }
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let addr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:7701".to_string());
+    let opts = Opts::parse();
 
-    let listener = TcpListener::bind(&addr)?;
-    println!("qspy listening on {addr}");
-
-    for connection in listener.incoming() {
-        match connection {
-            Ok(stream) => {
-                let peer = stream.peer_addr().ok();
-                println!("client connected: {:?}", peer);
-                if let Err(err) = handle_stream(stream) {
-                    eprintln!("connection error: {err}");
-                }
+    if let Some(addr) = opts.command_address() {
+        let addr = addr.to_string();
+        thread::spawn(move || {
+            if let Err(err) = run_command_listener(&addr) {
+                eprintln!("command listener error: {err}");
             }
-            Err(err) => eprintln!("accept error: {err}"),
-        }
+        });
     }
 
-    Ok(())
-}
+    let socket = UdpSocket::bind(&opts.udp_addr)?;
+    println!("qspy listening on udp://{}", opts.udp_addr);
 
-fn handle_stream(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
     let mut decoder = HdlcDecoder::new();
-    let mut buf = [0u8; 1024];
+    let mut interpreter = FrameInterpreter::new();
+    let mut buf = [0u8; 4096];
+    let mut last_peer: Option<String> = None;
 
     loop {
-        let read = stream.read(&mut buf)?;
-        if read == 0 {
-            break;
-        }
+        match socket.recv_from(&mut buf) {
+            Ok((len, peer)) => {
+                let peer_str = peer.to_string();
+                if last_peer.as_deref() != Some(peer_str.as_str()) {
+                    println!("telemetry from {peer}");
+                }
+                last_peer = Some(peer_str);
 
-        match decoder.push_bytes(&buf[..read]) {
-            Ok(frames) => {
-                for frame in frames {
-                    print_frame(&frame);
+                match decoder.push_bytes(&buf[..len]) {
+                    Ok(frames) => {
+                        for frame in frames {
+                            for line in interpreter.interpret(&frame) {
+                                println!("{line}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("decoder error: {err}; resetting state");
+                        decoder.reset();
+                    }
                 }
             }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
-                eprintln!("decoder error: {err}; resetting state");
-                decoder.reset();
+                eprintln!("socket error: {err}");
+                break;
             }
         }
     }
 
-    let _ = stream.write_all(b"BYE\n");
     Ok(())
 }
 
-fn print_frame(frame: &QsFrame) {
-    print!(
-        "seq={:03} type=0x{:02X} payload=",
-        frame.seq, frame.record_type
-    );
-    for byte in &frame.payload {
-        print!("{:02X}", byte);
+fn run_command_listener(addr: &str) -> io::Result<()> {
+    let listener = TcpListener::bind(addr)?;
+    println!("command listener on tcp://{addr}");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let peer = stream.peer_addr().ok();
+                println!("command channel connected: {peer:?}");
+                thread::spawn(move || {
+                    if let Err(err) = handle_command_stream(stream) {
+                        eprintln!("command channel error: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("command accept error: {err}"),
+        }
     }
-    println!();
+
+    Ok(())
+}
+
+fn handle_command_stream(mut stream: TcpStream) -> io::Result<()> {
+    stream.set_nodelay(true).ok();
+    let peer = stream.peer_addr().ok();
+    let mut sink = io::sink();
+    let result = io::copy(&mut stream, &mut sink);
+    println!("command channel closed: {peer:?}");
+    result.map(|_| ())
 }

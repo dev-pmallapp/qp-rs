@@ -6,6 +6,9 @@
 //! be layered on top in Rust.
 
 mod decoder;
+mod interpreter;
+
+pub use interpreter::FrameInterpreter;
 
 pub use decoder::{DecodeError, HdlcDecoder, QsFrame};
 
