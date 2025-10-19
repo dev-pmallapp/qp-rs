@@ -7,4 +7,5 @@ description = "Preemptive kernel primitives for the Quantum Platform (Rust port 
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+qf = { path = "../qf" }
 qs = { path = "../qs" }

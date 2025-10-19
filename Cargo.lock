@@ -116,6 +116,7 @@ version = "8.1.1"
 dependencies = [
  "qf",
  "qf-port-posix",
+ "qk",
  "qs",
  "rand",
 ]
@@ -235,6 +236,7 @@ name = "qf-port-posix"
 version = "8.1.1"
 dependencies = [
  "qf",
+ "qk",
  "qs",
 ]
 
@@ -242,6 +244,7 @@ dependencies = [
 name = "qk"
 version = "8.1.1"
 dependencies = [
+ "qf",
  "qs",
 ]
 

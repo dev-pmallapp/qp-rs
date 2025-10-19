@@ -6,8 +6,11 @@
 
 use std::io;
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 
+use qf::time::TimeEvent;
 use qf::{QsConfig, TraceError, TraceHook, Tracer, TracerHandle};
+use qk::{QkKernel, QkKernelBuilder, QkKernelError, QkTimeEventError, QkTimerWheel};
 use qs::predefined::{self, TargetInfo};
 use qs::{stdout_backend, TcpBackend, UdpBackend, WriterBackend};
 
@@ -104,5 +107,101 @@ impl PosixPort {
     pub fn emit_sig_dict(&self, signal: u16, object: u64, name: &str) -> Result<(), TraceError> {
         let payload = predefined::sig_dict_payload(signal, object, name);
         self.emit_dictionary(predefined::SIG_DICT, &payload)
+    }
+}
+
+pub struct PosixQkRuntime {
+    kernel: Arc<QkKernel>,
+    timers: QkTimerWheel,
+}
+
+impl PosixQkRuntime {
+    pub fn new(kernel: Arc<QkKernel>) -> Self {
+        let timers = QkTimerWheel::new(Arc::clone(&kernel));
+        Self { kernel, timers }
+    }
+
+    pub fn with_builder(builder: QkKernelBuilder) -> Result<Self, QkKernelError> {
+        let kernel = Arc::new(builder.build()?);
+        kernel.start();
+        Ok(Self::new(kernel))
+    }
+
+    pub fn with_port(builder: QkKernelBuilder, port: &PosixPort) -> Result<Self, QkKernelError> {
+        let builder = builder.with_trace_hook(port.trace_hook());
+        Self::with_builder(builder)
+    }
+
+    pub fn kernel(&self) -> Arc<QkKernel> {
+        Arc::clone(&self.kernel)
+    }
+
+    pub fn register_time_event(&mut self, event: Arc<TimeEvent>) {
+        self.timers.register(event);
+    }
+
+    pub fn tick(&self) -> Result<(), QkTimeEventError> {
+        self.timers.tick()
+    }
+
+    pub fn run_until_idle(&self) {
+        self.kernel.run_until_idle();
+    }
+
+    pub fn has_pending_work(&self) -> bool {
+        self.kernel.has_pending_work()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use qf::active::{new_active_object, ActiveContext, ActiveObjectId, SignalHandler};
+    use qf::event::Signal;
+    use qf::time::TimeEventConfig;
+
+    #[derive(Clone)]
+    struct Recorder {
+        id: ActiveObjectId,
+        log: Arc<Mutex<Vec<(ActiveObjectId, Signal)>>>,
+    }
+
+    impl Recorder {
+        fn new(id: ActiveObjectId, log: Arc<Mutex<Vec<(ActiveObjectId, Signal)>>>) -> Self {
+            Self { id, log }
+        }
+    }
+
+    impl SignalHandler for Recorder {
+        fn handle_signal(&mut self, signal: Signal, _ctx: &mut ActiveContext) {
+            self.log.lock().unwrap().push((self.id, signal));
+        }
+    }
+
+    #[test]
+    fn runtime_ticks_time_event() {
+        let port = PosixPort::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let ao_id = ActiveObjectId::new(12);
+        let ao = new_active_object(ao_id, 5, Recorder::new(ao_id, Arc::clone(&log)));
+
+        let mut runtime = PosixQkRuntime::with_port(QkKernel::builder().register(ao), &port)
+            .expect("runtime should build");
+
+        let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(30))));
+        runtime.register_time_event(Arc::clone(&event));
+
+        event.arm(1, None);
+
+        runtime.tick().expect("tick should succeed");
+
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal(30))]);
+        }
+
+        assert!(!runtime.has_pending_work());
     }
 }

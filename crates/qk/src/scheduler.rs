@@ -171,6 +171,29 @@ impl QkScheduler {
         })
     }
 
+    pub fn has_ready_to_run(&self) -> bool {
+        let state = self.state.lock().expect("scheduler mutex poisoned");
+        matches!(state.ready.max(), Some(prio) if prio > state.active_threshold && prio > state.lock_ceiling)
+    }
+
+    pub fn next_after_dispatch(&self, initial_threshold: u8) -> Option<ScheduleDecision> {
+        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+
+        let candidate = match state.ready.max() {
+            Some(prio) if prio > initial_threshold && prio > state.lock_ceiling => prio,
+            _ => {
+                state.next_prio = 0;
+                return None;
+            }
+        };
+
+        state.next_prio = candidate;
+        Some(ScheduleDecision {
+            next_prio: candidate,
+            previous_prio: state.active_prio,
+        })
+    }
+
     pub fn commit_activation(&self, decision: &ScheduleDecision, next_threshold: u8) {
         let mut state = self.state.lock().expect("scheduler mutex poisoned");
         debug_assert_eq!(state.next_prio, decision.next_prio);
@@ -327,5 +350,76 @@ mod tests {
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0], (sched::NEXT, vec![4, 0], true));
         assert_eq!(recorded[1], (sched::IDLE, vec![4], true));
+    }
+
+    #[test]
+    fn next_after_dispatch_respects_threshold() {
+        let scheduler = QkScheduler::new(None);
+        scheduler.configure_active(2, 4);
+        scheduler.mark_ready(6);
+        scheduler.mark_ready(3);
+
+        let decision = scheduler
+            .plan_activation()
+            .expect("priority 6 should preempt");
+        scheduler.commit_activation(&decision, 6);
+        scheduler.mark_not_ready(6);
+
+        assert!(
+            scheduler.next_after_dispatch(4).is_none(),
+            "threshold should block priority 3"
+        );
+
+        let follow_up = scheduler
+            .next_after_dispatch(0)
+            .expect("threshold cleared should allow scheduling");
+        assert_eq!(follow_up.next_prio, 3);
+        assert_eq!(follow_up.previous_prio, 6);
+    }
+
+    #[test]
+    fn next_after_dispatch_respects_lock_ceiling() {
+        let scheduler = QkScheduler::new(None);
+        scheduler.configure_active(0, 0);
+        scheduler.mark_ready(7);
+        scheduler.mark_ready(5);
+
+        let decision = scheduler
+            .plan_activation()
+            .expect("priority 7 should preempt");
+        scheduler.commit_activation(&decision, 7);
+        scheduler.mark_not_ready(7);
+
+        let status = scheduler.lock(5);
+        assert!(status.is_locked());
+        assert!(
+            scheduler.next_after_dispatch(0).is_none(),
+            "lock ceiling should block priority 5"
+        );
+
+        scheduler.unlock(status);
+
+        let follow_up = scheduler
+            .next_after_dispatch(0)
+            .expect("lock ceiling cleared should allow scheduling");
+        assert_eq!(follow_up.next_prio, 5);
+        assert_eq!(follow_up.previous_prio, 7);
+    }
+
+    #[test]
+    fn has_ready_to_run_reflects_constraints() {
+        let scheduler = QkScheduler::new(None);
+        scheduler.configure_active(1, 3);
+        scheduler.mark_ready(5);
+
+        assert!(scheduler.has_ready_to_run());
+
+        let lock_status = scheduler.lock(5);
+        assert!(!scheduler.has_ready_to_run());
+
+        scheduler.unlock(lock_status);
+        scheduler.reset_ready();
+        scheduler.mark_ready(2);
+        assert!(!scheduler.has_ready_to_run());
     }
 }
