@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/qf",
+    "crates/qk",
     "crates/qs",
     "examples/dpp",
     "ports/posix",

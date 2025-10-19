@@ -239,6 +239,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qk"
+version = "8.1.1"
+dependencies = [
+ "qs",
+]
+
+[[package]]
 name = "qs"
 version = "8.1.1"
 dependencies = [
