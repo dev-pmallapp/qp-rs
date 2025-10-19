@@ -15,6 +15,7 @@ use thiserror::Error;
 mod record;
 
 pub mod predefined;
+pub mod records;
 
 pub use predefined::TargetInfo;
 pub use record::{
