@@ -1,12 +1,13 @@
-//! Dining Philosophers Problem implemented on top of the Rust `qf` kernel.
+//! Dining Philosophers Problem implemented on top of the Rust `qk` preemptive kernel.
 //!
 //! This example mirrors the reference application in
 //! `scratch/qp-8.1.1/qpcpp/examples/posix-win32/dpp_comp`, showing how active
-//! objects, the cooperative kernel, time events, and QS tracing integrate in
+//! objects, the preemptive kernel, time events, and QS tracing integrate in
 //! Rust.
 
 use std::convert::TryInto;
 use std::env;
+use std::error::Error;
 use std::io::Read;
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
@@ -17,10 +18,10 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 use qf::active::{new_active_object, ActiveBehavior, ActiveContext};
 use qf::event::{DynEvent, DynPayload, Event};
-use qf::kernel::{Kernel, KernelError};
-use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo, TimerWheel};
+use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo};
 use qf::{ActiveObjectId, Signal, TraceError};
-use qf_port_posix::PosixPort;
+use qf_port_posix::{PosixPort, PosixQkRuntime};
+use qk::{QkKernel, QkKernelError};
 use qs::records::qep::{
     DISPATCH as QS_QEP_DISPATCH, IGNORED as QS_QEP_IGNORED, INIT_TRAN as QS_QEP_INIT_TRAN,
     INTERN_TRAN as QS_QEP_INTERN_TRAN, STATE_ENTRY as QS_QEP_STATE_ENTRY,
@@ -216,7 +217,7 @@ const QS_FRAME_ESCAPE: u8 = 0x7D;
 const QS_FRAME_ESCAPE_XOR: u8 = 0x20;
 const MAX_RX_FRAME: usize = 128;
 
-static KERNEL: OnceLock<Arc<Kernel>> = OnceLock::new();
+static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
 
 static NAMES: [&str; N_PHILO] = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"];
 
@@ -622,9 +623,9 @@ impl ActiveBehavior for TableState {
     }
 }
 
-fn build_kernel() -> (Arc<Kernel>, Vec<Arc<TimeEvent>>, Arc<PosixPort>) {
+fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
     let port = init_port();
-    let mut builder = Kernel::builder().with_trace_hook(port.trace_hook());
+    let mut builder = QkKernel::builder();
 
     builder = builder.register(new_active_object(TABLE_ID, 10, TableState::new()));
 
@@ -638,12 +639,16 @@ fn build_kernel() -> (Arc<Kernel>, Vec<Arc<TimeEvent>>, Arc<PosixPort>) {
             tick_rate: DEFAULT_TICK_RATE,
         });
         timers.push(Arc::clone(&timer));
-        let behavior = Philosopher::new(entry.index, timer, entry.object_handle);
+        let behavior = Philosopher::new(entry.index, Arc::clone(&timer), entry.object_handle);
         builder = builder.register(new_active_object(id, (entry.index + 1) as u8, behavior));
     }
 
-    let kernel = Arc::new(builder.build());
-    (kernel, timers, port)
+    let mut runtime = PosixQkRuntime::with_port(builder, &port)?;
+    for timer in timers {
+        runtime.register_time_event(timer);
+    }
+
+    Ok((runtime, port))
 }
 
 fn init_port() -> Arc<PosixPort> {
@@ -910,26 +915,20 @@ fn emit_reference_dictionary(port: &PosixPort) -> Result<(), TraceError> {
     Ok(())
 }
 
-fn main() -> Result<(), KernelError> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Starting Dining Philosophers demo");
 
-    let (kernel, timers, port) = build_kernel();
-    emit_reference_dictionary(&port).map_err(KernelError::from)?;
-    let _port = port;
+    let (runtime, port) = build_runtime()?;
+    emit_reference_dictionary(&port)?;
+    let kernel = runtime.kernel();
     if KERNEL.set(Arc::clone(&kernel)).is_err() {
         panic!("kernel already initialised");
-    }
-    kernel.start();
-
-    let mut wheel = TimerWheel::new(Arc::clone(&kernel));
-    for timer in timers {
-        wheel.register(timer);
     }
 
     const TICKS: usize = 60;
     for _ in 0..TICKS {
-        wheel.tick().expect("timer tick failed");
-        kernel.run_until_idle();
+        runtime.tick()?;
+        runtime.run_until_idle();
         thread::sleep(Duration::from_millis(200));
     }
 

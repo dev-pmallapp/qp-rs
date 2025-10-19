@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 qf = { path = "../../crates/qf" }
+qk = { path = "../../crates/qk" }
 qs = { path = "../../crates/qs" }

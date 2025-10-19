@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 qf = { path = "../../crates/qf" }
 qf-port-posix = { path = "../../ports/posix" }
+qk = { path = "../../crates/qk" }
 qs = { path = "../../crates/qs" }
 rand = { version = "0.8", features = ["small_rng"] }

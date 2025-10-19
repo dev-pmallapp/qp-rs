@@ -100,7 +100,7 @@ impl TimeEvent {
         self.inner.lock().unwrap().armed
     }
 
-    fn set_trace(&self, hook: Option<TraceHook>) {
+    pub fn set_trace(&self, hook: Option<TraceHook>) {
         *self.trace.lock().unwrap() = hook;
     }
 
@@ -108,7 +108,7 @@ impl TimeEvent {
         *self.meta.lock().unwrap() = Some(info);
     }
 
-    fn tick(&self) -> Option<(ActiveObjectId, DynEvent)> {
+    pub fn poll(&self) -> Option<(ActiveObjectId, DynEvent)> {
         let mut inner = self.inner.lock().unwrap();
         if !inner.armed {
             return None;
@@ -162,7 +162,7 @@ impl TimerWheel {
 
     pub fn tick(&self) -> Result<(), TimeEventError> {
         for event in &self.events {
-            if let Some((target, evt)) = event.tick() {
+            if let Some((target, evt)) = event.poll() {
                 self.kernel.post(target, evt.clone())?;
             }
         }
