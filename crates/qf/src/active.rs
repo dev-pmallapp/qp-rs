@@ -35,11 +35,24 @@ impl ActiveContext {
     }
 
     pub fn emit_trace(&self, record_type: u8, payload: &[u8]) -> Result<(), TraceError> {
+        self.emit_trace_with_timestamp(record_type, payload, true)
+    }
+
+    pub fn emit_trace_with_timestamp(
+        &self,
+        record_type: u8,
+        payload: &[u8],
+        with_timestamp: bool,
+    ) -> Result<(), TraceError> {
         if let Some(hook) = &self.trace {
-            hook(record_type, payload, true)
+            hook(record_type, payload, with_timestamp)
         } else {
             Ok(())
         }
+    }
+
+    pub fn trace_hook(&self) -> Option<TraceHook> {
+        self.trace.clone()
     }
 }
 

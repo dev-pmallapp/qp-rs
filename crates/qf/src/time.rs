@@ -9,6 +9,12 @@ use crate::event::{DynEvent, Signal};
 use crate::kernel::{Kernel, KernelError};
 use qs::TraceHook;
 
+const QS_QF_TIMEEVT_ARM: u8 = 32;
+const QS_QF_TIMEEVT_AUTO_DISARM: u8 = 33;
+const QS_QF_TIMEEVT_DISARM_ATTEMPT: u8 = 34;
+const QS_QF_TIMEEVT_DISARM: u8 = 35;
+const QS_QF_TIMEEVT_POST: u8 = 37;
+
 #[derive(Debug, Clone)]
 pub struct TimeEventConfig {
     pub signal: Signal,
@@ -41,6 +47,14 @@ struct TimeEventInner {
 pub struct TimeEvent {
     inner: Mutex<TimeEventInner>,
     trace: Mutex<Option<TraceHook>>,
+    meta: Mutex<Option<TimeEventTraceInfo>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimeEventTraceInfo {
+    pub time_event_addr: u64,
+    pub target_addr: u64,
+    pub tick_rate: u8,
 }
 
 impl TimeEvent {
@@ -53,6 +67,7 @@ impl TimeEvent {
                 armed: false,
             }),
             trace: Mutex::new(None),
+            meta: Mutex::new(None),
         })
     }
 
@@ -61,12 +76,24 @@ impl TimeEvent {
         inner.remaining = timeout_ticks;
         inner.cfg.interval_ticks = interval_ticks;
         inner.armed = true;
+        drop(inner);
+
+        self.emit_arm(timeout_ticks, interval_ticks.unwrap_or(0));
     }
 
     pub fn disarm(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.armed = false;
-        inner.remaining = 0;
+        if inner.armed {
+            let remaining = inner.remaining;
+            let interval = inner.cfg.interval_ticks.unwrap_or(0);
+            inner.armed = false;
+            inner.remaining = 0;
+            drop(inner);
+            self.emit_disarm(remaining, interval);
+        } else {
+            drop(inner);
+            self.emit_disarm_attempt();
+        }
     }
 
     pub fn is_armed(&self) -> bool {
@@ -75,6 +102,10 @@ impl TimeEvent {
 
     fn set_trace(&self, hook: Option<TraceHook>) {
         *self.trace.lock().unwrap() = hook;
+    }
+
+    pub fn set_trace_meta(&self, info: TimeEventTraceInfo) {
+        *self.meta.lock().unwrap() = Some(info);
     }
 
     fn tick(&self) -> Option<(ActiveObjectId, DynEvent)> {
@@ -93,9 +124,14 @@ impl TimeEvent {
             if let Some(period) = inner.cfg.interval_ticks {
                 inner.remaining = period;
             }
-            let event = DynEvent::empty_dyn(inner.cfg.signal);
+            let signal = inner.cfg.signal;
+            let periodic = inner.cfg.interval_ticks.is_some();
             drop(inner);
-            Some((target, event))
+            if !periodic {
+                self.emit_auto_disarm();
+            }
+            self.emit_post(signal);
+            Some((target, DynEvent::empty_dyn(signal)))
         } else {
             None
         }
@@ -132,4 +168,81 @@ impl TimerWheel {
         }
         Ok(())
     }
+}
+
+impl TimeEvent {
+    fn obtain_trace(&self) -> Option<(TraceHook, TimeEventTraceInfo)> {
+        let trace = self.trace.lock().unwrap().clone()?;
+        let meta = self.meta.lock().unwrap().clone()?;
+        Some((trace, meta))
+    }
+
+    fn emit_arm(&self, n_ticks: u64, interval: u64) {
+        if let Some((trace, meta)) = self.obtain_trace() {
+            let mut payload = Vec::with_capacity(8 + 8 + 2 + 2 + 1);
+            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
+            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
+            payload.extend_from_slice(&(truncate_u16(n_ticks).to_le_bytes()));
+            payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
+            payload.push(meta.tick_rate);
+            if let Err(err) = trace(QS_QF_TIMEEVT_ARM, &payload, true) {
+                eprintln!("failed to emit QS_QF_TIMEEVT_ARM: {err}");
+            }
+        }
+    }
+
+    fn emit_disarm(&self, remaining: u64, interval: u64) {
+        if let Some((trace, meta)) = self.obtain_trace() {
+            let mut payload = Vec::with_capacity(8 + 8 + 2 + 2 + 1);
+            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
+            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
+            payload.extend_from_slice(&(truncate_u16(remaining).to_le_bytes()));
+            payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
+            payload.push(meta.tick_rate);
+            if let Err(err) = trace(QS_QF_TIMEEVT_DISARM, &payload, true) {
+                eprintln!("failed to emit QS_QF_TIMEEVT_DISARM: {err}");
+            }
+        }
+    }
+
+    fn emit_disarm_attempt(&self) {
+        if let Some((trace, meta)) = self.obtain_trace() {
+            let mut payload = Vec::with_capacity(8 + 8 + 1);
+            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
+            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
+            payload.push(meta.tick_rate);
+            if let Err(err) = trace(QS_QF_TIMEEVT_DISARM_ATTEMPT, &payload, true) {
+                eprintln!("failed to emit QS_QF_TIMEEVT_DISARM_ATTEMPT: {err}");
+            }
+        }
+    }
+
+    fn emit_auto_disarm(&self) {
+        if let Some((trace, meta)) = self.obtain_trace() {
+            let mut payload = Vec::with_capacity(8 + 8 + 1);
+            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
+            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
+            payload.push(meta.tick_rate);
+            if let Err(err) = trace(QS_QF_TIMEEVT_AUTO_DISARM, &payload, false) {
+                eprintln!("failed to emit QS_QF_TIMEEVT_AUTO_DISARM: {err}");
+            }
+        }
+    }
+
+    fn emit_post(&self, signal: Signal) {
+        if let Some((trace, meta)) = self.obtain_trace() {
+            let mut payload = Vec::with_capacity(8 + 2 + 8 + 1);
+            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
+            payload.extend_from_slice(&signal.0.to_le_bytes());
+            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
+            payload.push(meta.tick_rate);
+            if let Err(err) = trace(QS_QF_TIMEEVT_POST, &payload, true) {
+                eprintln!("failed to emit QS_QF_TIMEEVT_POST: {err}");
+            }
+        }
+    }
+}
+
+fn truncate_u16(value: u64) -> u16 {
+    value.min(u16::MAX as u64) as u16
 }
