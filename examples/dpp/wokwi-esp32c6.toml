@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+elf = "target/riscv32imac-esp-espidf/release/dpp-esp32-c6"
+diagram = "diagram-esp32c6.json"
