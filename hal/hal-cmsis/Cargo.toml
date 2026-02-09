@@ -1,0 +1,15 @@
+[package]
+name = "hal-cmsis"
+version.workspace = true
+edition.workspace = true
+description = "ARM CMSIS implementation for HAL"
+
+[dependencies]
+hal = { path = ".." }
+
+[features]
+default = []
+stm32f4xx = []
+nrf52840 = []
+lpc1768 = []
+qp-integration = ["hal/qp-integration"]

@@ -1,0 +1,15 @@
+[package]
+name = "hal-esp"
+version.workspace = true
+edition.workspace = true
+description = "ESP-IDF driver implementation for HAL"
+
+[dependencies]
+hal = { path = ".." }
+
+[features]
+default = []
+esp32 = []
+esp32s3 = []
+esp32c6 = []
+qp-integration = ["hal/qp-integration"]

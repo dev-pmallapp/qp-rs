@@ -1,0 +1,12 @@
+[package]
+name = "hal-ht32"
+version.workspace = true
+edition.workspace = true
+description = "Holtek HT32 implementation for HAL"
+
+[dependencies]
+hal = { path = ".." }
+
+[features]
+default = []
+qp-integration = ["hal/qp-integration"]
