@@ -1,0 +1,15 @@
+[package]
+name = "uart-echo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hal = { path = "../.." }
+hal-esp = { path = "../../hal-esp", optional = true }
+
+[features]
+default = []
+esp32 = ["hal-esp", "hal-esp/esp32"]
+esp32s3 = ["hal-esp", "hal-esp/esp32s3"]
+esp32c6 = ["hal-esp", "hal-esp/esp32c6"]
