@@ -3,14 +3,19 @@
 //! Active objects encapsulate state machines with event queues and execute in
 //! priority order under the control of the QP kernel.
 
+#[cfg(feature = "std")]
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+
+#[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+
+use crate::sync::{Arc, Mutex};
+use crate::trace::{TraceError, TraceHook};
 
 use crate::event::{DynEvent, Signal};
-use qs::{TraceError, TraceHook};
 
 /// Unique identifier for an active object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ActiveObjectId(pub u8);
 
 impl ActiveObjectId {
@@ -93,12 +98,12 @@ impl<B: ActiveBehavior> ActiveObject<B> {
     }
 
     fn pop_event(&self) -> Option<DynEvent> {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.queue.lock();
         queue.pop_front()
     }
 
     fn build_context(&self) -> ActiveContext {
-        let trace = self.trace_hook.lock().unwrap().clone();
+        let trace = self.trace_hook.lock().clone();
         ActiveContext::new(self.id, trace)
     }
 }
@@ -113,15 +118,15 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 
     fn start(&self, trace: Option<TraceHook>) {
-        *self.trace_hook.lock().unwrap() = trace.clone();
-        let mut behavior = self.behavior.lock().unwrap();
+        *self.trace_hook.lock() = trace.clone();
+        let mut behavior = self.behavior.lock();
         let mut ctx = ActiveContext::new(self.id, trace);
         behavior.on_start(&mut ctx);
     }
 
     fn dispatch_one(&self) -> bool {
         if let Some(event) = self.pop_event() {
-            let mut behavior = self.behavior.lock().unwrap();
+            let mut behavior = self.behavior.lock();
             let mut ctx = self.build_context();
             behavior.on_event(&mut ctx, event);
             true
@@ -131,12 +136,12 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 
     fn post(&self, event: DynEvent) {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.queue.lock();
         queue.push_back(event);
     }
 
     fn has_events(&self) -> bool {
-        !self.queue.lock().unwrap().is_empty()
+        !self.queue.lock().is_empty()
     }
 }
 

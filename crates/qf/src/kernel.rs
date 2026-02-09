@@ -1,13 +1,15 @@
 //! Cooperative kernel and scheduling services (SRS §3.4).
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use core::fmt;
 
-use thiserror::Error;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+
+use crate::sync::{Arc, Mutex};
+use crate::trace::{TraceError, TraceHook};
 
 use crate::active::{ActiveObjectId, ActiveObjectRef};
 use crate::event::{DynEvent, Signal};
-use qs::{TraceError, TraceHook};
 
 const QS_SCHED_LOCK: u8 = 50;
 const QS_SCHED_UNLOCK: u8 = 51;
@@ -62,18 +64,34 @@ impl KernelBuilder {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum KernelError {
-    #[error("active object {0:?} not found")]
     NotFound(ActiveObjectId),
-    #[error("trace error: {0}")]
-    Trace(#[from] TraceError),
+    Trace(TraceError),
+}
+
+impl fmt::Display for KernelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound(id) => write!(f, "active object {id:?} not found"),
+            Self::Trace(_) => write!(f, "trace error"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for KernelError {}
+
+impl From<TraceError> for KernelError {
+    fn from(value: TraceError) -> Self {
+        Self::Trace(value)
+    }
 }
 
 pub struct Kernel {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
-    by_id: HashMap<ActiveObjectId, ActiveObjectRef>,
+    by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
     scheduler: Mutex<SchedulerState>,
 }
@@ -128,7 +146,7 @@ impl Kernel {
             let mut should_dispatch = true;
 
             {
-                let mut scheduler = self.scheduler.lock().unwrap();
+                let mut scheduler = self.scheduler.lock();
                 let prio = ao.priority();
                 if prio <= scheduler.sched_ceiling {
                     should_dispatch = false;
@@ -158,7 +176,7 @@ impl Kernel {
         } else {
             let mut note = None;
             {
-                let mut scheduler = self.scheduler.lock().unwrap();
+                let mut scheduler = self.scheduler.lock();
                 if scheduler.prev_prio != 0 {
                     let prev = scheduler.prev_prio;
                     scheduler.prev_prio = 0;
@@ -181,7 +199,7 @@ impl Kernel {
 
 impl Kernel {
     fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>) -> Self {
-        let mut by_id = HashMap::new();
+        let mut by_id = BTreeMap::new();
         for ao in &objects {
             by_id.insert(ao.id(), Arc::clone(ao));
         }
@@ -195,15 +213,8 @@ impl Kernel {
     }
 
     fn emit_scheduler_record(&self, record_type: u8, payload: Vec<u8>) {
-        let len = payload.len();
-        #[cfg(debug_assertions)]
-        {
-            println!("QS sched record type={record_type} len={len}");
-        }
         if let Some(trace) = &self.trace {
-            if let Err(err) = trace(record_type, &payload, true) {
-                eprintln!("failed to emit scheduler record {record_type}: {err}");
-            }
+            let _ = trace(record_type, &payload, true);
         }
     }
 }
@@ -212,7 +223,7 @@ impl Kernel {
     pub fn lock_scheduler(&self, ceiling: u8) {
         let mut note = None;
         {
-            let mut scheduler = self.scheduler.lock().unwrap();
+            let mut scheduler = self.scheduler.lock();
             if ceiling > scheduler.sched_ceiling {
                 let prev = scheduler.sched_ceiling;
                 scheduler.sched_ceiling = ceiling;
@@ -228,7 +239,7 @@ impl Kernel {
     pub fn unlock_scheduler(&self) {
         let mut note = None;
         {
-            let mut scheduler = self.scheduler.lock().unwrap();
+            let mut scheduler = self.scheduler.lock();
             if scheduler.sched_ceiling != 0 {
                 let prev = scheduler.sched_ceiling;
                 scheduler.sched_ceiling = 0;

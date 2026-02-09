@@ -1,7 +1,16 @@
-use std::sync::Mutex;
+use crate::sync::Mutex;
+use qf::TraceHook;
 
+#[cfg(feature = "qs")]
 use qs::records::sched;
-use qs::TraceHook;
+
+#[cfg(not(feature = "qs"))]
+mod sched {
+    pub const LOCK: u8 = 0;
+    pub const UNLOCK: u8 = 1;
+    pub const NEXT: u8 = 2;
+    pub const IDLE: u8 = 3;
+}
 
 const SCHED_UNLOCKED: u8 = 0xFF;
 
@@ -99,11 +108,11 @@ impl QkScheduler {
     }
 
     pub fn set_trace_hook(&self, trace: Option<TraceHook>) {
-        *self.trace.lock().expect("trace mutex poisoned") = trace;
+        *self.trace.lock() = trace;
     }
 
     pub fn lock(&self, ceiling: u8) -> SchedStatus {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         if ceiling > state.lock_ceiling {
             let previous = state.lock_ceiling;
             state.lock_ceiling = ceiling;
@@ -117,7 +126,7 @@ impl QkScheduler {
 
     pub fn unlock(&self, prev: SchedStatus) {
         if let SchedStatus::Locked(value) = prev {
-            let mut state = self.state.lock().expect("scheduler mutex poisoned");
+            let mut state = self.state.lock();
             if state.lock_ceiling > value {
                 let current = state.lock_ceiling;
                 state.lock_ceiling = value;
@@ -128,33 +137,33 @@ impl QkScheduler {
     }
 
     pub fn mark_ready(&self, prio: u8) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         state.ready.insert(prio);
     }
 
     pub fn mark_not_ready(&self, prio: u8) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         state.ready.remove(prio);
     }
 
     pub fn is_ready(&self, prio: u8) -> bool {
-        let state = self.state.lock().expect("scheduler mutex poisoned");
+        let state = self.state.lock();
         state.ready.contains(prio)
     }
 
     pub fn reset_ready(&self) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         state.ready.clear();
     }
 
     pub fn configure_active(&self, active_prio: u8, threshold: u8) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         state.active_prio = active_prio;
         state.active_threshold = threshold;
     }
 
     pub fn plan_activation(&self) -> Option<ScheduleDecision> {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
 
         let candidate = match state.ready.max() {
             Some(prio) if prio > state.active_threshold && prio > state.lock_ceiling => prio,
@@ -172,12 +181,12 @@ impl QkScheduler {
     }
 
     pub fn has_ready_to_run(&self) -> bool {
-        let state = self.state.lock().expect("scheduler mutex poisoned");
+        let state = self.state.lock();
         matches!(state.ready.max(), Some(prio) if prio > state.active_threshold && prio > state.lock_ceiling)
     }
 
     pub fn next_after_dispatch(&self, initial_threshold: u8) -> Option<ScheduleDecision> {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
 
         let candidate = match state.ready.max() {
             Some(prio) if prio > initial_threshold && prio > state.lock_ceiling => prio,
@@ -195,7 +204,7 @@ impl QkScheduler {
     }
 
     pub fn commit_activation(&self, decision: &ScheduleDecision, next_threshold: u8) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         debug_assert_eq!(state.next_prio, decision.next_prio);
 
         let previous = state.active_prio;
@@ -210,7 +219,7 @@ impl QkScheduler {
     }
 
     pub fn restore_active(&self, prio: u8, threshold: u8) {
-        let mut state = self.state.lock().expect("scheduler mutex poisoned");
+        let mut state = self.state.lock();
         let previous = state.active_prio;
         state.active_prio = prio;
         state.active_threshold = threshold;
@@ -231,26 +240,18 @@ impl QkScheduler {
     }
 
     pub fn next_priority(&self) -> u8 {
-        self.state
-            .lock()
-            .expect("scheduler mutex poisoned")
-            .next_prio
+        self.state.lock().next_prio
     }
 
     pub fn current_priority(&self) -> u8 {
-        self.state
-            .lock()
-            .expect("scheduler mutex poisoned")
-            .active_prio
+        self.state.lock().active_prio
     }
 
     fn emit_record(&self, record: u8, payload: &[u8], timestamp: bool) {
-        let trace = self.trace.lock().expect("trace mutex poisoned").clone();
+        let trace = self.trace.lock().clone();
 
         if let Some(trace) = trace {
-            if let Err(err) = trace(record, payload, timestamp) {
-                eprintln!("failed to emit QK trace record {record}: {err}");
-            }
+            let _ = trace(record, payload, timestamp);
         }
     }
 }
@@ -258,17 +259,14 @@ impl QkScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync::Arc;
 
     #[test]
     fn lock_unlock_sequence() {
         let records = Arc::new(Mutex::new(Vec::new()));
         let hook_records = Arc::clone(&records);
         let hook: TraceHook = Arc::new(move |id, payload, timestamp| {
-            hook_records
-                .lock()
-                .unwrap()
-                .push((id, payload.to_vec(), timestamp));
+            hook_records.lock().push((id, payload.to_vec(), timestamp));
             Ok(())
         });
 
@@ -279,7 +277,7 @@ mod tests {
 
         scheduler.unlock(status);
 
-        let recorded = records.lock().unwrap();
+        let recorded = records.lock();
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0], (sched::LOCK, vec![0, 5], true));
         assert_eq!(recorded[1], (sched::UNLOCK, vec![5, 0], true));
@@ -329,10 +327,8 @@ mod tests {
         let records = Arc::new(Mutex::new(Vec::new()));
         let hook_records = Arc::clone(&records);
         let hook: TraceHook = Arc::new(move |id, payload, timestamp| {
-            hook_records
-                .lock()
-                .unwrap()
-                .push((id, payload.to_vec(), timestamp));
+            let mut guard = hook_records.lock();
+            guard.push((id, payload.to_vec(), timestamp));
             Ok(())
         });
 
@@ -346,7 +342,7 @@ mod tests {
         scheduler.commit_activation(&decision, 2);
         scheduler.restore_active(0, 0);
 
-        let recorded = records.lock().unwrap();
+        let recorded = records.lock();
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0], (sched::NEXT, vec![4, 0], true));
         assert_eq!(recorded[1], (sched::IDLE, vec![4], true));
