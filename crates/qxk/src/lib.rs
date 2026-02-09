@@ -30,10 +30,12 @@
 extern crate alloc;
 
 pub mod kernel;
+pub mod primitives;
 pub mod scheduler;
 mod sync;
 pub mod thread;
 
 pub use kernel::{QxkKernel, QxkKernelBuilder, QxkKernelError};
+pub use primitives::{CondVar, MessageQueue, MutexPrim, Semaphore, SyncError, SyncResult};
 pub use scheduler::{QxkScheduler, ScheduleMode};
 pub use thread::{ExtendedThread, ThreadPriority, ThreadState};
