@@ -1,0 +1,29 @@
+[package]
+name = "gpio-blink"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hal = { path = "../.." }
+
+# Vendor-specific HAL implementations (mutually exclusive)
+hal-esp = { path = "../../hal-esp", optional = true }
+hal-ti = { path = "../../hal-ti", optional = true }
+hal-cmsis = { path = "../../hal-cmsis", optional = true }
+hal-ht32 = { path = "../../hal-ht32", optional = true }
+
+[features]
+default = []
+# ESP32 variants
+esp32 = ["hal-esp", "hal-esp/esp32"]
+esp32s3 = ["hal-esp", "hal-esp/esp32s3"]
+esp32c6 = ["hal-esp", "hal-esp/esp32c6"]
+# TI variants
+msp432 = ["hal-ti", "hal-ti/msp432"]
+tm4c = ["hal-ti", "hal-ti/tm4c"]
+# CMSIS variants
+stm32f4 = ["hal-cmsis", "hal-cmsis/stm32f4xx"]
+nrf52840 = ["hal-cmsis", "hal-cmsis/nrf52840"]
+# Holtek
+ht32 = ["hal-ht32"]
