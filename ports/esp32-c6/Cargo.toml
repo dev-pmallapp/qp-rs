@@ -1,0 +1,23 @@
+[package]
+name = "qf-port-esp32-c6"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "ESP32-C6 hardware port scaffolding for the Quantum Platform kernels"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+rt = ["critical-section"]
+
+[dependencies]
+qf = { path = "../../crates/qf" }
+qk = { path = "../../crates/qk" }
+qs = { path = "../../crates/qs" }
+critical-section = { version = "1", optional = true }
+
+[dev-dependencies]
+critical-section = "1"
