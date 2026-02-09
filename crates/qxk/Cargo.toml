@@ -1,0 +1,17 @@
+[package]
+name = "qxk"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Dual-mode preemptive kernel for the Quantum Platform (Rust port of QXK)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+qf = { path = "../qf", default-features = false }
+qs = { path = "../qs", optional = true }
+spin = "0.9"
+
+[features]
+default = ["std", "qs"]
+std = ["qf/std"]
+qs = ["dep:qs", "qf/qs"]

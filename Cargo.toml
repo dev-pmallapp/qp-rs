@@ -2,6 +2,7 @@
 members = [
     "crates/qf",
     "crates/qk",
+    "crates/qxk",
     "crates/qs",
     "examples/dpp",
     "ports/posix",
