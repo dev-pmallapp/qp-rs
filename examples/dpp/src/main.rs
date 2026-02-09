@@ -627,7 +627,8 @@ fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
     let port = init_port();
     let mut builder = QkKernel::builder();
 
-    builder = builder.register(new_active_object(TABLE_ID, 10, TableState::new()));
+    builder = builder
+        .register(new_active_object(TABLE_ID, 10, TableState::new()))?;
 
     let mut timers = Vec::new();
     for entry in philo_trace_entries() {
@@ -640,7 +641,8 @@ fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
         });
         timers.push(Arc::clone(&timer));
         let behavior = Philosopher::new(entry.index, Arc::clone(&timer), entry.object_handle);
-        builder = builder.register(new_active_object(id, (entry.index + 1) as u8, behavior));
+        builder = builder
+            .register(new_active_object(id, (entry.index + 1) as u8, behavior))?;
     }
 
     let mut runtime = PosixQkRuntime::with_port(builder, &port)?;

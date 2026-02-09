@@ -93,6 +93,7 @@ mod tests {
     fn build_kernel(object: ActiveObjectRef) -> Arc<QkKernel> {
         QkKernel::builder()
             .register(object)
+            .expect("register should succeed")
             .build()
             .map(Arc::new)
             .expect("kernel should build")

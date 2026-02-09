@@ -187,8 +187,13 @@ mod tests {
         let ao_id = ActiveObjectId::new(12);
         let ao = new_active_object(ao_id, 5, Recorder::new(ao_id, Arc::clone(&log)));
 
-        let mut runtime = PosixQkRuntime::with_port(QkKernel::builder().register(ao), &port)
-            .expect("runtime should build");
+        let mut runtime = PosixQkRuntime::with_port(
+            QkKernel::builder()
+                .register(ao)
+                .expect("register should succeed"),
+            &port,
+        )
+        .expect("runtime should build");
 
         let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(30))));
         runtime.register_time_event(Arc::clone(&event));

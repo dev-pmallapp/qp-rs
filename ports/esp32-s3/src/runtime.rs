@@ -132,7 +132,9 @@ mod tests {
         let ao = new_active_object(ao_id, 5, Recorder::new(ao_id, Arc::clone(&counter)));
 
         let mut runtime = Esp32S3QkRuntime::with_builder(
-            QkKernel::builder().register(ao),
+            QkKernel::builder()
+                .register(ao)
+                .expect("register should succeed"),
             Esp32S3Port::new(),
             PortConfig {
                 enable_trace: false,
