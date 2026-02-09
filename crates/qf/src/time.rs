@@ -203,58 +203,97 @@ impl TimeEvent {
         Some((trace, meta))
     }
 
+    /// Helper to emit a trace record with a payload built on the stack.
+    ///
+    /// Uses a fixed-size buffer to avoid heap allocations in hot paths.
+    fn emit_trace<F>(&self, record: u8, timestamp: bool, builder: F)
+    where
+        F: FnOnce(&mut [u8]) -> usize,
+    {
+        if let Some((trace, _)) = self.obtain_trace() {
+            let mut buf = [0u8; 32];
+            let len = builder(&mut buf);
+            let _ = trace(record, &buf[..len], timestamp);
+        }
+    }
+
     fn emit_arm(&self, n_ticks: u64, interval: u64) {
-        if let Some((trace, meta)) = self.obtain_trace() {
-            let mut payload = Vec::with_capacity(8 + 8 + 2 + 2 + 1);
-            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
-            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
-            payload.extend_from_slice(&(truncate_u16(n_ticks).to_le_bytes()));
-            payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
-            payload.push(meta.tick_rate);
-            let _ = trace(QS_QF_TIMEEVT_ARM, &payload, true);
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_ARM, true, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(n_ticks).to_le_bytes());
+                pos += 2;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(interval).to_le_bytes());
+                pos += 2;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
         }
     }
 
     fn emit_disarm(&self, remaining: u64, interval: u64) {
-        if let Some((trace, meta)) = self.obtain_trace() {
-            let mut payload = Vec::with_capacity(8 + 8 + 2 + 2 + 1);
-            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
-            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
-            payload.extend_from_slice(&(truncate_u16(remaining).to_le_bytes()));
-            payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
-            payload.push(meta.tick_rate);
-            let _ = trace(QS_QF_TIMEEVT_DISARM, &payload, true);
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_DISARM, true, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(remaining).to_le_bytes());
+                pos += 2;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(interval).to_le_bytes());
+                pos += 2;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
         }
     }
 
     fn emit_disarm_attempt(&self) {
-        if let Some((trace, meta)) = self.obtain_trace() {
-            let mut payload = Vec::with_capacity(8 + 8 + 1);
-            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
-            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
-            payload.push(meta.tick_rate);
-            let _ = trace(QS_QF_TIMEEVT_DISARM_ATTEMPT, &payload, true);
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_DISARM_ATTEMPT, true, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
         }
     }
 
     fn emit_auto_disarm(&self) {
-        if let Some((trace, meta)) = self.obtain_trace() {
-            let mut payload = Vec::with_capacity(8 + 8 + 1);
-            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
-            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
-            payload.push(meta.tick_rate);
-            let _ = trace(QS_QF_TIMEEVT_AUTO_DISARM, &payload, false);
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_AUTO_DISARM, false, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
         }
     }
 
     fn emit_post(&self, signal: Signal) {
-        if let Some((trace, meta)) = self.obtain_trace() {
-            let mut payload = Vec::with_capacity(8 + 2 + 8 + 1);
-            payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
-            payload.extend_from_slice(&signal.0.to_le_bytes());
-            payload.extend_from_slice(&meta.target_addr.to_le_bytes());
-            payload.push(meta.tick_rate);
-            let _ = trace(QS_QF_TIMEEVT_POST, &payload, true);
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_POST, true, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 2].copy_from_slice(&signal.0.to_le_bytes());
+                pos += 2;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
         }
     }
 }
