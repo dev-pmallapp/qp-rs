@@ -5,6 +5,7 @@ members = [
     "hal-cmsis",
     "hal-ht32",
     "examples/gpio-blink",
+    "examples/uart-echo",
 ]
 resolver = "2"
 
