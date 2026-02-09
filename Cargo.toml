@@ -5,6 +5,8 @@ members = [
     "crates/qs",
     "examples/dpp",
     "ports/posix",
+    "ports/esp32-s3",
+    "ports/esp32-c6",
     "tools/qspy",
 ]
 resolver = "2"

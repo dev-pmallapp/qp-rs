@@ -5,6 +5,11 @@
         }
     ],
     "settings": {
-        "git.ignoreLimitWarning": true
+        "git.ignoreLimitWarning": true,
+        "rust-analyzer.inlayHints.chainingHints.enable": true,
+        "rust-analyzer.inlayHints.genericParameterHints.const.enable": true,
+        "editor.inlayHints.enabled": "off",
+        "rust-analyzer.inlayHints.reborrowHints.enable": "mutable",
+        "rust-analyzer.inlayHints.typeHints.enable": false
     }
 }

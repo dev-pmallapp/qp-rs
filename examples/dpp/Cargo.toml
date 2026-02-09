@@ -6,9 +6,52 @@ authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
 description = "Dining Philosophers Problem demo built on the qf crate"
 publish = false
 
+[features]
+default = ["host"]
+host = ["qf/std", "qk/std", "qs", "dep:qf-port-posix", "dep:rand"]
+esp32s3 = [
+	"qf/std",
+	"qk/std",
+	"dep:qf-port-esp32-s3",
+	"qf-port-esp32-s3/rt",
+	"dep:critical-section",
+	"dep:esp-idf-sys",
+]
+esp32c6 = [
+	"qf/std",
+	"qk/std",
+	"dep:qf-port-esp32-c6",
+	"qf-port-esp32-c6/rt",
+	"dep:critical-section",
+	"dep:esp-idf-sys",
+]
+qs = ["dep:qs", "qf/qs", "qk/qs"]
+
 [dependencies]
-qf = { path = "../../crates/qf" }
-qf-port-posix = { path = "../../ports/posix" }
-qk = { path = "../../crates/qk" }
-qs = { path = "../../crates/qs" }
-rand = { version = "0.8", features = ["small_rng"] }
+critical-section = { version = "1", optional = true }
+esp-idf-sys = { version = "0.34", features = ["binstart"], optional = true }
+qf = { path = "../../crates/qf", default-features = false }
+qf-port-esp32-s3 = { path = "../../ports/esp32-s3", optional = true }
+qf-port-esp32-c6 = { path = "../../ports/esp32-c6", optional = true }
+qf-port-posix = { path = "../../ports/posix", optional = true }
+qk = { path = "../../crates/qk", default-features = false }
+qs = { path = "../../crates/qs", optional = true }
+rand = { version = "0.8", default-features = false, features = ["std", "small_rng"], optional = true }
+
+[build-dependencies]
+embuild = "0.31"
+
+[[bin]]
+name = "dpp"
+path = "src/main.rs"
+required-features = ["host"]
+
+[[bin]]
+name = "dpp-esp32-s3"
+path = "src/bin/esp32_s3.rs"
+required-features = ["esp32s3"]
+
+[[bin]]
+name = "dpp-esp32-c6"
+path = "src/bin/esp32_c6.rs"
+required-features = ["esp32c6"]
