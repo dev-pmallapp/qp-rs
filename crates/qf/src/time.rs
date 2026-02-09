@@ -1,13 +1,13 @@
 //! Time event services (SRS §3.5).
 
-use std::sync::{Arc, Mutex};
-
-use thiserror::Error;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::active::ActiveObjectId;
 use crate::event::{DynEvent, Signal};
 use crate::kernel::{Kernel, KernelError};
-use qs::TraceHook;
+use crate::sync::{Arc, Mutex};
+use crate::trace::TraceHook;
 
 const QS_QF_TIMEEVT_ARM: u8 = 32;
 const QS_QF_TIMEEVT_AUTO_DISARM: u8 = 33;
@@ -28,13 +28,34 @@ impl TimeEventConfig {
             interval_ticks: None,
         }
     }
+
+    pub fn with_period(mut self, interval: u64) -> Self {
+        self.interval_ticks = Some(interval);
+        self
+    }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum TimeEventError {
-    #[error(transparent)]
-    Kernel(#[from] KernelError),
+    Kernel(KernelError),
 }
+
+impl From<KernelError> for TimeEventError {
+    fn from(value: KernelError) -> Self {
+        Self::Kernel(value)
+    }
+}
+
+impl fmt::Display for TimeEventError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Kernel(err) => write!(f, "kernel error: {err}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TimeEventError {}
 
 struct TimeEventInner {
     target: ActiveObjectId,
@@ -72,7 +93,7 @@ impl TimeEvent {
     }
 
     pub fn arm(&self, timeout_ticks: u64, interval_ticks: Option<u64>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.remaining = timeout_ticks;
         inner.cfg.interval_ticks = interval_ticks;
         inner.armed = true;
@@ -82,7 +103,7 @@ impl TimeEvent {
     }
 
     pub fn disarm(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         if inner.armed {
             let remaining = inner.remaining;
             let interval = inner.cfg.interval_ticks.unwrap_or(0);
@@ -97,19 +118,19 @@ impl TimeEvent {
     }
 
     pub fn is_armed(&self) -> bool {
-        self.inner.lock().unwrap().armed
+        self.inner.lock().armed
     }
 
     pub fn set_trace(&self, hook: Option<TraceHook>) {
-        *self.trace.lock().unwrap() = hook;
+        *self.trace.lock() = hook;
     }
 
     pub fn set_trace_meta(&self, info: TimeEventTraceInfo) {
-        *self.meta.lock().unwrap() = Some(info);
+        *self.meta.lock() = Some(info);
     }
 
     pub fn poll(&self) -> Option<(ActiveObjectId, DynEvent)> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         if !inner.armed {
             return None;
         }
@@ -172,8 +193,8 @@ impl TimerWheel {
 
 impl TimeEvent {
     fn obtain_trace(&self) -> Option<(TraceHook, TimeEventTraceInfo)> {
-        let trace = self.trace.lock().unwrap().clone()?;
-        let meta = self.meta.lock().unwrap().clone()?;
+        let trace = self.trace.lock().clone()?;
+        let meta = self.meta.lock().clone()?;
         Some((trace, meta))
     }
 
@@ -185,9 +206,7 @@ impl TimeEvent {
             payload.extend_from_slice(&(truncate_u16(n_ticks).to_le_bytes()));
             payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
             payload.push(meta.tick_rate);
-            if let Err(err) = trace(QS_QF_TIMEEVT_ARM, &payload, true) {
-                eprintln!("failed to emit QS_QF_TIMEEVT_ARM: {err}");
-            }
+            let _ = trace(QS_QF_TIMEEVT_ARM, &payload, true);
         }
     }
 
@@ -199,9 +218,7 @@ impl TimeEvent {
             payload.extend_from_slice(&(truncate_u16(remaining).to_le_bytes()));
             payload.extend_from_slice(&(truncate_u16(interval).to_le_bytes()));
             payload.push(meta.tick_rate);
-            if let Err(err) = trace(QS_QF_TIMEEVT_DISARM, &payload, true) {
-                eprintln!("failed to emit QS_QF_TIMEEVT_DISARM: {err}");
-            }
+            let _ = trace(QS_QF_TIMEEVT_DISARM, &payload, true);
         }
     }
 
@@ -211,9 +228,7 @@ impl TimeEvent {
             payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
             payload.extend_from_slice(&meta.target_addr.to_le_bytes());
             payload.push(meta.tick_rate);
-            if let Err(err) = trace(QS_QF_TIMEEVT_DISARM_ATTEMPT, &payload, true) {
-                eprintln!("failed to emit QS_QF_TIMEEVT_DISARM_ATTEMPT: {err}");
-            }
+            let _ = trace(QS_QF_TIMEEVT_DISARM_ATTEMPT, &payload, true);
         }
     }
 
@@ -223,9 +238,7 @@ impl TimeEvent {
             payload.extend_from_slice(&meta.time_event_addr.to_le_bytes());
             payload.extend_from_slice(&meta.target_addr.to_le_bytes());
             payload.push(meta.tick_rate);
-            if let Err(err) = trace(QS_QF_TIMEEVT_AUTO_DISARM, &payload, false) {
-                eprintln!("failed to emit QS_QF_TIMEEVT_AUTO_DISARM: {err}");
-            }
+            let _ = trace(QS_QF_TIMEEVT_AUTO_DISARM, &payload, false);
         }
     }
 
@@ -236,9 +249,7 @@ impl TimeEvent {
             payload.extend_from_slice(&signal.0.to_le_bytes());
             payload.extend_from_slice(&meta.target_addr.to_le_bytes());
             payload.push(meta.tick_rate);
-            if let Err(err) = trace(QS_QF_TIMEEVT_POST, &payload, true) {
-                eprintln!("failed to emit QS_QF_TIMEEVT_POST: {err}");
-            }
+            let _ = trace(QS_QF_TIMEEVT_POST, &payload, true);
         }
     }
 }

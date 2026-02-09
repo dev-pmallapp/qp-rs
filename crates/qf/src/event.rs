@@ -5,10 +5,14 @@
 //! optional payload supplied by concrete applications. This module provides an
 //! idiomatic Rust equivalent.
 
+use core::any::Any;
 use core::fmt;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::any::Any;
+
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+#[cfg(feature = "std")]
 use std::sync::Arc;
 
 /// Identifier for a QP signal.

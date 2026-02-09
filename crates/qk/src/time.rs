@@ -1,10 +1,11 @@
-use std::fmt;
-use std::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
 
 use qf::time::TimeEvent;
-use qs::TraceHook;
+use qf::TraceHook;
 
 use crate::kernel::{QkKernel, QkKernelError};
+use crate::sync::Arc;
 
 pub struct QkTimerWheel {
     kernel: Arc<QkKernel>,
@@ -50,6 +51,7 @@ impl fmt::Display for QkTimeEventError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for QkTimeEventError {}
 
 impl From<QkKernelError> for QkTimeEventError {
@@ -61,7 +63,8 @@ impl From<QkKernelError> for QkTimeEventError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use crate::sync::Arc;
+    use std::sync::Mutex;
 
     use qf::active::{
         new_active_object, ActiveContext, ActiveObjectId, ActiveObjectRef, SignalHandler,

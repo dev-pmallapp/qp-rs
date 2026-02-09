@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::Arc;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use core::fmt;
 
 use qf::active::{ActiveObjectId, ActiveObjectRef};
 use qf::event::{DynEvent, Signal};
-use qs::TraceHook;
+use qf::TraceHook;
 
 use crate::scheduler::{QkScheduler, SchedStatus, ScheduleDecision};
+use crate::sync::Arc;
 
 const MAX_PRIORITY: usize = 63;
 
@@ -106,12 +107,13 @@ impl fmt::Display for QkKernelError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for QkKernelError {}
 
 pub struct QkKernel {
     scheduler: Arc<QkScheduler>,
     slots: Vec<Option<ActiveSlot>>,
-    id_to_prio: HashMap<ActiveObjectId, u8>,
+    id_to_prio: BTreeMap<ActiveObjectId, u8>,
     trace: Option<TraceHook>,
 }
 
@@ -125,7 +127,7 @@ impl QkKernel {
         trace: Option<TraceHook>,
     ) -> Result<Self, QkKernelError> {
         let mut slots: Vec<Option<ActiveSlot>> = vec![None; MAX_PRIORITY + 1];
-        let mut id_to_prio = HashMap::new();
+        let mut id_to_prio = BTreeMap::new();
 
         for registration in registrations {
             let prio = registration.priority as usize;
