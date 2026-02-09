@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "hal-esp",
+    "hal-ti",
+    "hal-cmsis",
+    "hal-ht32",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[package]
+name = "hal"
+version.workspace = true
+edition.workspace = true
+description = "Core hardware abstraction layer traits"
+
+[dependencies]
+# Optional QP integration (path points to main workspace)
+qf = { path = "../crates/qf", optional = true }
+qk = { path = "../crates/qk", optional = true }
+
+[features]
+default = []
+std = ["qf?/std", "qk?/std"]
+qp-integration = ["qk", "qf"]

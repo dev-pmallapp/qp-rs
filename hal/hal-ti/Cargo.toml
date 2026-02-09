@@ -1,0 +1,16 @@
+[package]
+name = "hal-ti"
+version.workspace = true
+edition.workspace = true
+description = "TI DriverLib implementation for HAL"
+
+[dependencies]
+hal = { path = ".." }
+
+[features]
+default = []
+msp432 = []
+tm4c = []
+cc13xx = []
+cc26xx = []
+qp-integration = ["hal/qp-integration"]
