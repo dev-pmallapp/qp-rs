@@ -6,6 +6,10 @@ description = "ESP-IDF driver implementation for HAL"
 
 [dependencies]
 hal = { path = ".." }
+esp-idf-sys = { version = "0.35", features = ["binstart"] }
+
+[build-dependencies]
+embuild = "0.32"
 
 [features]
 default = []
