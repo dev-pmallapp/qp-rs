@@ -9,10 +9,15 @@ use crate::kernel::{Kernel, KernelError};
 use crate::sync::{Arc, Mutex};
 use crate::trace::TraceHook;
 
+/// QS record: Time event armed with timeout and optional interval.
 const QS_QF_TIMEEVT_ARM: u8 = 32;
+/// QS record: One-shot time event auto-disarmed after firing.
 const QS_QF_TIMEEVT_AUTO_DISARM: u8 = 33;
+/// QS record: Attempted to disarm an already disarmed time event.
 const QS_QF_TIMEEVT_DISARM_ATTEMPT: u8 = 34;
+/// QS record: Time event successfully disarmed.
 const QS_QF_TIMEEVT_DISARM: u8 = 35;
+/// QS record: Time event posted to target active object.
 const QS_QF_TIMEEVT_POST: u8 = 37;
 
 #[derive(Debug, Clone)]

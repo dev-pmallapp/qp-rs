@@ -41,27 +41,37 @@ impl SchedStatus {
     }
 }
 
+/// 64-bit bitmap for O(1) priority tracking.
+///
+/// Supports priorities 0-63 using a single u64 bitset. Uses leading_zeros
+/// for constant-time maximum priority lookup.
 #[derive(Default, Clone, Copy)]
 struct ReadySet {
     bits: u64,
 }
 
 impl ReadySet {
+    /// Marks the given priority as ready.
     fn insert(&mut self, prio: u8) {
         Self::assert_range(prio);
         self.bits |= 1u64 << prio;
     }
 
+    /// Marks the given priority as not ready.
     fn remove(&mut self, prio: u8) {
         Self::assert_range(prio);
         self.bits &= !(1u64 << prio);
     }
 
+    /// Returns true if the given priority is marked ready.
     fn contains(&self, prio: u8) -> bool {
         Self::assert_range(prio);
         (self.bits & (1u64 << prio)) != 0
     }
 
+    /// Returns the highest priority marked ready, or None if empty.
+    ///
+    /// Uses leading_zeros for O(1) lookup.
     fn max(&self) -> Option<u8> {
         if self.bits == 0 {
             None
@@ -70,10 +80,12 @@ impl ReadySet {
         }
     }
 
+    /// Clears all ready priorities.
     fn clear(&mut self) {
         self.bits = 0;
     }
 
+    /// Validates that priority is in the supported range 0-63.
     fn assert_range(prio: u8) {
         assert!(prio < 64, "priority {prio} exceeds supported range 0..63");
     }
@@ -111,6 +123,13 @@ impl QkScheduler {
         *self.trace.lock() = trace;
     }
 
+    /// Locks the scheduler at the given priority ceiling.
+    ///
+    /// Prevents preemption by tasks with priority <= ceiling. Returns the
+    /// previous lock status for restoration via `unlock()`.
+    ///
+    /// # Parameters
+    /// - `ceiling`: Maximum priority that can execute while locked
     pub fn lock(&self, ceiling: u8) -> SchedStatus {
         let mut state = self.state.lock();
         if ceiling > state.lock_ceiling {
@@ -124,6 +143,10 @@ impl QkScheduler {
         }
     }
 
+    /// Unlocks the scheduler, restoring the previous lock status.
+    ///
+    /// # Parameters
+    /// - `prev`: Status returned from `lock()` to restore
     pub fn unlock(&self, prev: SchedStatus) {
         if let SchedStatus::Locked(value) = prev {
             let mut state = self.state.lock();
