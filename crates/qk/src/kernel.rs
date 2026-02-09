@@ -38,13 +38,9 @@ impl QkKernelBuilder {
         }
     }
 
-    pub fn register(mut self, object: ActiveObjectRef) -> Self {
+    pub fn register(mut self, object: ActiveObjectRef) -> Result<Self, QkKernelError> {
         let priority = object.priority();
-        assert!(priority > 0, "priority 0 is reserved for the idle thread");
-        assert!(
-            priority as usize <= MAX_PRIORITY,
-            "priority {priority} exceeds supported range"
-        );
+        self.validate_priority(priority)?;
         let id = object.id();
         self.registrations.push(Registration {
             threshold: priority,
@@ -52,24 +48,17 @@ impl QkKernelBuilder {
             id,
             object,
         });
-        self
+        Ok(self)
     }
 
-    pub fn register_with_threshold(mut self, object: ActiveObjectRef, threshold: u8) -> Self {
+    pub fn register_with_threshold(
+        mut self,
+        object: ActiveObjectRef,
+        threshold: u8,
+    ) -> Result<Self, QkKernelError> {
         let priority = object.priority();
-        assert!(priority > 0, "priority 0 is reserved for the idle thread");
-        assert!(
-            priority as usize <= MAX_PRIORITY,
-            "priority {priority} exceeds supported range"
-        );
-        assert!(
-            threshold >= priority,
-            "preemption threshold must be >= priority"
-        );
-        assert!(
-            threshold as usize <= MAX_PRIORITY,
-            "threshold {threshold} exceeds supported range"
-        );
+        self.validate_priority(priority)?;
+        self.validate_threshold(threshold, priority)?;
         let id = object.id();
         self.registrations.push(Registration {
             threshold,
@@ -77,7 +66,39 @@ impl QkKernelBuilder {
             id,
             object,
         });
-        self
+        Ok(self)
+    }
+
+    fn validate_priority(&self, priority: u8) -> Result<(), QkKernelError> {
+        if priority == 0 {
+            return Err(QkKernelError::InvalidPriority {
+                priority,
+                reason: "priority 0 is reserved for the idle thread",
+            });
+        }
+        if priority as usize > MAX_PRIORITY {
+            return Err(QkKernelError::InvalidPriority {
+                priority,
+                reason: "exceeds supported range 1..63",
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_threshold(&self, threshold: u8, priority: u8) -> Result<(), QkKernelError> {
+        if threshold < priority {
+            return Err(QkKernelError::InvalidThreshold {
+                threshold,
+                priority,
+            });
+        }
+        if threshold as usize > MAX_PRIORITY {
+            return Err(QkKernelError::InvalidPriority {
+                priority: threshold,
+                reason: "threshold exceeds supported range 1..63",
+            });
+        }
+        Ok(())
     }
 
     pub fn with_trace_hook(mut self, hook: TraceHook) -> Self {
@@ -94,6 +115,8 @@ impl QkKernelBuilder {
 pub enum QkKernelError {
     DuplicatePriority(u8),
     NotFound(ActiveObjectId),
+    InvalidPriority { priority: u8, reason: &'static str },
+    InvalidThreshold { threshold: u8, priority: u8 },
 }
 
 impl fmt::Display for QkKernelError {
@@ -103,6 +126,15 @@ impl fmt::Display for QkKernelError {
                 write!(f, "active object priority {prio} already registered")
             }
             Self::NotFound(id) => write!(f, "active object {id:?} not found"),
+            Self::InvalidPriority { priority, reason } => {
+                write!(f, "invalid priority {priority}: {reason}")
+            }
+            Self::InvalidThreshold { threshold, priority } => {
+                write!(
+                    f,
+                    "invalid threshold {threshold}: must be >= priority {priority}"
+                )
+            }
         }
     }
 }
@@ -322,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn schedules_highest_priority_first() {
+    fn schedules_highest_priority_first() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let low_id = ActiveObjectId::new(1);
         let high_id = ActiveObjectId::new(2);
@@ -331,8 +363,8 @@ mod tests {
         let high = new_active_object(high_id, 5, Recorder::new(high_id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register(low)
-            .register(high)
+            .register(low)?
+            .register(high)?
             .build()
             .expect("kernel should build");
 
@@ -351,10 +383,11 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], (high_id, Signal(2)));
         assert_eq!(events[1], (low_id, Signal(1)));
+        Ok(())
     }
 
     #[test]
-    fn preemption_threshold_blocks_lower_priorities() {
+    fn preemption_threshold_blocks_lower_priorities() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let base_id = ActiveObjectId::new(1);
         let mid_id = ActiveObjectId::new(2);
@@ -369,9 +402,9 @@ mod tests {
         let high = new_active_object(high_id, high_prio, Recorder::new(high_id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register_with_threshold(base, 4)
-            .register(mid)
-            .register(high)
+            .register_with_threshold(base, 4)?
+            .register(mid)?
+            .register(high)?
             .build()
             .expect("kernel should build");
 
@@ -395,16 +428,17 @@ mod tests {
         }
 
         assert!(kernel.scheduler().is_ready(mid_prio));
+        Ok(())
     }
 
     #[test]
-    fn post_and_run_dispatches_event() {
+    fn post_and_run_dispatches_event() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let ao_id = ActiveObjectId::new(4);
         let ao = new_active_object(ao_id, 3, Recorder::new(ao_id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register(ao)
+            .register(ao)?
             .build()
             .expect("kernel should build");
 
@@ -416,16 +450,17 @@ mod tests {
 
         let entries = log.lock().unwrap();
         assert_eq!(entries.as_slice(), &[(ao_id, Signal(9))]);
+        Ok(())
     }
 
     #[test]
-    fn unlock_scheduler_triggers_pending_work() {
+    fn unlock_scheduler_triggers_pending_work() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let high_id = ActiveObjectId::new(5);
         let high = new_active_object(high_id, 6, Recorder::new(high_id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register(high)
+            .register(high)?
             .build()
             .expect("kernel should build");
 
@@ -448,10 +483,11 @@ mod tests {
         let entries = log.lock().unwrap();
         assert_eq!(entries.as_slice(), &[(high_id, Signal(11))]);
         assert!(!kernel.scheduler().is_ready(6));
+        Ok(())
     }
 
     #[test]
-    fn publish_and_run_delivers_to_all_subscribers() {
+    fn publish_and_run_delivers_to_all_subscribers() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let low_id = ActiveObjectId::new(6);
         let high_id = ActiveObjectId::new(7);
@@ -460,8 +496,8 @@ mod tests {
         let high = new_active_object(high_id, 5, Recorder::new(high_id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register(low)
-            .register(high)
+            .register(low)?
+            .register(high)?
             .build()
             .expect("kernel should build");
 
@@ -473,16 +509,17 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0], (high_id, Signal(42)));
         assert_eq!(entries[1], (low_id, Signal(42)));
+        Ok(())
     }
 
     #[test]
-    fn has_pending_work_tracks_ready_set() {
+    fn has_pending_work_tracks_ready_set() -> Result<(), QkKernelError> {
         let log = Arc::new(Mutex::new(Vec::new()));
         let id = ActiveObjectId::new(8);
         let ao = new_active_object(id, 4, Recorder::new(id, Arc::clone(&log)));
 
         let kernel = QkKernel::builder()
-            .register(ao)
+            .register(ao)?
             .build()
             .expect("kernel should build");
 
@@ -496,5 +533,6 @@ mod tests {
 
         kernel.run_until_idle();
         assert!(!kernel.has_pending_work());
+        Ok(())
     }
 }

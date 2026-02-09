@@ -63,7 +63,9 @@ struct ApplicationResources {
 
 fn build_application() -> ApplicationResources {
     let mut builder = QkKernel::builder();
-    builder = builder.register(new_active_object(TABLE_ID, 6, Table::new()));
+    builder = builder
+        .register(new_active_object(TABLE_ID, 6, Table::new()))
+        .expect("table registration should succeed");
 
     let mut timers = Vec::with_capacity(N_PHILO);
 
@@ -78,7 +80,9 @@ fn build_application() -> ApplicationResources {
             priority,
             Philosopher::new(index, philo_id, Arc::clone(&timer)),
         );
-        builder = builder.register(philo);
+        builder = builder
+            .register(philo)
+            .expect("philosopher registration should succeed");
     }
 
     ApplicationResources { builder, timers }
