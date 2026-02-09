@@ -32,6 +32,10 @@
 pub use esp_idf_sys;
 
 pub mod gpio;
+pub mod uart;
+pub mod spi;
 
 // Re-export commonly used types
 pub use gpio::EspGpioPin;
+pub use uart::EspUart;
+pub use spi::EspSpiMaster;
