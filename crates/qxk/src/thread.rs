@@ -13,6 +13,54 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::scheduler::QxkScheduler;
+use crate::sync::Arc;
+
+/// Action returned by a thread handler indicating what to do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadAction {
+    /// Continue running in the next dispatch cycle.
+    Continue,
+    /// Voluntarily yield to other threads.
+    Yield,
+    /// Thread is blocked waiting on a synchronization primitive.
+    Blocked,
+    /// Thread has completed execution.
+    Terminated,
+}
+
+/// Context provided to thread handlers during polling.
+///
+/// Provides access to thread identity, priority, scheduler, and iteration count.
+pub struct ThreadContext {
+    thread_id: ThreadId,
+    priority: ThreadPriority,
+    scheduler: Arc<QxkScheduler>,
+    iteration: u64,
+}
+
+impl ThreadContext {
+    /// Returns the thread ID.
+    pub fn thread_id(&self) -> ThreadId {
+        self.thread_id
+    }
+
+    /// Returns the thread priority.
+    pub fn priority(&self) -> ThreadPriority {
+        self.priority
+    }
+
+    /// Returns a reference to the scheduler.
+    pub fn scheduler(&self) -> &QxkScheduler {
+        &self.scheduler
+    }
+
+    /// Returns the iteration count (number of times handler has been polled).
+    pub fn iteration(&self) -> u64 {
+        self.iteration
+    }
+}
+
 /// Priority for extended threads.
 ///
 /// Thread priorities are separate from active object priorities.
@@ -38,7 +86,12 @@ pub enum ThreadState {
 pub struct ThreadId(pub u8);
 
 /// Extended thread handler function type.
-pub type ThreadHandler = Box<dyn FnOnce() + Send>;
+///
+/// The handler is polled repeatedly by the scheduler. It receives a mutable
+/// ThreadContext and returns a ThreadAction indicating what should happen next.
+///
+/// The handler must be `FnMut` to allow state mutation across polls.
+pub type ThreadHandler = Box<dyn FnMut(&mut ThreadContext) -> ThreadAction + Send>;
 
 /// Configuration for creating an extended thread.
 pub struct ThreadConfig {
@@ -80,6 +133,7 @@ pub struct ExtendedThread {
     state: ThreadState,
     stack: Vec<u8>,
     handler: Option<ThreadHandler>,
+    iteration: u64,
 }
 
 impl ExtendedThread {
@@ -92,6 +146,7 @@ impl ExtendedThread {
             state: ThreadState::Ready,
             stack,
             handler: Some(config.handler),
+            iteration: 0,
         }
     }
 
@@ -130,12 +185,43 @@ impl ExtendedThread {
         self.state = state;
     }
 
-    /// Executes the thread handler (consumes the handler).
-    pub(crate) fn run(&mut self) {
-        if let Some(handler) = self.handler.take() {
+    /// Polls the thread handler, returning the action to take.
+    ///
+    /// This method is called by the scheduler to execute one iteration of the thread.
+    /// The thread handler receives a context with scheduler access and returns an action
+    /// indicating whether to continue, yield, block, or terminate.
+    pub(crate) fn poll(&mut self, scheduler: Arc<QxkScheduler>) -> ThreadAction {
+        if let Some(handler) = &mut self.handler {
             self.state = ThreadState::Running;
-            handler();
+
+            let mut ctx = ThreadContext {
+                thread_id: self.id,
+                priority: self.priority,
+                scheduler,
+                iteration: self.iteration,
+            };
+
+            self.iteration += 1;
+            let action = handler(&mut ctx);
+
+            match action {
+                ThreadAction::Terminated => {
+                    self.state = ThreadState::Terminated;
+                    self.handler = None;
+                }
+                ThreadAction::Blocked => {
+                    self.state = ThreadState::Blocked;
+                }
+                ThreadAction::Yield | ThreadAction::Continue => {
+                    self.state = ThreadState::Ready;
+                }
+            }
+
+            action
+        } else {
+            // Handler already consumed (thread terminated)
             self.state = ThreadState::Terminated;
+            ThreadAction::Terminated
         }
     }
 }
@@ -160,7 +246,7 @@ mod tests {
         let config = ThreadConfig::new(
             ThreadId(1),
             ThreadPriority(5),
-            Box::new(|| {}),
+            Box::new(|_ctx| ThreadAction::Terminated),
         ).with_stack_size(8192);
 
         let thread = ExtendedThread::new(config);
@@ -175,7 +261,7 @@ mod tests {
         let mut thread = ExtendedThread::new(ThreadConfig::new(
             ThreadId(2),
             ThreadPriority(3),
-            Box::new(|| {}),
+            Box::new(|_ctx| ThreadAction::Terminated),
         ));
 
         assert_eq!(thread.state(), ThreadState::Ready);
@@ -185,5 +271,49 @@ mod tests {
 
         thread.set_state(ThreadState::Ready);
         assert!(thread.is_ready());
+    }
+
+    #[test]
+    fn thread_poll_lifecycle() {
+        let scheduler = Arc::new(QxkScheduler::new(None));
+        let mut counter = 0u32;
+
+        let mut thread = ExtendedThread::new(ThreadConfig::new(
+            ThreadId(3),
+            ThreadPriority(4),
+            Box::new(move |ctx| {
+                counter += 1;
+                if ctx.iteration() < 3 {
+                    ThreadAction::Continue
+                } else {
+                    ThreadAction::Terminated
+                }
+            }),
+        ));
+
+        // Poll 1: Continue
+        let action = thread.poll(Arc::clone(&scheduler));
+        assert_eq!(action, ThreadAction::Continue);
+        assert_eq!(thread.state(), ThreadState::Ready);
+
+        // Poll 2: Continue
+        let action = thread.poll(Arc::clone(&scheduler));
+        assert_eq!(action, ThreadAction::Continue);
+        assert_eq!(thread.state(), ThreadState::Ready);
+
+        // Poll 3: Continue
+        let action = thread.poll(Arc::clone(&scheduler));
+        assert_eq!(action, ThreadAction::Continue);
+        assert_eq!(thread.state(), ThreadState::Ready);
+
+        // Poll 4: Terminated
+        let action = thread.poll(Arc::clone(&scheduler));
+        assert_eq!(action, ThreadAction::Terminated);
+        assert_eq!(thread.state(), ThreadState::Terminated);
+        assert!(thread.is_terminated());
+
+        // Further polls return Terminated
+        let action = thread.poll(Arc::clone(&scheduler));
+        assert_eq!(action, ThreadAction::Terminated);
     }
 }

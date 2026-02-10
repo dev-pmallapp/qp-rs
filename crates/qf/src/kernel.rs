@@ -22,14 +22,142 @@ struct SchedulerState {
     sched_ceiling: u8,
 }
 
+/// Configuration for the QF kernel.
+///
+/// Provides system sizing metadata required by QS tracing and runtime
+/// configuration options like idle callbacks.
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
     pub name: &'static str,
+    pub max_active: u8,
+    pub max_event_pools: u8,
+    pub max_tick_rate: u8,
+    pub event_queue_ctr_size: u8,
+    pub time_event_ctr_size: u8,
+    pub idle_callback: Option<fn()>,
+    pub version: u16,
+    pub build_info: Option<&'static str>,
 }
 
 impl Default for KernelConfig {
     fn default() -> Self {
-        Self { name: "QP" }
+        Self {
+            name: "QP",
+            max_active: 16,
+            max_event_pools: 3,
+            max_tick_rate: 4,
+            event_queue_ctr_size: 2,
+            time_event_ctr_size: 2,
+            idle_callback: None,
+            version: 740,
+            build_info: None,
+        }
+    }
+}
+
+impl KernelConfig {
+    /// Creates a new kernel configuration builder.
+    pub fn builder() -> KernelConfigBuilder {
+        KernelConfigBuilder::default()
+    }
+
+    /// Converts this configuration to a QS TargetInfo record.
+    #[cfg(feature = "qs")]
+    pub fn to_target_info(&self) -> qs::predefined::TargetInfo {
+        use qs::predefined::TargetInfo;
+
+        TargetInfo {
+            is_reset: 0xFF,
+            version: self.version,
+            signal_size: 2,
+            event_size: 2,
+            equeue_ctr_size: self.event_queue_ctr_size,
+            time_evt_ctr_size: self.time_event_ctr_size,
+            mpool_size_size: 2,
+            mpool_ctr_size: 2,
+            obj_ptr_size: core::mem::size_of::<usize>() as u8,
+            fun_ptr_size: core::mem::size_of::<usize>() as u8,
+            time_size: 4,
+            max_active: self.max_active,
+            max_event_pools: self.max_event_pools,
+            max_tick_rate: self.max_tick_rate,
+            build_time: (0, 0, 0),
+            build_date: (1, 1, 26),
+        }
+    }
+}
+
+/// Builder for ergonomic kernel configuration construction.
+#[derive(Debug, Clone)]
+pub struct KernelConfigBuilder {
+    config: KernelConfig,
+}
+
+impl Default for KernelConfigBuilder {
+    fn default() -> Self {
+        Self {
+            config: KernelConfig::default(),
+        }
+    }
+}
+
+impl KernelConfigBuilder {
+    /// Sets the kernel name.
+    pub fn name(mut self, name: &'static str) -> Self {
+        self.config.name = name;
+        self
+    }
+
+    /// Sets the maximum number of active objects.
+    pub fn max_active(mut self, max: u8) -> Self {
+        self.config.max_active = max;
+        self
+    }
+
+    /// Sets the maximum number of event pools.
+    pub fn max_event_pools(mut self, max: u8) -> Self {
+        self.config.max_event_pools = max;
+        self
+    }
+
+    /// Sets the maximum tick rate.
+    pub fn max_tick_rate(mut self, max: u8) -> Self {
+        self.config.max_tick_rate = max;
+        self
+    }
+
+    /// Sets the counter sizes for event queues and time events.
+    ///
+    /// # Parameters
+    /// - `queue`: Size in bytes for event queue counters (1, 2, or 4)
+    /// - `time`: Size in bytes for time event counters (1, 2, or 4)
+    pub fn counter_sizes(mut self, queue: u8, time: u8) -> Self {
+        self.config.event_queue_ctr_size = queue;
+        self.config.time_event_ctr_size = time;
+        self
+    }
+
+    /// Sets the idle callback function.
+    pub fn idle_callback(mut self, callback: fn()) -> Self {
+        self.config.idle_callback = Some(callback);
+        self
+    }
+
+    /// Sets the version number.
+    pub fn version(mut self, version: u16) -> Self {
+        self.config.version = version;
+        self
+    }
+
+    /// Sets build information string.
+    pub fn build_info(mut self, info: &'static str) -> Self {
+        self.config.build_info = Some(info);
+        self
+    }
+
+    /// Builds the kernel configuration.
+    pub fn build(self) -> KernelConfig {
+        self.config
     }
 }
 
@@ -131,6 +259,15 @@ impl Kernel {
 
     pub fn run_until_idle(&self) {
         while self.dispatch_once() {}
+        // Call idle callback if configured
+        if let Some(idle_cb) = self.config.idle_callback {
+            idle_cb();
+        }
+    }
+
+    /// Returns the kernel configuration.
+    pub fn config(&self) -> &KernelConfig {
+        &self.config
     }
 
     pub fn dispatch_once(&self) -> bool {
