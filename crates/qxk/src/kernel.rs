@@ -12,8 +12,8 @@ use qf::event::{DynEvent, Signal};
 use qf::TraceHook;
 
 use crate::scheduler::{QxkScheduler, ScheduleMode, SchedStatus};
-use crate::sync::Arc;
-use crate::thread::{ExtendedThread, ThreadConfig, ThreadId};
+use crate::sync::{Arc, Mutex};
+use crate::thread::{ExtendedThread, ThreadAction, ThreadConfig, ThreadId};
 
 const MAX_AO_PRIORITY: usize = 63;
 
@@ -151,7 +151,7 @@ pub struct QxkKernel {
     scheduler: Arc<QxkScheduler>,
     ao_slots: Vec<Option<AoSlot>>,
     ao_id_to_prio: BTreeMap<ActiveObjectId, u8>,
-    threads: BTreeMap<ThreadId, ExtendedThread>,
+    threads: BTreeMap<ThreadId, Arc<Mutex<ExtendedThread>>>,
     trace: Option<TraceHook>,
 }
 
@@ -186,7 +186,7 @@ impl QxkKernel {
         for config in thread_configs {
             let id = config.id;
             let thread = ExtendedThread::new(config);
-            threads.insert(id, thread);
+            threads.insert(id, Arc::new(Mutex::new(thread)));
         }
 
         let scheduler = Arc::new(QxkScheduler::new(trace.clone()));
@@ -237,7 +237,8 @@ impl QxkKernel {
         }
 
         // Mark all threads as ready
-        for thread in self.threads.values() {
+        for thread_arc in self.threads.values() {
+            let thread = thread_arc.lock();
             if thread.is_ready() {
                 self.scheduler
                     .mark_thread_ready(thread.id(), thread.priority());
@@ -300,11 +301,35 @@ impl QxkKernel {
                 self.dispatch_ao(priority);
                 true
             }
-            ScheduleMode::ExtendedThread { id, .. } => {
-                // Note: Thread execution would require cooperative yielding
-                // or actual thread support. For now, mark as not ready.
-                self.scheduler.mark_thread_not_ready(id);
-                true
+            ScheduleMode::ExtendedThread { id, priority } => {
+                if let Some(thread_arc) = self.threads.get(&id) {
+                    let mut thread = thread_arc.lock();
+                    let action = thread.poll(Arc::clone(&self.scheduler));
+
+                    match action {
+                        ThreadAction::Continue => {
+                            // Keep thread ready, will be polled again
+                            true
+                        }
+                        ThreadAction::Yield => {
+                            // Thread yielded, stays ready
+                            self.scheduler.mark_thread_ready(id, priority);
+                            true
+                        }
+                        ThreadAction::Blocked => {
+                            // Primitive already blocked thread via scheduler
+                            true
+                        }
+                        ThreadAction::Terminated => {
+                            // Thread finished
+                            self.scheduler.mark_thread_not_ready(id);
+                            true
+                        }
+                    }
+                } else {
+                    self.scheduler.mark_thread_not_ready(id);
+                    false
+                }
             }
             ScheduleMode::Idle => false,
         }

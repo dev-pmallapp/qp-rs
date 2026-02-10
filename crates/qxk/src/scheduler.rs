@@ -301,6 +301,26 @@ impl QxkScheduler {
         state.active_thread = None;
     }
 
+    // Thread Blocking/Unblocking
+
+    /// Blocks a thread (removes from ready queue).
+    ///
+    /// Called by synchronization primitives when a thread needs to wait.
+    /// The thread will not be scheduled until `unblock_thread()` is called.
+    pub fn block_thread(&self, id: ThreadId) {
+        let mut state = self.state.lock();
+        state.thread_ready.remove(id);
+    }
+
+    /// Unblocks a thread (adds to ready queue).
+    ///
+    /// Called by synchronization primitives when a waiting thread can proceed.
+    /// The thread will become eligible for scheduling.
+    pub fn unblock_thread(&self, id: ThreadId, priority: ThreadPriority) {
+        let mut state = self.state.lock();
+        state.thread_ready.insert(id, priority);
+    }
+
     fn emit_trace(&self, record: u8, payload: &[u8]) {
         if let Some(ref trace) = *self.trace.lock() {
             let _ = trace(record, payload, true);
@@ -397,6 +417,52 @@ mod tests {
         assert!(matches!(
             sched.plan_next(),
             ScheduleMode::ActiveObject { priority: 3 }
+        ));
+    }
+
+    #[test]
+    fn block_unblock_thread() {
+        let sched = QxkScheduler::new(None);
+
+        // Add thread to ready queue
+        sched.mark_thread_ready(ThreadId(5), ThreadPriority(10));
+        assert!(matches!(
+            sched.plan_next(),
+            ScheduleMode::ExtendedThread { id: ThreadId(5), .. }
+        ));
+
+        // Block the thread
+        sched.block_thread(ThreadId(5));
+        assert!(matches!(sched.plan_next(), ScheduleMode::Idle));
+
+        // Unblock the thread
+        sched.unblock_thread(ThreadId(5), ThreadPriority(10));
+        assert!(matches!(
+            sched.plan_next(),
+            ScheduleMode::ExtendedThread { id: ThreadId(5), .. }
+        ));
+    }
+
+    #[test]
+    fn block_removes_from_ready_queue() {
+        let sched = QxkScheduler::new(None);
+
+        sched.mark_thread_ready(ThreadId(1), ThreadPriority(5));
+        sched.mark_thread_ready(ThreadId(2), ThreadPriority(10));
+
+        // Highest priority should be scheduled
+        assert!(matches!(
+            sched.plan_next(),
+            ScheduleMode::ExtendedThread { id: ThreadId(2), priority: ThreadPriority(10) }
+        ));
+
+        // Block highest priority thread
+        sched.block_thread(ThreadId(2));
+
+        // Now lower priority should be scheduled
+        assert!(matches!(
+            sched.plan_next(),
+            ScheduleMode::ExtendedThread { id: ThreadId(1), priority: ThreadPriority(5) }
         ));
     }
 }

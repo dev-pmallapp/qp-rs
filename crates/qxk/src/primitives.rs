@@ -15,8 +15,9 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::time::Duration;
 
+use crate::scheduler::QxkScheduler;
 use crate::sync::{Arc, Mutex};
-use crate::thread::ThreadId;
+use crate::thread::{ThreadId, ThreadPriority};
 
 /// Error types for synchronization primitives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +32,8 @@ pub enum SyncError {
     QueueEmpty,
     /// Invalid operation (e.g., unlock by non-owner).
     InvalidOperation,
+    /// Operation would block, thread suspended by scheduler.
+    WouldBlock,
 }
 
 impl fmt::Display for SyncError {
@@ -41,6 +44,7 @@ impl fmt::Display for SyncError {
             Self::QueueFull => write!(f, "message queue is full"),
             Self::QueueEmpty => write!(f, "message queue is empty"),
             Self::InvalidOperation => write!(f, "invalid operation"),
+            Self::WouldBlock => write!(f, "operation would block"),
         }
     }
 }
@@ -134,17 +138,23 @@ impl Semaphore {
 
     /// Waits for the semaphore, blocking until available.
     ///
-    /// Note: In the current implementation, this is a spin-wait.
-    /// A full implementation would integrate with the scheduler to block the thread.
-    pub fn wait(&self) -> SyncResult<()> {
-        loop {
-            if self.try_wait() {
+    /// If the semaphore count is > 0, decrements and returns Ok.
+    /// Otherwise, registers the thread as waiting and returns WouldBlock.
+    /// The scheduler will unblock the thread when signal() is called.
+    pub fn wait(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
+        {
+            let mut inner = self.inner.lock();
+            if inner.count > 0 {
+                inner.count -= 1;
                 return Ok(());
             }
-            // In a full implementation, would yield to scheduler here
-            #[cfg(feature = "std")]
-            std::thread::yield_now();
+            // Register as waiting
+            inner.waiting.push(WaitingThread::new(thread, priority));
         }
+
+        // Block thread in scheduler
+        scheduler.block_thread(thread);
+        Err(SyncError::WouldBlock)
     }
 
     /// Waits for the semaphore with a timeout.
@@ -159,19 +169,28 @@ impl Semaphore {
 
     /// Signals the semaphore, incrementing the count.
     ///
-    /// Wakes one waiting thread if any are blocked.
-    pub fn signal(&self) -> SyncResult<()> {
-        let mut inner = self.inner.lock();
-        if inner.count >= inner.max_count {
-            return Err(SyncError::Overflow);
-        }
-        inner.count += 1;
+    /// Wakes the highest priority waiting thread if any are blocked.
+    pub fn signal(&self, scheduler: &QxkScheduler) -> SyncResult<()> {
+        let woken_thread = {
+            let mut inner = self.inner.lock();
+            if inner.count >= inner.max_count {
+                return Err(SyncError::Overflow);
+            }
+            inner.count += 1;
 
-        // Wake one waiting thread (highest priority)
-        if !inner.waiting.is_empty() {
-            inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
-            let _woken = inner.waiting.remove(0);
-            // In full implementation: scheduler.unblock(woken.id)
+            // Wake highest priority waiter
+            if !inner.waiting.is_empty() {
+                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                let woken = inner.waiting.remove(0);
+                Some((woken.id, woken.priority))
+            } else {
+                None
+            }
+        };
+
+        // Unblock in scheduler (outside lock to avoid deadlock)
+        if let Some((id, priority)) = woken_thread {
+            scheduler.unblock_thread(id, ThreadPriority(priority));
         }
 
         Ok(())
@@ -238,33 +257,55 @@ impl MutexPrim {
     }
 
     /// Locks the mutex, blocking until available.
-    pub fn lock(&self, thread: ThreadId, _priority: u8) -> SyncResult<()> {
-        loop {
-            if self.try_lock(thread) {
+    ///
+    /// If the mutex is unlocked, acquires it and returns Ok.
+    /// Otherwise, registers as waiting and returns WouldBlock.
+    pub fn lock(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
+        {
+            let mut inner = self.inner.lock();
+            if !inner.locked {
+                inner.locked = true;
+                inner.owner = Some(thread);
+                inner.original_priority = Some(priority);
                 return Ok(());
             }
-            // In full implementation: block and yield
-            #[cfg(feature = "std")]
-            std::thread::yield_now();
+            // Register as waiting
+            inner.waiting.push(WaitingThread::new(thread, priority));
         }
+
+        // Block thread in scheduler
+        scheduler.block_thread(thread);
+        Err(SyncError::WouldBlock)
     }
 
     /// Unlocks the mutex.
-    pub fn unlock(&self, thread: ThreadId) -> SyncResult<()> {
-        let mut inner = self.inner.lock();
+    ///
+    /// Wakes the highest priority waiting thread if any are blocked.
+    pub fn unlock(&self, thread: ThreadId, scheduler: &QxkScheduler) -> SyncResult<()> {
+        let woken_thread = {
+            let mut inner = self.inner.lock();
 
-        if inner.owner != Some(thread) {
-            return Err(SyncError::InvalidOperation);
-        }
+            if inner.owner != Some(thread) {
+                return Err(SyncError::InvalidOperation);
+            }
 
-        inner.locked = false;
-        inner.owner = None;
+            inner.locked = false;
+            inner.owner = None;
+            inner.original_priority = None;
 
-        // Wake highest priority waiter
-        if !inner.waiting.is_empty() {
-            inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
-            let _woken = inner.waiting.remove(0);
-            // In full implementation: scheduler.unblock(woken.id)
+            // Wake highest priority waiter
+            if !inner.waiting.is_empty() {
+                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                let woken = inner.waiting.remove(0);
+                Some((woken.id, woken.priority))
+            } else {
+                None
+            }
+        };
+
+        // Unblock in scheduler (outside lock)
+        if let Some((id, priority)) = woken_thread {
+            scheduler.unblock_thread(id, ThreadPriority(priority));
         }
 
         Ok(())
@@ -330,18 +371,29 @@ impl<T> MessageQueue<T> {
     }
 
     /// Sends a message to the queue without blocking.
-    pub fn try_send(&self, message: T) -> SyncResult<()> {
-        let mut inner = self.inner.lock();
-        if inner.queue.len() >= inner.capacity {
-            return Err(SyncError::QueueFull);
-        }
-        inner.queue.push_back(message);
+    ///
+    /// Wakes a waiting receiver if any are blocked.
+    pub fn try_send(&self, message: T, scheduler: &QxkScheduler) -> SyncResult<()> {
+        let woken_receiver = {
+            let mut inner = self.inner.lock();
+            if inner.queue.len() >= inner.capacity {
+                return Err(SyncError::QueueFull);
+            }
+            inner.queue.push_back(message);
 
-        // Wake one waiting receiver
-        if !inner.waiting_receivers.is_empty() {
-            inner.waiting_receivers.sort_by(|a, b| b.priority.cmp(&a.priority));
-            let _woken = inner.waiting_receivers.remove(0);
-            // scheduler.unblock(woken.id)
+            // Wake one waiting receiver
+            if !inner.waiting_receivers.is_empty() {
+                inner.waiting_receivers.sort_by(|a, b| b.priority.cmp(&a.priority));
+                let woken = inner.waiting_receivers.remove(0);
+                Some((woken.id, woken.priority))
+            } else {
+                None
+            }
+        };
+
+        // Unblock receiver (outside lock)
+        if let Some((id, priority)) = woken_receiver {
+            scheduler.unblock_thread(id, ThreadPriority(priority));
         }
 
         Ok(())
@@ -355,24 +407,71 @@ impl<T> MessageQueue<T> {
 
     /// Sends a message, blocking if queue is full.
     ///
-    /// Note: Current implementation returns QueueFull error if the queue is full.
-    /// A full scheduler integration would block the thread and retry.
-    pub fn send(&self, message: T) -> SyncResult<()> {
-        self.try_send(message)
+    /// If queue has space, sends immediately. Otherwise, registers as waiting
+    /// sender and returns WouldBlock.
+    pub fn send(&self, message: T, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
+        let woken_receiver = {
+            let mut inner = self.inner.lock();
+            if inner.queue.len() >= inner.capacity {
+                // Queue full, register as waiting sender
+                inner.waiting_senders.push(WaitingThread::new(thread, priority));
+                drop(inner);
+                scheduler.block_thread(thread);
+                return Err(SyncError::WouldBlock);
+            }
+            inner.queue.push_back(message);
+
+            // Wake one waiting receiver
+            if !inner.waiting_receivers.is_empty() {
+                inner.waiting_receivers.sort_by(|a, b| b.priority.cmp(&a.priority));
+                let woken = inner.waiting_receivers.remove(0);
+                Some((woken.id, woken.priority))
+            } else {
+                None
+            }
+        };
+
+        // Unblock receiver (outside lock)
+        if let Some((id, priority)) = woken_receiver {
+            scheduler.unblock_thread(id, ThreadPriority(priority));
+        }
+
+        Ok(())
     }
 
     /// Receives a message, blocking if queue is empty.
-    pub fn receive(&self) -> SyncResult<T> {
-        loop {
-            match self.try_receive() {
-                Ok(msg) => return Ok(msg),
-                Err(SyncError::QueueEmpty) => {
-                    #[cfg(feature = "std")]
-                    std::thread::yield_now();
-                    // In full implementation: block receiver thread
-                }
-                Err(e) => return Err(e),
+    ///
+    /// If queue has messages, receives immediately. Otherwise, registers as
+    /// waiting receiver and returns WouldBlock.
+    pub fn receive(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<T> {
+        let (message, woken_sender) = {
+            let mut inner = self.inner.lock();
+            if let Some(msg) = inner.queue.pop_front() {
+                // Wake one waiting sender
+                let woken = if !inner.waiting_senders.is_empty() {
+                    inner.waiting_senders.sort_by(|a, b| b.priority.cmp(&a.priority));
+                    let w = inner.waiting_senders.remove(0);
+                    Some((w.id, w.priority))
+                } else {
+                    None
+                };
+                (Some(msg), woken)
+            } else {
+                // Queue empty, register as waiting receiver
+                inner.waiting_receivers.push(WaitingThread::new(thread, priority));
+                (None, None)
             }
+        };
+
+        if let Some(msg) = message {
+            // Unblock sender (outside lock)
+            if let Some((id, priority)) = woken_sender {
+                scheduler.unblock_thread(id, ThreadPriority(priority));
+            }
+            Ok(msg)
+        } else {
+            scheduler.block_thread(thread);
+            Err(SyncError::WouldBlock)
         }
     }
 
@@ -430,30 +529,44 @@ impl CondVar {
 
     /// Waits for notification.
     ///
-    /// In a full implementation, this would atomically release a mutex
-    /// and block the thread until notified.
-    pub fn wait(&self, thread: ThreadId, priority: u8) {
-        let mut inner = self.inner.lock();
-        inner.waiting.push(WaitingThread::new(thread, priority));
-        // In full implementation: release mutex, block thread
+    /// Registers the thread as waiting and blocks it in the scheduler.
+    /// Returns WouldBlock to indicate the thread is suspended.
+    pub fn wait(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
+        {
+            let mut inner = self.inner.lock();
+            inner.waiting.push(WaitingThread::new(thread, priority));
+        }
+        scheduler.block_thread(thread);
+        Err(SyncError::WouldBlock)
     }
 
-    /// Notifies one waiting thread.
-    pub fn notify_one(&self) {
-        let mut inner = self.inner.lock();
-        if !inner.waiting.is_empty() {
-            inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
-            let _woken = inner.waiting.remove(0);
-            // scheduler.unblock(woken.id)
+    /// Notifies one waiting thread (highest priority).
+    pub fn notify_one(&self, scheduler: &QxkScheduler) {
+        let woken_thread = {
+            let mut inner = self.inner.lock();
+            if !inner.waiting.is_empty() {
+                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                let woken = inner.waiting.remove(0);
+                Some((woken.id, woken.priority))
+            } else {
+                None
+            }
+        };
+
+        if let Some((id, priority)) = woken_thread {
+            scheduler.unblock_thread(id, ThreadPriority(priority));
         }
     }
 
     /// Notifies all waiting threads.
-    pub fn notify_all(&self) {
-        let mut inner = self.inner.lock();
-        let waiting = core::mem::take(&mut inner.waiting);
-        for _woken in waiting {
-            // scheduler.unblock(woken.id)
+    pub fn notify_all(&self, scheduler: &QxkScheduler) {
+        let waiting = {
+            let mut inner = self.inner.lock();
+            core::mem::take(&mut inner.waiting)
+        };
+
+        for woken in waiting {
+            scheduler.unblock_thread(woken.id, ThreadPriority(woken.priority));
         }
     }
 
@@ -483,10 +596,11 @@ mod tests {
 
     #[test]
     fn semaphore_signal_and_wait() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let sem = Semaphore::new(0);
         assert_eq!(sem.count(), 0);
 
-        sem.signal().expect("signal should succeed");
+        sem.signal(&sched).expect("signal should succeed");
         assert_eq!(sem.count(), 1);
 
         assert!(sem.try_wait());
@@ -495,9 +609,10 @@ mod tests {
 
     #[test]
     fn binary_semaphore_overflow() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let sem = Semaphore::binary();
-        sem.signal().expect("first signal ok");
-        assert!(matches!(sem.signal(), Err(SyncError::Overflow)));
+        sem.signal(&sched).expect("first signal ok");
+        assert!(matches!(sem.signal(&sched), Err(SyncError::Overflow)));
     }
 
     #[test]
@@ -508,6 +623,7 @@ mod tests {
 
     #[test]
     fn mutex_lock_unlock() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let mutex = MutexPrim::new();
         let thread1 = ThreadId(1);
         let thread2 = ThreadId(2);
@@ -519,7 +635,7 @@ mod tests {
         // Different thread cannot lock
         assert!(!mutex.try_lock(thread2));
 
-        mutex.unlock(thread1).expect("unlock should succeed");
+        mutex.unlock(thread1, &sched).expect("unlock should succeed");
         assert!(!mutex.is_locked());
         assert_eq!(mutex.owner(), None);
 
@@ -529,30 +645,32 @@ mod tests {
 
     #[test]
     fn mutex_unlock_by_non_owner_fails() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let mutex = MutexPrim::new();
         let thread1 = ThreadId(1);
         let thread2 = ThreadId(2);
 
         mutex.try_lock(thread1);
         assert!(matches!(
-            mutex.unlock(thread2),
+            mutex.unlock(thread2, &sched),
             Err(SyncError::InvalidOperation)
         ));
     }
 
     #[test]
     fn message_queue_send_receive() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let queue: MessageQueue<u32> = MessageQueue::new(3);
 
         assert!(queue.is_empty());
         assert_eq!(queue.len(), 0);
 
-        queue.try_send(1).expect("send 1");
-        queue.try_send(2).expect("send 2");
-        queue.try_send(3).expect("send 3");
+        queue.try_send(1, &sched).expect("send 1");
+        queue.try_send(2, &sched).expect("send 2");
+        queue.try_send(3, &sched).expect("send 3");
 
         assert!(queue.is_full());
-        assert!(matches!(queue.try_send(4), Err(SyncError::QueueFull)));
+        assert!(matches!(queue.try_send(4, &sched), Err(SyncError::QueueFull)));
 
         assert_eq!(queue.try_receive().unwrap(), 1);
         assert_eq!(queue.try_receive().unwrap(), 2);
@@ -564,11 +682,12 @@ mod tests {
 
     #[test]
     fn message_queue_fifo_order() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let queue: MessageQueue<&str> = MessageQueue::new(5);
 
-        queue.try_send("first").unwrap();
-        queue.try_send("second").unwrap();
-        queue.try_send("third").unwrap();
+        queue.try_send("first", &sched).unwrap();
+        queue.try_send("second", &sched).unwrap();
+        queue.try_send("third", &sched).unwrap();
 
         assert_eq!(queue.try_receive().unwrap(), "first");
         assert_eq!(queue.try_receive().unwrap(), "second");
@@ -577,28 +696,30 @@ mod tests {
 
     #[test]
     fn condvar_notify() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let cv = CondVar::new();
         let thread1 = ThreadId(1);
 
         assert_eq!(cv.waiting_count(), 0);
 
-        cv.wait(thread1, 5);
+        let _ = cv.wait(thread1, 5, &sched);
         assert_eq!(cv.waiting_count(), 1);
 
-        cv.notify_one();
+        cv.notify_one(&sched);
         assert_eq!(cv.waiting_count(), 0);
     }
 
     #[test]
     fn condvar_notify_all() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
         let cv = CondVar::new();
 
-        cv.wait(ThreadId(1), 3);
-        cv.wait(ThreadId(2), 5);
-        cv.wait(ThreadId(3), 2);
+        let _ = cv.wait(ThreadId(1), 3, &sched);
+        let _ = cv.wait(ThreadId(2), 5, &sched);
+        let _ = cv.wait(ThreadId(3), 2, &sched);
         assert_eq!(cv.waiting_count(), 3);
 
-        cv.notify_all();
+        cv.notify_all(&sched);
         assert_eq!(cv.waiting_count(), 0);
     }
 }
