@@ -581,10 +581,21 @@ impl FrameInterpreter {
             }
         }
 
-        // For LORA_TX_PKT emit a structured LoRaWAN line in addition to the
-        // raw field dump so the frame can be read at a glance.
+        // Per-record pretty-printers: replace raw numeric fields with names.
         if name == "LORA_TX_PKT" {
             if let Some(line) = format_lora_tx_pkt(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "SWM_ACTOR_TRAN" {
+            if let Some(line) = format_swm_actor_tran(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "SWM_SESSION_TRAN" {
+            if let Some(line) = format_swm_session_tran(&values) {
                 lines.push(format!("{ts:010} {line}"));
                 return;
             }
@@ -755,5 +766,108 @@ fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
         "LORA_TX_PKT {:.3}MHz SF{sf} BW{bw_khz}kHz CR{cr_str} +{pwr}dBm frame[{}B]:{lorawan}",
         freq_hz as f64 / 1_000_000.0,
         frame_bytes.len(),
+    ))
+}
+
+// ── SWM pretty-printers ───────────────────────────────────────────────────────
+
+/// Map `ActorMode` discriminant to name (swm-hal `domain::ActorMode`).
+fn actor_mode_name(v: u8) -> &'static str {
+    match v {
+        0 => "Boot",
+        1 => "Idle",
+        2 => "Sampling",
+        3 => "Processing",
+        4 => "Transmitting",
+        5 => "Sleeping",
+        6 => "Service",
+        7 => "Fault",
+        _ => "?",
+    }
+}
+
+/// Map `Signal` discriminant to name (swm-core `Signal`).
+fn swm_signal_name(v: u16) -> &'static str {
+    match v {
+        0  => "Boot",
+        1  => "Tick",
+        2  => "Fault",
+        3  => "ConfigLoad",
+        4  => "ConfigLoaded",
+        5  => "ConfigUpdate",
+        6  => "ConfigCommitted",
+        7  => "SampleRequest",
+        8  => "SampleReady",
+        9  => "LevelComputed",
+        10 => "TxRequest",
+        11 => "TxDone",
+        12 => "RxFrame",
+        13 => "AckTimeout",
+        14 => "MacSlot",
+        15 => "CommandReceived",
+        16 => "CommandAccepted",
+        17 => "CommandRejected",
+        18 => "CommandApplied",
+        19 => "FeedbackChanged",
+        20 => "HealthRequest",
+        21 => "HealthReport",
+        22 => "MaintenanceEnter",
+        23 => "MaintenanceExit",
+        24 => "FotaPolicy",
+        25 => "FotaManifest",
+        26 => "FotaChunk",
+        27 => "FotaApply",
+        28 => "FotaStatus",
+        _  => "?",
+    }
+}
+
+/// Map `CommSessionState` discriminant to name (swm-hal `domain::CommSessionState`).
+fn session_state_name(v: u8) -> &'static str {
+    match v {
+        0 => "Unbound",
+        1 => "BoundIdle",
+        2 => "TxPending",
+        3 => "TxActive",
+        4 => "WaitAck",
+        5 => "RxWindow",
+        6 => "Backoff",
+        7 => "ServiceWindow",
+        8 => "Fault",
+        _ => "?",
+    }
+}
+
+/// Pretty-print `SWM_ACTOR_TRAN`.
+///
+/// `values`: [actor_name, from_u8, to_u8, signal_u16]
+fn format_swm_actor_tran(values: &[String]) -> Option<String> {
+    if values.len() < 4 { return None; }
+    let actor  = &values[0];
+    let from: u8  = values[1].parse().ok()?;
+    let to:   u8  = values[2].parse().ok()?;
+    let sig:  u16 = values[3].parse().ok()?;
+    Some(format!(
+        "SWM_ACTOR_TRAN {actor} {}→{} [{}]",
+        actor_mode_name(from),
+        actor_mode_name(to),
+        swm_signal_name(sig),
+    ))
+}
+
+/// Pretty-print `SWM_SESSION_TRAN`.
+///
+/// `values`: [actor_name, from_u8, to_u8, signal_u16]
+fn format_swm_session_tran(values: &[String]) -> Option<String> {
+    if values.len() < 4 { return None; }
+    let actor  = &values[0];
+    let from: u8  = values[1].parse().ok()?;
+    let to:   u8  = values[2].parse().ok()?;
+    let sig:  u16 = values[3].parse().ok()?;
+    Some(format!(
+        "SWM_SESSION_TRAN {actor} {}→{} [{}]",
+        session_state_name(from),
+        session_state_name(to),
+        swm_signal_name(sig),
     ))
 }
