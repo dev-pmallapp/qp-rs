@@ -17,6 +17,7 @@ pub mod timer;
 pub mod adc;
 pub mod dac;
 pub mod interrupt;
+pub mod lora;
 
 #[cfg(feature = "qp-integration")]
 pub mod integration;

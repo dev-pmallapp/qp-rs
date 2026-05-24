@@ -1,0 +1,18 @@
+[package]
+name = "comms"
+version = "0.1.0"
+edition = "2021"
+description = "Communication middleware: RF (LoRa/LoRaWAN), FOTA, and future protocols"
+publish = false
+
+[features]
+default = ["std"]
+std    = ["qf/std"]
+qs     = ["dep:qs", "qf/qs"]
+
+[dependencies]
+hal              = { path = "../../hal" }
+qf               = { path = "../qf", default-features = false }
+qs               = { path = "../qs", optional = true }
+aes  = { version = "0.8", default-features = false, features = ["zeroize"] }
+cmac = { version = "0.7", default-features = false }

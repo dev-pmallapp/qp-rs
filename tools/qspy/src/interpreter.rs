@@ -72,7 +72,8 @@ impl FrameInterpreter {
             sched::IDLE   => self.handle_sched_idle(&frame.payload, &mut lines),
             65 => lines.push(format!("Trg-Done rec={}", frame.payload.first().copied().unwrap_or(0))),
             66 => self.handle_rx_status(&frame.payload, &mut lines),
-            rec if rec >= 128 => self.handle_user_record(rec, &frame.payload, &mut lines),
+            rec if rec >= 128 || self.dict.users.contains_key(&rec)
+                => self.handle_user_record(rec, &frame.payload, &mut lines),
             _ => {}
         }
 
@@ -580,6 +581,15 @@ impl FrameInterpreter {
             }
         }
 
+        // For LORA_TX_PKT emit a structured LoRaWAN line in addition to the
+        // raw field dump so the frame can be read at a glance.
+        if name == "LORA_TX_PKT" {
+            if let Some(line) = format_lora_tx_pkt(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+
         lines.push(format!("{ts:010} {name} {}", values.join(" ")));
     }
 
@@ -677,4 +687,73 @@ fn hex_bytes(bytes: &[u8]) -> String {
 fn parse_addr(s: &str) -> Result<u64, std::num::ParseIntError> {
     let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     u64::from_str_radix(hex, 16)
+}
+
+/// Pretty-print a decoded LORA_TX_PKT record.
+///
+/// `values` is the slice produced by the generic FMT field decoder:
+///   [0] freq (u32 as decimal string)
+///   [1] sf   (u8)
+///   [2] bw   (u8: 0=125 1=250 2=500)
+///   [3] cr   (u8: 0=4/5 1=4/6 2=4/7 3=4/8)  — maps to CR enum value
+///   [4] pwr  (u8, dBm)
+///   [5] frame bytes as "mem:HHHH..."
+///
+/// Returns `None` if the values slice doesn't match the expected shape.
+fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
+    if values.len() < 6 { return None; }
+
+    let freq_hz: u64 = values[0].parse().ok()?;
+    let sf:  u8 = values[1].parse().ok()?;
+    let bw:  u8 = values[2].parse().ok()?;
+    let cr:  u8 = values[3].parse().ok()?;
+    let pwr: u8 = values[4].parse().ok()?;
+
+    // values[5] looks like "mem:4004030201..."
+    let hex_str = values[5].strip_prefix("mem:")?;
+    if hex_str.len() < 2 { return None; }
+
+    let frame_bytes: Vec<u8> = (0..hex_str.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(&hex_str[i..i+2], 16).ok())
+        .collect();
+
+    let bw_khz = match bw { 0 => "125", 1 => "250", 2 => "500", _ => "?" };
+    let cr_str = match cr { 0 => "4/5", 1 => "4/6", 2 => "4/7", 3 => "4/8", _ => "?" };
+
+    // Decode LoRaWAN 1.0.x uplink frame fields (best-effort, no crypto)
+    let lorawan = if frame_bytes.len() >= 8 {
+        let mhdr  = frame_bytes[0];
+        let m_type = (mhdr >> 5) & 0x07;
+        let mtype_str = match m_type {
+            0 => "JoinReq", 1 => "JoinAcc", 2 => "UnconfUp", 3 => "UnconfDn",
+            4 => "ConfUp",  5 => "ConfDn",  _ => "Prop",
+        };
+        let dev_addr = u32::from_le_bytes([
+            frame_bytes[1], frame_bytes[2], frame_bytes[3], frame_bytes[4],
+        ]);
+        let fctrl = frame_bytes[5];
+        let fcnt  = u16::from_le_bytes([frame_bytes[6], frame_bytes[7]]);
+        let fopts_len = (fctrl & 0x0F) as usize;
+        let has_fport = frame_bytes.len() > 8 + fopts_len + 4;
+        let fport = if has_fport { Some(frame_bytes[8 + fopts_len]) } else { None };
+        let payload_len = frame_bytes.len()
+            .saturating_sub(8 + fopts_len + if has_fport { 1 } else { 0 } + 4);
+
+        if let Some(fp) = fport {
+            format!(" | {mtype_str} DevAddr={dev_addr:#010X} FCnt={fcnt} FPort={fp} FRMPayload={payload_len}B MIC={:02X}{:02X}{:02X}{:02X}",
+                frame_bytes[frame_bytes.len()-4], frame_bytes[frame_bytes.len()-3],
+                frame_bytes[frame_bytes.len()-2], frame_bytes[frame_bytes.len()-1])
+        } else {
+            format!(" | {mtype_str} DevAddr={dev_addr:#010X} FCnt={fcnt}")
+        }
+    } else {
+        String::new()
+    };
+
+    Some(format!(
+        "LORA_TX_PKT {:.3}MHz SF{sf} BW{bw_khz}kHz CR{cr_str} +{pwr}dBm frame[{}B]:{lorawan}",
+        freq_hz as f64 / 1_000_000.0,
+        frame_bytes.len(),
+    ))
 }
