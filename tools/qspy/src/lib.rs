@@ -1,16 +1,11 @@
-//! Minimal host-side utilities for decoding QS HDLC frames.
-//!
-//! The original QSPY tool listens on a TCP socket and consumes QS frames
-//! produced by embedded targets. This crate implements the core HDLC deframer
-//! and checksum verification so additional frontends (CLI, GUI, loggers) can
-//! be layered on top in Rust.
-
+pub(crate) mod cursor;
 mod decoder;
 mod interpreter;
-
-pub use interpreter::FrameInterpreter;
+mod sizes;
 
 pub use decoder::{DecodeError, HdlcDecoder, QsFrame};
+pub use interpreter::FrameInterpreter;
+pub use sizes::TargetSizes;
 
 #[cfg(test)]
 mod tests;
