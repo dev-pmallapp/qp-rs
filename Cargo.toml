@@ -4,10 +4,13 @@ members = [
     "crates/qk",
     "crates/qxk",
     "crates/qs",
+    "crates/comms",
     "examples/dpp",
+    "examples/lora_send",
     "ports/posix",
     "ports/esp32-s3",
     "ports/esp32-c6",
     "tools/qspy",
 ]
+exclude = ["hal"]
 resolver = "2"

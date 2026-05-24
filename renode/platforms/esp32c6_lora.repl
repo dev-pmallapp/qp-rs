@@ -1,0 +1,39 @@
+# ESP32-C6 platform with SX1262 LoRa peripheral.
+#
+# ESP32-C6 is a RISC-V (RV32IMAC) single-core SoC.
+# Peripheral base addresses from ESP32-C6 Technical Reference Manual rev 0.3.
+#
+# Usage:
+#   renode renode/scripts/esp32c6_lora.resc
+
+cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32imac_zicsr"
+    timeProvider: clint
+
+clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x20000000
+    frequency: 10000000
+    [0, 1] -> cpu@[3, 7]
+
+plic: IRQControllers.PlatformLevelInterruptController @ sysbus 0x20400000
+    [0-31] -> cpu@[11]
+    numberOfSources: 32
+    numberOfTargets: 1
+    prioritiesEnabled: true
+
+uart0: UART.NS16550 @ sysbus 0x60000000
+    wideRegisters: true
+    IRQ -> plic@37
+
+spi2: SPI.SimpleSPIController @ sysbus 0x60024000
+
+sx1262: Python.PythonPeripheral @ spi2 0
+    filename: @peripherals/sx1262.py
+    size: 0x1
+
+# Map 4 MB of flash at the ESP32-C6 IROM/DROM address
+flash: Memory.MappedMemory @ sysbus 0x42000000
+    size: 0x400000
+
+# SRAM — 512 KB (HP SRAM)
+sram: Memory.MappedMemory @ sysbus 0x40800000
+    size: 0x80000
