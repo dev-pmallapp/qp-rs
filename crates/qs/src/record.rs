@@ -100,6 +100,48 @@ impl UserRecordBuilder {
         self
     }
 
+    /// Adds a signed 8-bit (or enum) field.
+    pub fn push_i8_enum(&mut self, value: i8) -> &mut Self {
+        self.bytes.push(make_format(0, FMT_I8_ENUM));
+        self.bytes.push(value as u8);
+        self
+    }
+
+    /// Adds a signed 16-bit field.
+    pub fn push_i16(&mut self, width: u8, value: i16) -> &mut Self {
+        self.bytes.push(make_format(width, FMT_I16));
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
+    /// Adds a signed 32-bit field.
+    pub fn push_i32(&mut self, width: u8, value: i32) -> &mut Self {
+        self.bytes.push(make_format(width, FMT_I32));
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
+    /// Adds a signed 64-bit field.
+    pub fn push_i64(&mut self, width: u8, value: i64) -> &mut Self {
+        self.bytes.push(make_format(width, FMT_I64));
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
+    /// Adds a 32-bit float field.
+    pub fn push_f32(&mut self, value: f32) -> &mut Self {
+        self.bytes.push(make_format(0, FMT_F32));
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
+    /// Adds a 64-bit float field.
+    pub fn push_f64(&mut self, value: f64) -> &mut Self {
+        self.bytes.push(make_format(0, FMT_F64));
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
     /// Adds a null-terminated ASCII string field.
     pub fn push_str(&mut self, value: &str) -> &mut Self {
         self.bytes.push(make_format(0, FMT_STR));

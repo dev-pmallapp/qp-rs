@@ -12,7 +12,7 @@ use std::thread;
 use clap::Parser;
 use commands::{try_send, CommandSender, SharedSender};
 use frontend::{FrontendCmd, FrontendServer};
-use output::OutputSinks;
+use output::{stdout_is_tty, OutputSinks};
 use qspy::{DecodeError, FrameInterpreter, HdlcDecoder, TargetSizes};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -93,6 +93,11 @@ struct Opts {
           help = "Load dictionary file at startup")]
     dict_file: Option<String>,
 
+    // ── Output ──
+    /// Disable ANSI color output (default: auto-detected from TTY).
+    #[arg(long = "no-color")]
+    no_color: bool,
+
     // ── Target type sizes ──
     /// QS_TIME_SIZE in bytes.
     #[arg(short = 'T', value_name = "N", default_value_t = 4)] time_size:    u8,
@@ -141,7 +146,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         timeevt_ctr:  opts.timeevt_ctr,
     };
 
-    let mut sinks = OutputSinks::new(opts.quiet);
+    let color = !opts.no_color
+        && std::env::var_os("NO_COLOR").is_none()
+        && stdout_is_tty();
+    let mut sinks = OutputSinks::new(opts.quiet, color);
     if let Some(ref arg) = opts.text_out {
         let p = if arg.is_empty() { None } else { Some(Path::new(arg.as_str())) };
         sinks.open_text(p)?;

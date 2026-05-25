@@ -6,7 +6,7 @@ use crate::cursor::Cursor;
 use crate::sizes::TargetSizes;
 use crate::QsFrame;
 use qs::predefined;
-use qs::records::{qep, qf::time_evt, sched};
+use qs::records::{qep, qf, qf::time_evt, sched};
 use qs::{
     FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64, FMT_I8_ENUM, FMT_MEM,
     FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
@@ -19,61 +19,90 @@ pub struct FrameInterpreter {
 }
 
 impl Default for FrameInterpreter {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl FrameInterpreter {
     pub fn new() -> Self {
-        Self {
-            dict:  Dictionaries::default(),
-            sizes: TargetSizes::default(),
-        }
+        Self { dict: Dictionaries::default(), sizes: TargetSizes::default() }
     }
 
     pub fn with_sizes(sizes: TargetSizes) -> Self {
         Self { dict: Dictionaries::default(), sizes }
     }
 
-    pub fn sizes(&self) -> &TargetSizes {
-        &self.sizes
-    }
-
-    pub fn set_sizes(&mut self, s: TargetSizes) {
-        self.sizes = s;
-    }
+    pub fn sizes(&self) -> &TargetSizes { &self.sizes }
+    pub fn set_sizes(&mut self, s: TargetSizes) { self.sizes = s; }
 
     pub fn interpret(&mut self, frame: &QsFrame) -> Vec<String> {
         let mut lines = Vec::new();
         match frame.record_type {
+            // ── Dictionaries & target info ─────────────────────────────────
             predefined::SIG_DICT    => self.handle_sig_dict(&frame.payload, &mut lines),
             predefined::OBJ_DICT    => self.handle_obj_dict(&frame.payload, &mut lines),
             predefined::FUN_DICT    => self.handle_fun_dict(&frame.payload, &mut lines),
             predefined::USR_DICT    => self.handle_usr_dict(&frame.payload, &mut lines),
             predefined::TARGET_INFO => self.handle_target_info(&frame.payload, &mut lines),
-            qep::STATE_ENTRY    => self.handle_state_entry(&frame.payload, &mut lines),
-            qep::STATE_EXIT     => self.handle_state_exit(&frame.payload, &mut lines),
-            qep::STATE_INIT     => self.handle_state_init(&frame.payload, &mut lines),
-            qep::INIT_TRAN      => self.handle_init_tran(&frame.payload, &mut lines),
-            qep::INTERN_TRAN    => self.handle_intern_tran(&frame.payload, &mut lines),
-            qep::TRAN           => self.handle_tran(&frame.payload, &mut lines),
-            qep::IGNORED        => self.handle_ignored(&frame.payload, &mut lines),
-            qep::DISPATCH       => self.handle_dispatch(&frame.payload, &mut lines),
-            qep::UNHANDLED      => self.handle_unhandled(&frame.payload, &mut lines),
+
+            // ── QEP: state machine ─────────────────────────────────────────
+            qep::STATE_ENTRY  => self.handle_state_entry(&frame.payload, &mut lines),
+            qep::STATE_EXIT   => self.handle_state_exit(&frame.payload, &mut lines),
+            qep::STATE_INIT   => self.handle_state_init(&frame.payload, &mut lines),
+            qep::INIT_TRAN    => self.handle_init_tran(&frame.payload, &mut lines),
+            qep::INTERN_TRAN  => self.handle_intern_tran(&frame.payload, &mut lines),
+            qep::TRAN         => self.handle_tran(&frame.payload, &mut lines),
+            qep::IGNORED      => self.handle_ignored(&frame.payload, &mut lines),
+            qep::DISPATCH     => self.handle_dispatch(&frame.payload, &mut lines),
+            qep::UNHANDLED    => self.handle_unhandled(&frame.payload, &mut lines),
+
+            // ── QF: active object ─────────────────────────────────────────
+            qf::ACTIVE_SUBSCRIBE   => self.handle_ao_subscribe(&frame.payload, &mut lines),
+            qf::ACTIVE_UNSUBSCRIBE => self.handle_ao_unsubscribe(&frame.payload, &mut lines),
+            qf::ACTIVE_POST        => self.handle_ao_post(&frame.payload, "AO-Post ", &mut lines),
+            qf::ACTIVE_POST_LIFO   => self.handle_ao_post(&frame.payload, "AO-PostL", &mut lines),
+            qf::ACTIVE_GET         => self.handle_ao_get(&frame.payload, &mut lines),
+            qf::ACTIVE_GET_LAST    => self.handle_ao_get_last(&frame.payload, &mut lines),
+
+            // ── QF: event queues ─────────────────────────────────────────
+            qf::EQUEUE_POST      => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
+            qf::EQUEUE_POST_LIFO => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
+            qf::EQUEUE_GET       => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
+            qf::EQUEUE_GET_LAST  => self.handle_equeue_get(&frame.payload, "EQ-GetL ", &mut lines),
+
+            // ── QF: memory pool ───────────────────────────────────────────
+            qf::MPOOL_GET => self.handle_mpool_get(&frame.payload, &mut lines),
+            qf::MPOOL_PUT => self.handle_mpool_put(&frame.payload, &mut lines),
+
+            // ── QF: event lifecycle ───────────────────────────────────────
+            qf::PUBLISH    => self.handle_qf_publish(&frame.payload, &mut lines),
+            qf::NEW        => self.handle_qf_new(&frame.payload, &mut lines),
+            qf::GC_ATTEMPT => self.handle_qf_gc(&frame.payload, "QF-gcA  ", &mut lines),
+            qf::GC         => self.handle_qf_gc(&frame.payload, "QF-gc   ", &mut lines),
+            qf::TICK       => self.handle_qf_tick(&frame.payload, &mut lines),
+
+            // ── QF: time events ───────────────────────────────────────────
             time_evt::ARM            => self.handle_time_evt_arm(&frame.payload, &mut lines),
             time_evt::AUTO_DISARM    => self.handle_time_evt_auto_disarm(&frame.payload, &mut lines),
             time_evt::DISARM_ATTEMPT => self.handle_time_evt_disarm_attempt(&frame.payload, &mut lines),
             time_evt::DISARM         => self.handle_time_evt_disarm(&frame.payload, &mut lines),
             time_evt::POST           => self.handle_time_evt_post(&frame.payload, &mut lines),
+
+            // ── Scheduler ─────────────────────────────────────────────────
             sched::LOCK   => self.handle_sched_lock(&frame.payload, &mut lines),
             sched::UNLOCK => self.handle_sched_unlock(&frame.payload, &mut lines),
             sched::NEXT   => self.handle_sched_next(&frame.payload, &mut lines),
             sched::IDLE   => self.handle_sched_idle(&frame.payload, &mut lines),
-            65 => lines.push(format!("Trg-Done rec={}", frame.payload.first().copied().unwrap_or(0))),
+
+            // ── QSPY back-channel ─────────────────────────────────────────
+            65 => lines.push(format!(
+                "           Trg-Done rec={}", frame.payload.first().copied().unwrap_or(0)
+            )),
             66 => self.handle_rx_status(&frame.payload, &mut lines),
-            rec if rec >= 128 || self.dict.users.contains_key(&rec)
+
+            // ── User records ──────────────────────────────────────────────
+            rec if rec >= 100 || self.dict.users.contains_key(&rec)
                 => self.handle_user_record(rec, &frame.payload, &mut lines),
+
             _ => {}
         }
 
@@ -83,7 +112,7 @@ impl FrameInterpreter {
         lines
     }
 
-    // ── Dictionary helpers ────────────────────────────────────────────────────
+    // ── Dictionary string helpers ─────────────────────────────────────────────
 
     fn obj_str(&self, addr: u64) -> String {
         self.dict.objects.get(&addr)
@@ -99,10 +128,12 @@ impl FrameInterpreter {
 
     fn sig_str(&self, signal: u64, obj: u64) -> String {
         let sig16 = signal as u16;
-        if let Some(name) = self.dict.signals.get(&(sig16, obj)).or_else(|| self.dict.signals.get(&(sig16, 0))) {
+        if let Some(name) = self.dict.signals.get(&(sig16, obj))
+            .or_else(|| self.dict.signals.get(&(sig16, 0)))
+        {
             return name.clone();
         }
-        format!("Sig({signal})")
+        format!("{signal:08X}")
     }
 
     // ── Predefined record handlers ────────────────────────────────────────────
@@ -116,7 +147,7 @@ impl FrameInterpreter {
         ) {
             self.dict.signals.insert((signal as u16, object), name.clone());
             lines.push(format!(
-                "Sig-Dict {signal:#010X},Obj={obj}->{name}",
+                "           Sig-Dict {signal:#010X},Obj={obj}->{name}",
                 obj = TargetSizes::fmt_addr(object, self.sizes.obj_ptr_size)
             ));
         }
@@ -129,7 +160,7 @@ impl FrameInterpreter {
         {
             self.dict.objects.insert(addr, name.clone());
             lines.push(format!(
-                "Obj-Dict {addr}->{name}",
+                "           Obj-Dict {addr}->{name}",
                 addr = TargetSizes::fmt_addr(addr, self.sizes.obj_ptr_size)
             ));
         }
@@ -142,7 +173,7 @@ impl FrameInterpreter {
         {
             self.dict.functions.insert(addr, name.clone());
             lines.push(format!(
-                "Fun-Dict {addr}->{name}",
+                "           Fun-Dict {addr}->{name}",
                 addr = TargetSizes::fmt_addr(addr, self.sizes.fun_ptr_size)
             ));
         }
@@ -152,28 +183,18 @@ impl FrameInterpreter {
         let mut cur = Cursor::new(payload);
         if let (Some(id), Some(name)) = (cur.read_u8(), cur.read_c_string()) {
             self.dict.users.insert(id, name.clone());
-            lines.push(format!("Usr-Dict {id:03}->{name}"));
+            lines.push(format!("           Usr-Dict {id:03}->{name}"));
         }
     }
 
     fn handle_target_info(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (
-            Some(reset),
-            Some(version),
-            Some(sig_evt),
-            Some(eq_te),
-            Some(mp_sizes),
-            Some(ptr_sizes),
-            Some(time_size),
-            Some(max_active),
-            Some(max_pool_tick),
-            Some(second),
-            Some(minute),
-            Some(hour),
-            Some(day),
-            Some(month),
-            Some(year),
+            Some(reset), Some(version),
+            Some(sig_evt), Some(eq_te), Some(mp_sizes), Some(ptr_sizes),
+            Some(time_size), Some(max_active), Some(max_pool_tick),
+            Some(second), Some(minute), Some(hour),
+            Some(day), Some(month), Some(year),
         ) = (
             cur.read_u8(),  cur.read_u16(), cur.read_u8(), cur.read_u8(),
             cur.read_u8(),  cur.read_u8(),  cur.read_u8(), cur.read_u8(),
@@ -182,14 +203,12 @@ impl FrameInterpreter {
         ) {
             let stamp = format!("{day:02}{month:02}{year:02}_{hour:02}{minute:02}{second:02}");
             let reset_tag = if reset == 0xFF { "RST" } else { "INF" };
-            lines.push(format!("Trg-{reset_tag}  QP-Ver={version},Build={stamp}"));
+            lines.push(format!("########## Trg-{reset_tag}  QP-Ver={version},Build={stamp}"));
             lines.push(format!(
                 "           Cfg Sig/Evt={sig_evt:#04X} Eq/Te={eq_te:#04X} Mp={mp_sizes:#04X} \
                  Ptr={ptr_sizes:#04X} Time={time_size:#04X} Active={max_active} \
                  Pools/Ticks={max_pool_tick:#04X}"
             ));
-
-            // Update runtime sizes from target report.
             self.sizes.update_from_target_info(payload);
         }
     }
@@ -197,12 +216,14 @@ impl FrameInterpreter {
     fn handle_rx_status(&self, payload: &[u8], lines: &mut Vec<String>) {
         if let Some(&b) = payload.first() {
             if b & 0x80 != 0 {
-                lines.push(format!("QS-RX Err={:#04X}", b & 0x7F));
+                lines.push(format!("           QS-RX Err={:#04X}", b & 0x7F));
             } else {
-                lines.push(format!("QS-RX Ack rec={b}"));
+                lines.push(format!("           QS-RX Ack rec={b}"));
             }
         }
     }
+
+    // ── QEP handlers ─────────────────────────────────────────────────────────
 
     fn handle_state_entry(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
@@ -299,7 +320,7 @@ impl FrameInterpreter {
             cur.read_sized(self.sizes.fun_ptr_size),
         ) {
             lines.push(format!(
-                "{ts:010} =>Ignored Obj={},Sig={},State={}",
+                "{ts:010} =>Ignore Obj={},Sig={},State={}",
                 self.obj_str(obj), self.sig_str(signal, obj), self.fun_str(state)
             ));
         }
@@ -328,11 +349,225 @@ impl FrameInterpreter {
             cur.read_sized(self.sizes.fun_ptr_size),
         ) {
             lines.push(format!(
-                "=>Unhandled Obj={},Sig={},State={}",
+                "===RTC===> =>UnHndl Obj={},Sig={},State={}",
                 self.obj_str(obj), self.sig_str(signal, obj), self.fun_str(state)
             ));
         }
     }
+
+    // ── QF: active object handlers ────────────────────────────────────────────
+
+    /// `QS_QF_ACTIVE_SUBSCRIBE` (12): [ts | sig | ao]
+    fn handle_ao_subscribe(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(ao)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+        ) {
+            lines.push(format!(
+                "{ts:010} AO-Subsc Obj={},Sig={}",
+                self.obj_str(ao), self.sig_str(sig, ao)
+            ));
+        }
+    }
+
+    /// `QS_QF_ACTIVE_UNSUBSCRIBE` (13): [ts | sig | ao]
+    fn handle_ao_unsubscribe(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(ao)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+        ) {
+            lines.push(format!(
+                "{ts:010} AO-Unsub Obj={},Sig={}",
+                self.obj_str(ao), self.sig_str(sig, ao)
+            ));
+        }
+    }
+
+    /// `QS_QF_ACTIVE_POST_FIFO/LIFO` (14/15): [ts | sig | sdr | ao | pool | ref | free | min]
+    fn handle_ao_post(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(sdr), Some(ao),
+                Some(pool), Some(rref), Some(free), Some(min)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_u8(), cur.read_u8(),
+            cur.read_sized(self.sizes.equeue_ctr),
+            cur.read_sized(self.sizes.equeue_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Sdr={},Obj={},Evt<Sig={},Pool={pool},Ref={rref}>,Que<Free={free},Min={min}>",
+                self.obj_str(sdr), self.obj_str(ao), self.sig_str(sig, ao)
+            ));
+        }
+    }
+
+    /// `QS_QF_ACTIVE_GET` (16): [ts | sig | ao | pool | ref | free]
+    fn handle_ao_get(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(ao), Some(pool), Some(rref), Some(free)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_u8(), cur.read_u8(),
+            cur.read_sized(self.sizes.equeue_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} AO-Get   Obj={},Evt<Sig={},Pool={pool},Ref={rref}>,Que<Free={free}>",
+                self.obj_str(ao), self.sig_str(sig, ao)
+            ));
+        }
+    }
+
+    /// `QS_QF_ACTIVE_GET_LAST` (17): [ts | sig | ao | pool | ref]
+    fn handle_ao_get_last(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(ao), Some(pool), Some(rref)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} AO-GetL  Obj={},Evt<Sig={},Pool={pool},Ref={rref}>",
+                self.obj_str(ao), self.sig_str(sig, ao)
+            ));
+        }
+    }
+
+    // ── QF: event queue handlers ──────────────────────────────────────────────
+
+    /// `QS_QF_EQUEUE_POST_FIFO/LIFO` (19/20): [ts | sig | eq | pool | ref | free | min]
+    fn handle_equeue_post(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(eq),
+                Some(pool), Some(rref), Some(free), Some(min)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_u8(), cur.read_u8(),
+            cur.read_sized(self.sizes.equeue_ctr),
+            cur.read_sized(self.sizes.equeue_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Evt<Sig={},Pool={pool},Ref={rref}>,Que<Free={free},Min={min}>",
+                self.obj_str(eq), self.sig_str(sig, eq)
+            ));
+        }
+    }
+
+    /// `QS_QF_EQUEUE_GET / GET_LAST` (21/22): [ts | sig | eq | pool | ref | free]
+    fn handle_equeue_get(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(eq), Some(pool), Some(rref), Some(free)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_u8(), cur.read_u8(),
+            cur.read_sized(self.sizes.equeue_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Evt<Sig={},Pool={pool},Ref={rref}>,Que<Free={free}>",
+                self.obj_str(eq), self.sig_str(sig, eq)
+            ));
+        }
+    }
+
+    // ── QF: memory pool handlers ──────────────────────────────────────────────
+
+    /// `QS_QF_MPOOL_GET` (24): [ts | mp | free | min]
+    fn handle_mpool_get(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(mp), Some(free), Some(min)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.mpool_ctr),
+            cur.read_sized(self.sizes.mpool_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} MP-Get   Obj={},Free={free},Min={min}",
+                self.obj_str(mp)
+            ));
+        }
+    }
+
+    /// `QS_QF_MPOOL_PUT` (25): [ts | mp | free]
+    fn handle_mpool_put(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(mp), Some(free)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.mpool_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} MP-Put   Obj={},Free={free}",
+                self.obj_str(mp)
+            ));
+        }
+    }
+
+    // ── QF: event lifecycle handlers ──────────────────────────────────────────
+
+    /// `QS_QF_PUBLISH` (26): [ts | sdr | sig | pool | ref]
+    fn handle_qf_publish(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sdr), Some(sig), Some(pool), Some(rref)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} QF-Pub   Sdr={},Evt<Sig={},Pool={pool},Ref={rref}>",
+                self.obj_str(sdr), self.sig_str(sig, 0)
+            ));
+        }
+    }
+
+    /// `QS_QF_NEW` (28): [ts | evt_size | sig]
+    fn handle_qf_new(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(size), Some(sig)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.event_size),
+            cur.read_sized(self.sizes.signal_size),
+        ) {
+            lines.push(format!(
+                "{ts:010} QF-New   Sig={},Size={size}",
+                self.sig_str(sig, 0)
+            ));
+        }
+    }
+
+    /// `QS_QF_GC_ATTEMPT` (29) / `QS_QF_GC` (30): [ts | sig | pool | ref]
+    fn handle_qf_gc(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(pool), Some(rref)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Evt<Sig={},Pool={pool},Ref={rref}>",
+                self.sig_str(sig, 0)
+            ));
+        }
+    }
+
+    /// `QS_QF_TICK` (31): [ts | rate]
+    fn handle_qf_tick(&self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(rate)) = (cur.read_sized(self.sizes.time_size), cur.read_u8()) {
+            lines.push(format!("{ts:010} QF-Tick  Rate={rate}"));
+        }
+    }
+
+    // ── Time event handlers ───────────────────────────────────────────────────
 
     fn handle_time_evt_arm(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
@@ -415,12 +650,14 @@ impl FrameInterpreter {
         }
     }
 
+    // ── Scheduler handlers ────────────────────────────────────────────────────
+
     fn handle_sched_lock(&self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(prev), Some(new)) =
             (cur.read_sized(self.sizes.time_size), cur.read_u8(), cur.read_u8())
         {
-            lines.push(format!("{ts:010} Sch-Lock Prev={prev} New={new}"));
+            lines.push(format!("{ts:010} Sch-Lock Ceil={prev}->{new}"));
         }
     }
 
@@ -429,7 +666,7 @@ impl FrameInterpreter {
         if let (Some(ts), Some(prev), Some(new)) =
             (cur.read_sized(self.sizes.time_size), cur.read_u8(), cur.read_u8())
         {
-            lines.push(format!("{ts:010} Sch-Unlk Prev={prev} New={new}"));
+            lines.push(format!("{ts:010} Sch-Unlk Ceil={new}->{prev}"));
         }
     }
 
@@ -451,6 +688,8 @@ impl FrameInterpreter {
         }
     }
 
+    // ── User record handler ───────────────────────────────────────────────────
+
     fn handle_user_record(&mut self, record: u8, payload: &[u8], lines: &mut Vec<String>) {
         let name = self.dict.users.get(&record).cloned()
             .unwrap_or_else(|| format!("USR({record})"));
@@ -459,7 +698,7 @@ impl FrameInterpreter {
         let ts = match cur.read_sized(self.sizes.time_size) {
             Some(v) => v,
             None => {
-                lines.push(format!("{name} payload={}", hex_bytes(payload)));
+                lines.push(format!("           {name} payload={}", hex_bytes(payload)));
                 return;
             }
         };
@@ -581,7 +820,7 @@ impl FrameInterpreter {
             }
         }
 
-        // Per-record pretty-printers: replace raw numeric fields with names.
+        // Per-record pretty-printers that override the generic field list.
         if name == "LORA_TX_PKT" {
             if let Some(line) = format_lora_tx_pkt(&values) {
                 lines.push(format!("{ts:010} {line}"));
@@ -606,7 +845,7 @@ impl FrameInterpreter {
 
     fn fallback_line(&self, frame: &QsFrame) -> String {
         format!(
-            "rec={:#04X} len={} payload={}",
+            "           rec={:#04X} len={} payload={}",
             frame.record_type,
             frame.payload.len(),
             hex_bytes(&frame.payload)
@@ -615,7 +854,6 @@ impl FrameInterpreter {
 
     // ── Dictionary persistence ────────────────────────────────────────────────
 
-    /// Save the accumulated dictionaries to a plain-text file.
     pub fn save_dictionaries(&self, path: &Path) -> io::Result<()> {
         let file = std::fs::File::create(path)?;
         let mut w = io::BufWriter::new(file);
@@ -635,16 +873,13 @@ impl FrameInterpreter {
         Ok(())
     }
 
-    /// Load dictionaries from a file previously saved by `save_dictionaries`.
     pub fn load_dictionaries(&mut self, path: &Path) -> io::Result<()> {
         let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
         for line in reader.lines() {
             let line = line?;
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
+            if line.is_empty() || line.starts_with('#') { continue; }
             let parts: Vec<&str> = line.splitn(4, ' ').collect();
             match parts.as_slice() {
                 ["OBJ", addr, name] => {
@@ -700,17 +935,8 @@ fn parse_addr(s: &str) -> Result<u64, std::num::ParseIntError> {
     u64::from_str_radix(hex, 16)
 }
 
-/// Pretty-print a decoded LORA_TX_PKT record.
-///
-/// `values` is the slice produced by the generic FMT field decoder:
-///   [0] freq (u32 as decimal string)
-///   [1] sf   (u8)
-///   [2] bw   (u8: 0=125 1=250 2=500)
-///   [3] cr   (u8: 0=4/5 1=4/6 2=4/7 3=4/8)  — maps to CR enum value
-///   [4] pwr  (u8, dBm)
-///   [5] frame bytes as "mem:HHHH..."
-///
-/// Returns `None` if the values slice doesn't match the expected shape.
+// ── Pretty-printers for known user records ────────────────────────────────────
+
 fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
     if values.len() < 6 { return None; }
 
@@ -720,7 +946,6 @@ fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
     let cr:  u8 = values[3].parse().ok()?;
     let pwr: u8 = values[4].parse().ok()?;
 
-    // values[5] looks like "mem:4004030201..."
     let hex_str = values[5].strip_prefix("mem:")?;
     if hex_str.len() < 2 { return None; }
 
@@ -732,7 +957,6 @@ fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
     let bw_khz = match bw { 0 => "125", 1 => "250", 2 => "500", _ => "?" };
     let cr_str = match cr { 0 => "4/5", 1 => "4/6", 2 => "4/7", 3 => "4/8", _ => "?" };
 
-    // Decode LoRaWAN 1.0.x uplink frame fields (best-effort, no crypto)
     let lorawan = if frame_bytes.len() >= 8 {
         let mhdr  = frame_bytes[0];
         let m_type = (mhdr >> 5) & 0x07;
@@ -771,75 +995,36 @@ fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
 
 // ── SWM pretty-printers ───────────────────────────────────────────────────────
 
-/// Map `ActorMode` discriminant to name (swm-hal `domain::ActorMode`).
 fn actor_mode_name(v: u8) -> &'static str {
     match v {
-        0 => "Boot",
-        1 => "Idle",
-        2 => "Sampling",
-        3 => "Processing",
-        4 => "Transmitting",
-        5 => "Sleeping",
-        6 => "Service",
-        7 => "Fault",
-        _ => "?",
+        0 => "Boot", 1 => "Idle", 2 => "Sampling", 3 => "Processing",
+        4 => "Transmitting", 5 => "Sleeping", 6 => "Service", 7 => "Fault", _ => "?",
     }
 }
 
-/// Map `Signal` discriminant to name (swm-core `Signal`).
 fn swm_signal_name(v: u16) -> &'static str {
     match v {
-        0  => "Boot",
-        1  => "Tick",
-        2  => "Fault",
-        3  => "ConfigLoad",
-        4  => "ConfigLoaded",
-        5  => "ConfigUpdate",
-        6  => "ConfigCommitted",
-        7  => "SampleRequest",
-        8  => "SampleReady",
-        9  => "LevelComputed",
-        10 => "TxRequest",
-        11 => "TxDone",
-        12 => "RxFrame",
-        13 => "AckTimeout",
-        14 => "MacSlot",
-        15 => "CommandReceived",
-        16 => "CommandAccepted",
-        17 => "CommandRejected",
-        18 => "CommandApplied",
-        19 => "FeedbackChanged",
-        20 => "HealthRequest",
-        21 => "HealthReport",
-        22 => "MaintenanceEnter",
-        23 => "MaintenanceExit",
-        24 => "FotaPolicy",
-        25 => "FotaManifest",
-        26 => "FotaChunk",
-        27 => "FotaApply",
-        28 => "FotaStatus",
-        _  => "?",
+        0  => "Boot",            1  => "Tick",           2  => "Fault",
+        3  => "ConfigLoad",      4  => "ConfigLoaded",   5  => "ConfigUpdate",
+        6  => "ConfigCommitted", 7  => "SampleRequest",  8  => "SampleReady",
+        9  => "LevelComputed",   10 => "TxRequest",      11 => "TxDone",
+        12 => "RxFrame",         13 => "AckTimeout",     14 => "MacSlot",
+        15 => "CommandReceived", 16 => "CommandAccepted",17 => "CommandRejected",
+        18 => "CommandApplied",  19 => "FeedbackChanged",20 => "HealthRequest",
+        21 => "HealthReport",    22 => "MaintenanceEnter",23=>"MaintenanceExit",
+        24 => "FotaPolicy",      25 => "FotaManifest",  26 => "FotaChunk",
+        27 => "FotaApply",       28 => "FotaStatus",    _ => "?",
     }
 }
 
-/// Map `CommSessionState` discriminant to name (swm-hal `domain::CommSessionState`).
 fn session_state_name(v: u8) -> &'static str {
     match v {
-        0 => "Unbound",
-        1 => "BoundIdle",
-        2 => "TxPending",
-        3 => "TxActive",
-        4 => "WaitAck",
-        5 => "RxWindow",
-        6 => "Backoff",
-        7 => "ServiceWindow",
-        8 => "Fault",
-        _ => "?",
+        0 => "Unbound", 1 => "BoundIdle", 2 => "TxPending", 3 => "TxActive",
+        4 => "WaitAck", 5 => "RxWindow",  6 => "Backoff",   7 => "ServiceWindow",
+        8 => "Fault",   _ => "?",
     }
 }
 
-/// Pretty-print `SWM_ACTOR_TRAN`.
-///
 /// `values`: [actor_name, from_u8, to_u8, signal_u16]
 fn format_swm_actor_tran(values: &[String]) -> Option<String> {
     if values.len() < 4 { return None; }
@@ -849,14 +1034,10 @@ fn format_swm_actor_tran(values: &[String]) -> Option<String> {
     let sig:  u16 = values[3].parse().ok()?;
     Some(format!(
         "SWM_ACTOR_TRAN {actor} {}→{} [{}]",
-        actor_mode_name(from),
-        actor_mode_name(to),
-        swm_signal_name(sig),
+        actor_mode_name(from), actor_mode_name(to), swm_signal_name(sig),
     ))
 }
 
-/// Pretty-print `SWM_SESSION_TRAN`.
-///
 /// `values`: [actor_name, from_u8, to_u8, signal_u16]
 fn format_swm_session_tran(values: &[String]) -> Option<String> {
     if values.len() < 4 { return None; }
@@ -866,8 +1047,6 @@ fn format_swm_session_tran(values: &[String]) -> Option<String> {
     let sig:  u16 = values[3].parse().ok()?;
     Some(format!(
         "SWM_SESSION_TRAN {actor} {}→{} [{}]",
-        session_state_name(from),
-        session_state_name(to),
-        swm_signal_name(sig),
+        session_state_name(from), session_state_name(to), swm_signal_name(sig),
     ))
 }

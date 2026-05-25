@@ -5,13 +5,14 @@ use std::time::SystemTime;
 
 pub struct OutputSinks {
     quiet:    bool,
+    color:    bool,
     text_out: Option<BufWriter<File>>,
     bin_out:  Option<BufWriter<File>>,
 }
 
 impl OutputSinks {
-    pub fn new(quiet: bool) -> Self {
-        Self { quiet, text_out: None, bin_out: None }
+    pub fn new(quiet: bool, color: bool) -> Self {
+        Self { quiet, color, text_out: None, bin_out: None }
     }
 
     /// Open a text output file. `path = None` means auto-generate a timestamped name.
@@ -39,9 +40,14 @@ impl OutputSinks {
     }
 
     /// Write a decoded text line to console (unless quiet) and to the text file.
+    /// ANSI colors are applied to the console only; the text file always gets plain text.
     pub fn write_line(&mut self, line: &str) {
         if !self.quiet {
-            println!("{line}");
+            if self.color {
+                println!("{}", colorize_line(line));
+            } else {
+                println!("{line}");
+            }
         }
         if let Some(f) = &mut self.text_out {
             let _ = writeln!(f, "{line}");
@@ -60,6 +66,86 @@ impl OutputSinks {
         if let Some(f) = &mut self.bin_out  { let _ = f.flush(); }
     }
 }
+
+// ── ANSI color codes ──────────────────────────────────────────────────────────
+
+const RESET:        &str = "\x1b[0m";
+const BOLD:         &str = "\x1b[1m";
+const DIM:          &str = "\x1b[2m";
+const CYAN:         &str = "\x1b[36m";
+const GREEN:        &str = "\x1b[32m";
+const YELLOW:       &str = "\x1b[33m";
+const BLUE:         &str = "\x1b[34m";
+const MAGENTA:      &str = "\x1b[35m";
+const BRIGHT_WHITE: &str = "\x1b[97m";
+const RED:          &str = "\x1b[31m";
+
+/// Apply ANSI color codes to a single decoded line.
+///
+/// Console output only — the text file always receives the plain string.
+///
+/// Color scheme (matches reference QSPY):
+/// - Cyan timestamps + cyan/bold `===RTC===>` prefix
+/// - Yellow: AO-Post / AO-Get / Disp===>
+/// - Green:  =>Intern / ===>Tran / Init===> / =>Ignore / =>UnHndl
+/// - Blue:   Sch-*
+/// - Magenta: TE* / QF-* / MP-*
+/// - Dim:    dict / info entries (11-space or `##########` prefix)
+/// - Bright white: user records
+pub fn colorize_line(line: &str) -> String {
+    // ===RTC===> prefix (state machine RTC records, no timestamp)
+    if line.starts_with("===RTC===>") {
+        let (pfx, rest) = line.split_at(10);
+        return format!("{BOLD}{CYAN}{pfx}{RESET}{rest}");
+    }
+
+    // Indented entries: dict records, target info, no-timestamp TE records
+    if line.starts_with("           ") || line.starts_with("########## ") {
+        return format!("{DIM}{line}{RESET}");
+    }
+
+    // Timestamped records: 10-digit timestamp + space + content
+    if line.len() >= 11 {
+        let ts_bytes = &line.as_bytes()[..10];
+        if ts_bytes.iter().all(|b| b.is_ascii_digit()) && line.as_bytes()[10] == b' ' {
+            let ts   = &line[..10];
+            let rest = &line[10..]; // leading space included
+            let kw   = rest.trim_start();
+            let color = keyword_color(kw);
+            return format!("{CYAN}{ts}{RESET}{color}{rest}{RESET}");
+        }
+    }
+
+    line.to_string()
+}
+
+fn keyword_color(kw: &str) -> &'static str {
+    if kw.starts_with("=>Intern") || kw.starts_with("===>Tran")
+       || kw.starts_with("Init===>") || kw.starts_with("=>Ignore")
+       || kw.starts_with("=>UnHndl")
+    {
+        GREEN
+    } else if kw.starts_with("Disp===>") || kw.starts_with("AO-") {
+        YELLOW
+    } else if kw.starts_with("Sch-") {
+        BLUE
+    } else if kw.starts_with("TE") || kw.starts_with("QF-") || kw.starts_with("MP-")
+              || kw.starts_with("EP-") || kw.starts_with("QS-")
+    {
+        MAGENTA
+    } else if kw.starts_with("rec=") {
+        RED
+    } else {
+        BRIGHT_WHITE
+    }
+}
+
+/// Returns `true` when stdout is connected to a real terminal.
+pub fn stdout_is_tty() -> bool {
+    unsafe { libc::isatty(libc::STDOUT_FILENO) != 0 }
+}
+
+// ── Filename helper ───────────────────────────────────────────────────────────
 
 /// Generate `qspyYYMMDD_HHMMSS.<ext>` from the current wall-clock time.
 pub fn timestamped_name(ext: &str) -> String {
