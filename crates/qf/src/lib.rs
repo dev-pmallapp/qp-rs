@@ -12,6 +12,7 @@ The crate keeps modules loosely coupled so that alternative front-ends can reuse
 "#]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[macro_use]
 extern crate alloc;
 
 pub mod active;
