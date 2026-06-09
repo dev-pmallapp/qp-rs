@@ -156,6 +156,11 @@ pub fn new_active_object<B: ActiveBehavior>(
     ActiveObject::new(id, priority, behavior) as ActiveObjectRef
 }
 
+/// Coerce an `Arc<T: ActiveRunnable>` to the erased `ActiveObjectRef`.
+pub fn arc_as_runnable<T: ActiveRunnable + 'static>(arc: Arc<T>) -> ActiveObjectRef {
+    arc as ActiveObjectRef
+}
+
 /// Convenience behavior for static state machines that only react to signals.
 pub trait SignalHandler: Send + 'static {
     fn on_start(&mut self, _ctx: &mut ActiveContext) {}

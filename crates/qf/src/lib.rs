@@ -20,6 +20,7 @@ pub mod kernel;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
+pub use sync::Arc;
 pub use event::{Event, EventHeader, Signal};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig};
 #[cfg(feature = "qs")]
