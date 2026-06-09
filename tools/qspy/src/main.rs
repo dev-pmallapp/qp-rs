@@ -372,11 +372,10 @@ fn dispatch_cmd(cmd: UserCmd, sender: &SharedSender, interp: &mut FrameInterpret
 
 fn dispatch_fe_cmd(cmd: FrontendCmd, sender: &SharedSender) {
     match cmd {
-        FrontendCmd::Reset                        => try_send(sender, |s| s.send_reset()),
-        FrontendCmd::Info                         => try_send(sender, |s| s.send_info()),
-        FrontendCmd::Tick(n)                      => try_send(sender, |s| s.send_tick(n)),
         FrontendCmd::Command { id, p1, p2, p3 }  =>
             try_send(sender, |s| s.send_command(id, p1, p2, p3)),
+        FrontendCmd::RawQsRx { id, payload }     =>
+            try_send(sender, |s| s.send_raw(id, &payload)),
         FrontendCmd::SaveDict | FrontendCmd::ClearScreen => {
             // Handled by the caller if needed; front-end version is a no-op here.
         }
