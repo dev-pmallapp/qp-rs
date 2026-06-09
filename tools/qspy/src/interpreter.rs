@@ -1070,6 +1070,46 @@ impl FrameInterpreter {
                 return;
             }
         }
+        if name == "MC_TELEMETRY_RX" {
+            if let Some(line) = format_mc_telemetry_rx(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_PAIR_REQUEST" {
+            if let Some(line) = format_mc_pair_request(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_PAIR_OK" {
+            if let Some(line) = format_mc_pair_ok(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_PAIR_FAIL" {
+            if let Some(line) = format_mc_pair_fail(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_FOTA_MANIFEST" {
+            if let Some(line) = format_mc_fota_manifest(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_FOTA_START" {
+            if let Some(line) = format_mc_fota_start(&values) {
+                lines.push(format!("{ts:010} {line}"));
+                return;
+            }
+        }
+        if name == "MC_FOTA_COMPLETE" {
+            lines.push(format!("{ts:010} MC_FOTA_COMPLETE"));
+            return;
+        }
 
         lines.push(format!("{ts:010} {name} {}", values.join(" ")));
     }
@@ -1290,4 +1330,68 @@ fn format_swm_session_tran(values: &[String]) -> Option<String> {
         "SWM_SESSION_TRAN {actor} {}→{} [{}]",
         session_state_name(from), session_state_name(to), swm_signal_name(sig),
     ))
+}
+
+// ── MC (Pramukh) pretty-printers ─────────────────────────────────────────────
+
+fn pair_fail_reason_name(v: u8) -> &'static str {
+    match v {
+        0 => "AuthMismatch", 1 => "DecodeError", 2 => "UnexpectedResponse", _ => "?",
+    }
+}
+
+/// `values`: [src_u16, seq_u16, level_u8, state_u8, dist_u32, batt_u8, flags_u8, stale_u8]
+fn format_mc_telemetry_rx(values: &[String]) -> Option<String> {
+    if values.len() < 8 { return None; }
+    let src:   u16 = values[0].parse().ok()?;
+    let seq:   u16 = values[1].parse().ok()?;
+    let level: u8  = values[2].parse().ok()?;
+    let state: u8  = values[3].parse().ok()?;
+    let dist:  u32 = values[4].parse().ok()?;
+    let batt:  u8  = values[5].parse().ok()?;
+    let flags: u8  = values[6].parse().ok()?;
+    let stale: u8  = values[7].parse().ok()?;
+    Some(format!(
+        "MC_TELEMETRY_RX src={src} seq={seq} level={level}% state={} dist={dist}mm batt={batt}% flags={flags:#04x} stale={}",
+        actor_mode_name(state),
+        if stale != 0 { "true" } else { "false" },
+    ))
+}
+
+/// `values`: [src_u16, hw_id_u8, fw_ver_u32]
+fn format_mc_pair_request(values: &[String]) -> Option<String> {
+    if values.len() < 3 { return None; }
+    let src:    u16 = values[0].parse().ok()?;
+    let hw_id:  u8  = values[1].parse().ok()?;
+    let fw_ver: u32 = values[2].parse().ok()?;
+    Some(format!("MC_PAIR_REQUEST src={src} hw_id={hw_id:#04x} fw_ver={fw_ver}"))
+}
+
+/// `values`: [src_u16]
+fn format_mc_pair_ok(values: &[String]) -> Option<String> {
+    if values.is_empty() { return None; }
+    let src: u16 = values[0].parse().ok()?;
+    Some(format!("MC_PAIR_OK src={src}"))
+}
+
+/// `values`: [src_u16, reason_u8]
+fn format_mc_pair_fail(values: &[String]) -> Option<String> {
+    if values.len() < 2 { return None; }
+    let src:    u16 = values[0].parse().ok()?;
+    let reason: u8  = values[1].parse().ok()?;
+    Some(format!("MC_PAIR_FAIL src={src} reason={}", pair_fail_reason_name(reason)))
+}
+
+/// `values`: [dst_u16]
+fn format_mc_fota_manifest(values: &[String]) -> Option<String> {
+    if values.is_empty() { return None; }
+    let dst: u16 = values[0].parse().ok()?;
+    Some(format!("MC_FOTA_MANIFEST dst={dst}"))
+}
+
+/// `values`: [dst_u16]
+fn format_mc_fota_start(values: &[String]) -> Option<String> {
+    if values.is_empty() { return None; }
+    let dst: u16 = values[0].parse().ok()?;
+    Some(format!("MC_FOTA_START dst={dst}"))
 }
