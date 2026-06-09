@@ -65,6 +65,26 @@ impl OutputSinks {
         if let Some(f) = &mut self.text_out { let _ = f.flush(); }
         if let Some(f) = &mut self.bin_out  { let _ = f.flush(); }
     }
+
+    /// Toggle text output file: close it if open, open a new auto-named one if closed.
+    pub fn toggle_text(&mut self) {
+        if self.text_out.is_some() {
+            self.text_out = None;
+            println!("text output: closed");
+        } else {
+            let _ = self.open_text(None);
+        }
+    }
+
+    /// Toggle binary save file: close it if open, open a new auto-named one if closed.
+    pub fn toggle_binary(&mut self) {
+        if self.bin_out.is_some() {
+            self.bin_out = None;
+            println!("binary save: closed");
+        } else {
+            let _ = self.open_binary(None);
+        }
+    }
 }
 
 // ── ANSI color codes ──────────────────────────────────────────────────────────
