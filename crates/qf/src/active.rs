@@ -97,6 +97,12 @@ impl<B: ActiveBehavior> ActiveObject<B> {
         })
     }
 
+    /// Lock the behavior mutex and invoke `f` with a shared reference. Useful
+    /// for taking read-only snapshots of internal state from outside the AO.
+    pub fn with_behavior<F: FnOnce(&B) -> R, R>(&self, f: F) -> R {
+        f(&*self.behavior.lock())
+    }
+
     fn pop_event(&self) -> Option<DynEvent> {
         let mut queue = self.queue.lock();
         queue.pop_front()
