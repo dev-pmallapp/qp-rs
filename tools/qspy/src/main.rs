@@ -98,6 +98,15 @@ struct Opts {
     #[arg(long = "no-color")]
     no_color: bool,
 
+    // ── Scripted / CI options ──
+    /// Suppress keyboard input thread (for piped/CI use).
+    #[arg(short = 'k', long = "no-kbd")]
+    no_kbd: bool,
+
+    /// Backwards-compatible QS version (e.g. 700 = "7.0.0", default 700).
+    #[arg(short = 'v', value_name = "VER", default_value_t = 700)]
+    qs_version: u16,
+
     // ── Target type sizes ──
     /// QS_TIME_SIZE in bytes.
     #[arg(short = 'T', value_name = "N", default_value_t = 4)] time_size:    u8,
@@ -160,6 +169,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut interpreter = FrameInterpreter::with_sizes(sizes);
+    interpreter.set_qs_version(opts.qs_version);
 
     if let Some(ref arg) = opts.dict_file {
         if !arg.is_empty() {
@@ -178,7 +188,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let (kbd_tx, kbd_rx) = mpsc::channel::<UserCmd>();
-    thread::spawn(move || keyboard_loop(kbd_tx));
+    if !opts.no_kbd {
+        thread::spawn(move || keyboard_loop(kbd_tx));
+    }
 
     let mut frontend: Option<FrontendServer> = opts.frontend_port.as_ref().and_then(|port| {
         let addr = format!("0.0.0.0:{port}");

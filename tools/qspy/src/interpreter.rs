@@ -14,8 +14,9 @@ use qs::{
 
 /// Translates QS frames into human-readable messages while tracking runtime dictionaries.
 pub struct FrameInterpreter {
-    dict:  Dictionaries,
-    sizes: TargetSizes,
+    dict:       Dictionaries,
+    sizes:      TargetSizes,
+    qs_version: u16,
 }
 
 impl Default for FrameInterpreter {
@@ -24,15 +25,16 @@ impl Default for FrameInterpreter {
 
 impl FrameInterpreter {
     pub fn new() -> Self {
-        Self { dict: Dictionaries::default(), sizes: TargetSizes::default() }
+        Self { dict: Dictionaries::default(), sizes: TargetSizes::default(), qs_version: 700 }
     }
 
     pub fn with_sizes(sizes: TargetSizes) -> Self {
-        Self { dict: Dictionaries::default(), sizes }
+        Self { dict: Dictionaries::default(), sizes, qs_version: 700 }
     }
 
     pub fn sizes(&self) -> &TargetSizes { &self.sizes }
     pub fn set_sizes(&mut self, s: TargetSizes) { self.sizes = s; }
+    pub fn set_qs_version(&mut self, v: u16) { self.qs_version = v; }
 
     pub fn interpret(&mut self, frame: &QsFrame) -> Vec<String> {
         let mut lines = Vec::new();
@@ -69,6 +71,7 @@ impl FrameInterpreter {
             qf::ACTIVE_POST_ATTEMPT  => self.handle_ao_post(&frame.payload, "AO-PostA", &mut lines),
 
             // ── QF: event queues ─────────────────────────────────────────
+            qf::EQUEUE_INIT          => self.handle_equeue_init(&frame.payload, &mut lines),
             qf::EQUEUE_POST          => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
             qf::EQUEUE_POST_LIFO     => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
             qf::EQUEUE_GET           => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
@@ -76,6 +79,7 @@ impl FrameInterpreter {
             qf::EQUEUE_POST_ATTEMPT  => self.handle_equeue_post(&frame.payload, "EQ-PostA", &mut lines),
 
             // ── QF: memory pool ───────────────────────────────────────────
+            qf::MPOOL_INIT        => self.handle_mpool_init(&frame.payload, &mut lines),
             qf::MPOOL_GET         => self.handle_mpool_get(&frame.payload, &mut lines),
             qf::MPOOL_PUT         => self.handle_mpool_put(&frame.payload, &mut lines),
             qf::MPOOL_GET_ATTEMPT => self.handle_mpool_get_labeled(&frame.payload, "MP-GetA ", &mut lines),
@@ -151,13 +155,13 @@ impl FrameInterpreter {
     }
 
     fn sig_str(&self, signal: u64, obj: u64) -> String {
-        let sig16 = signal as u16;
-        if let Some(name) = self.dict.signals.get(&(sig16, obj))
-            .or_else(|| self.dict.signals.get(&(sig16, 0)))
+        let sig32 = signal as u32;
+        if let Some(name) = self.dict.signals.get(&(sig32, obj))
+            .or_else(|| self.dict.signals.get(&(sig32, 0)))
         {
             return name.clone();
         }
-        format!("{signal:08X}")
+        TargetSizes::fmt_addr(signal, self.sizes.signal_size)
     }
 
     // ── Predefined record handlers ────────────────────────────────────────────
@@ -169,7 +173,7 @@ impl FrameInterpreter {
             cur.read_sized(self.sizes.obj_ptr_size),
             cur.read_c_string(),
         ) {
-            self.dict.signals.insert((signal as u16, object), name.clone());
+            self.dict.signals.insert((signal as u32, object), name.clone());
             lines.push(format!(
                 "           Sig-Dict {signal:#010X},Obj={obj}->{name}",
                 obj = TargetSizes::fmt_addr(object, self.sizes.obj_ptr_size)
@@ -503,6 +507,51 @@ impl FrameInterpreter {
                 "{ts:010} AO-GetL  Obj={},Evt<Sig={},Pool={pool},Ref={rref}>",
                 self.obj_str(ao), self.sig_str(sig, ao)
             ));
+        }
+    }
+
+    // ── QF: event queue / memory pool init handlers ───────────────────────────
+
+    /// `QS_QF_EQUEUE_INIT` (18): [ts | eq | len: equeue_ctr]
+    fn handle_equeue_init(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(eq), Some(len)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.equeue_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} EQ-Init  Obj={},Len={len}",
+                self.obj_str(eq)
+            ));
+            if !cur.is_empty() {
+                lines.push(format!(
+                    "           !! {} bytes unused in rec={:#04X}",
+                    cur.remaining(), qf::EQUEUE_INIT
+                ));
+            }
+        }
+    }
+
+    /// `QS_QF_MPOOL_INIT` (23): [ts | mp | n_free: mpool_ctr | n_min: mpool_ctr]
+    fn handle_mpool_init(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(mp), Some(n_free), Some(n_min)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.mpool_ctr),
+            cur.read_sized(self.sizes.mpool_ctr),
+        ) {
+            lines.push(format!(
+                "{ts:010} MP-Init  Obj={},NFree={n_free},NMin={n_min}",
+                self.obj_str(mp)
+            ));
+            if !cur.is_empty() {
+                lines.push(format!(
+                    "           !! {} bytes unused in rec={:#04X}",
+                    cur.remaining(), qf::MPOOL_INIT
+                ));
+            }
         }
     }
 
@@ -1078,7 +1127,7 @@ impl FrameInterpreter {
                     }
                 }
                 ["SIG", sig, obj, name] => {
-                    if let (Ok(s), Ok(o)) = (sig.parse::<u16>(), parse_addr(obj)) {
+                    if let (Ok(s), Ok(o)) = (sig.parse::<u32>(), parse_addr(obj)) {
                         self.dict.signals.insert((s, o), (*name).to_owned());
                     }
                 }
@@ -1105,7 +1154,7 @@ impl FrameInterpreter {
 struct Dictionaries {
     objects:   HashMap<u64, String>,
     functions: HashMap<u64, String>,
-    signals:   HashMap<(u16, u64), String>,
+    signals:   HashMap<(u32, u64), String>,
     users:     HashMap<u8, String>,
     /// Keyed by (group, value).
     enums:     HashMap<(u8, u8), String>,
