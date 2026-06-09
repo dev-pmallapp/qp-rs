@@ -76,6 +76,12 @@ impl OutputSinks {
         }
     }
 
+    /// Toggle quiet mode; returns the new state.
+    pub fn toggle_quiet(&mut self) -> bool {
+        self.quiet = !self.quiet;
+        self.quiet
+    }
+
     /// Toggle binary save file: close it if open, open a new auto-named one if closed.
     pub fn toggle_binary(&mut self) {
         if self.bin_out.is_some() {
@@ -164,6 +170,11 @@ fn keyword_color(kw: &str) -> &'static str {
 /// Returns `true` when stdout is connected to a real terminal.
 pub fn stdout_is_tty() -> bool {
     unsafe { libc::isatty(libc::STDOUT_FILENO) != 0 }
+}
+
+/// Returns `true` when stdin is connected to a real terminal.
+pub fn stdin_is_tty() -> bool {
+    unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
 }
 
 // ── Filename helper ───────────────────────────────────────────────────────────

@@ -135,6 +135,10 @@ enum UserCmd {
     SendCommand { id: u8, p1: u32, p2: u32, p3: u32 },
     SaveDict(PathBuf),
     ClearScreen,
+    ToggleQuiet,
+    Help,
+    ToggleTextOut,
+    ToggleBinOut,
     Quit,
 }
 
@@ -353,7 +357,7 @@ fn poll_commands(
     sinks:    &mut OutputSinks,
 ) -> bool {
     while let Ok(cmd) = kbd_rx.try_recv() {
-        if dispatch_cmd(cmd, sender, interp) {
+        if dispatch_cmd(cmd, sender, interp, sinks) {
             return true;
         }
     }
@@ -366,7 +370,12 @@ fn poll_commands(
 }
 
 /// Dispatch a user command.  Returns `true` if the caller should quit.
-fn dispatch_cmd(cmd: UserCmd, sender: &SharedSender, interp: &mut FrameInterpreter) -> bool {
+fn dispatch_cmd(
+    cmd:    UserCmd,
+    sender: &SharedSender,
+    interp: &mut FrameInterpreter,
+    sinks:  &mut OutputSinks,
+) -> bool {
     match cmd {
         UserCmd::Info            => try_send(sender, |s| s.send_info()),
         UserCmd::Reset           => try_send(sender, |s| s.send_reset()),
@@ -377,10 +386,24 @@ fn dispatch_cmd(cmd: UserCmd, sender: &SharedSender, interp: &mut FrameInterpret
             Ok(())  => println!("dictionaries saved to {}", p.display()),
             Err(e)  => eprintln!("dict save error: {e}"),
         },
-        UserCmd::ClearScreen => print!("\x1B[2J\x1B[H"),
-        UserCmd::Quit        => return true,
+        UserCmd::ClearScreen   => print!("\x1B[2J\x1B[H"),
+        UserCmd::ToggleQuiet   => {
+            let now_quiet = sinks.toggle_quiet();
+            println!("quiet: {}", if now_quiet { "on" } else { "off" });
+        }
+        UserCmd::Help          => print_help(),
+        UserCmd::ToggleTextOut => sinks.toggle_text(),
+        UserCmd::ToggleBinOut  => sinks.toggle_binary(),
+        UserCmd::Quit          => return true,
     }
     false
+}
+
+fn print_help() {
+    println!("           Keys (raw mode): X=Quit  Q=Quiet  C=Clear  H=Help");
+    println!("                           R=Reset  I=Info   T=Tick(0)  U=Tick(1)");
+    println!("                           O=TextOut(toggle)  S/B=BinOut(toggle)  D=SaveDict");
+    println!("           Line mode cmds: r/i/t/u/d/c/cls/quiet/help/text/bin/q");
 }
 
 fn dispatch_fe_cmd(cmd: FrontendCmd, sender: &SharedSender, sinks: &mut OutputSinks) {
@@ -427,15 +450,67 @@ fn cmd_listener(addr: &str, sender: SharedSender) {
 // ── Keyboard / stdin thread ───────────────────────────────────────────────────
 
 fn keyboard_loop(tx: mpsc::Sender<UserCmd>) {
+    #[cfg(unix)]
+    if output::stdin_is_tty() {
+        keyboard_loop_raw(tx);
+        return;
+    }
+    keyboard_loop_line(tx);
+}
+
+fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>) {
     for line in io::stdin().lock().lines() {
         let raw = match line { Ok(l) => l, Err(_) => break };
-        let line = raw.trim();
-        let cmd = parse_keyboard_cmd(line);
+        let cmd = parse_keyboard_cmd(raw.trim());
         let quit = matches!(cmd, Some(UserCmd::Quit));
         if let Some(c) = cmd {
             if tx.send(c).is_err() { break; }
         }
         if quit { break; }
+    }
+}
+
+#[cfg(unix)]
+fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>) {
+    let _raw = match raw_terminal::RawTerminal::enter() {
+        Some(r) => r,
+        None    => { keyboard_loop_line(tx); return; }
+    };
+    let stdin = io::stdin();
+    let mut locked = stdin.lock();
+    let mut buf = [0u8; 1];
+    loop {
+        match locked.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let cmd = map_raw_key(buf[0]);
+                let quit = matches!(cmd, Some(UserCmd::Quit));
+                if let Some(c) = cmd {
+                    if tx.send(c).is_err() { break; }
+                }
+                if quit { break; }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn map_raw_key(b: u8) -> Option<UserCmd> {
+    match b {
+        b'X' | b'x' | 0x1B => Some(UserCmd::Quit),
+        b'Q'                => Some(UserCmd::ToggleQuiet),
+        b'C' | b'c'         => Some(UserCmd::ClearScreen),
+        b'H' | b'h' | b'?' => Some(UserCmd::Help),
+        b'O' | b'o'         => Some(UserCmd::ToggleTextOut),
+        b'S' | b's' | b'B' | b'b' => Some(UserCmd::ToggleBinOut),
+        b'R' | b'r'         => Some(UserCmd::Reset),
+        b'I' | b'i'         => Some(UserCmd::Info),
+        b'T' | b't'         => Some(UserCmd::Tick(0)),
+        b'U' | b'u'         => Some(UserCmd::Tick(1)),
+        b'D' | b'd'         => Some(UserCmd::SaveDict(
+            PathBuf::from(output::timestamped_name("dic"))
+        )),
+        _                   => None,
     }
 }
 
@@ -465,12 +540,53 @@ fn parse_keyboard_cmd(line: &str) -> Option<UserCmd> {
             let p3 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0u32);
             Some(UserCmd::SendCommand { id, p1, p2, p3 })
         }
-        "cls"          => Some(UserCmd::ClearScreen),
-        "q" | "quit"   => Some(UserCmd::Quit),
-        ""             => None,
-        other          => {
-            eprintln!("unknown command: {other}  (r/i/t/u/d/c/cls/q)");
+        "cls"              => Some(UserCmd::ClearScreen),
+        "quiet"            => Some(UserCmd::ToggleQuiet),
+        "help"             => Some(UserCmd::Help),
+        "text"             => Some(UserCmd::ToggleTextOut),
+        "bin"              => Some(UserCmd::ToggleBinOut),
+        "q" | "quit"       => Some(UserCmd::Quit),
+        ""                 => None,
+        other              => {
+            eprintln!("unknown command: {other}  (r/i/t/u/d/c/cls/quiet/help/text/bin/q)");
             None
+        }
+    }
+}
+
+// ── Raw terminal mode (Unix only) ────────────────────────────────────────────
+
+#[cfg(unix)]
+mod raw_terminal {
+    use std::mem::MaybeUninit;
+
+    /// Sets stdin to non-canonical, no-echo mode; restores on drop.
+    pub struct RawTerminal {
+        fd:    libc::c_int,
+        saved: libc::termios,
+    }
+
+    impl RawTerminal {
+        pub fn enter() -> Option<Self> {
+            let fd = libc::STDIN_FILENO;
+            if unsafe { libc::isatty(fd) } == 0 { return None; }
+            let mut saved_uninit = MaybeUninit::<libc::termios>::uninit();
+            if unsafe { libc::tcgetattr(fd, saved_uninit.as_mut_ptr()) } != 0 { return None; }
+            let saved = unsafe { saved_uninit.assume_init() };
+            let mut raw = saved;
+            // Disable canonical mode and echo; keep output post-processing (OPOST).
+            raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ECHOE
+                             | libc::ECHOK | libc::ECHONL);
+            raw.c_cc[libc::VMIN]  = 1;
+            raw.c_cc[libc::VTIME] = 0;
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 { return None; }
+            Some(Self { fd, saved })
+        }
+    }
+
+    impl Drop for RawTerminal {
+        fn drop(&mut self) {
+            unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved); }
         }
     }
 }
