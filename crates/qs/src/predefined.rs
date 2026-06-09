@@ -6,6 +6,8 @@
 //! payload layout of those records so that the Rust tracer can interoperate
 //! with the reference tooling.
 
+/// Record identifier for `QS_ENUM_DICT`.
+pub const ENUM_DICT: u8 = 54;
 /// Record identifier for `QS_SIG_DICT`.
 pub const SIG_DICT: u8 = 60;
 /// Record identifier for `QS_OBJ_DICT`.
