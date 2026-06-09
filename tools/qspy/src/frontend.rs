@@ -19,12 +19,11 @@ pub const CHANNEL_TEXT:   u8 = 0x02;
 /// Commands extracted from incoming front-end UDP packets that need
 /// to be forwarded to the target or acted on locally.
 pub enum FrontendCmd {
-    Reset,
-    Info,
-    Tick(u8),
     Command { id: u8, p1: u32, p2: u32, p3: u32 },
     SaveDict,
     ClearScreen,
+    /// Raw QS-RX passthrough: forward the frame verbatim to the target's command channel.
+    RawQsRx { id: u8, payload: Vec<u8> },
 }
 
 struct Client {
@@ -165,16 +164,9 @@ impl FrontendServer {
                 Some(FrontendCmd::Command { id, p1, p2, p3 })
             }
 
-            // QS-RX passthrough records (0–127) sent by a front-end
-            // to be forwarded to the target as-is.
+            // QS-RX passthrough: forward ALL records 0–127 verbatim to the target.
             rec if rec < 128 => {
-                // Map known QS-RX IDs to typed commands; others ignored.
-                match rec {
-                    0 => Some(FrontendCmd::Info),
-                    2 => Some(FrontendCmd::Reset),
-                    3 => Some(FrontendCmd::Tick(payload.first().copied().unwrap_or(0))),
-                    _ => None,
-                }
+                Some(FrontendCmd::RawQsRx { id: rec, payload: payload.to_vec() })
             }
             _ => None,
         }

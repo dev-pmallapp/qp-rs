@@ -3,16 +3,23 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]
-pub const QS_RX_INFO:        u8 = 0;
-pub const QS_RX_COMMAND:     u8 = 1;
-pub const QS_RX_RESET:       u8 = 2;
-pub const QS_RX_TICK:        u8 = 3;
-#[allow(dead_code)] pub const QS_RX_PEEK:       u8 = 4;
-#[allow(dead_code)] pub const QS_RX_POKE:       u8 = 5;
-#[allow(dead_code)] pub const QS_RX_GLB_FILTER: u8 = 10;
-#[allow(dead_code)] pub const QS_RX_LOC_FILTER: u8 = 11;
-#[allow(dead_code)] pub const QS_RX_CURR_OBJ:   u8 = 13;
-#[allow(dead_code)] pub const QS_RX_EVENT:       u8 = 16;
+pub const QS_RX_INFO:           u8 = 0;
+pub const QS_RX_COMMAND:        u8 = 1;
+pub const QS_RX_RESET:          u8 = 2;
+pub const QS_RX_TICK:           u8 = 3;
+#[allow(dead_code)] pub const QS_RX_PEEK:           u8 = 4;
+#[allow(dead_code)] pub const QS_RX_POKE:           u8 = 5;
+#[allow(dead_code)] pub const QS_RX_FILL:           u8 = 6;
+#[allow(dead_code)] pub const QS_RX_TEST_SETUP:     u8 = 7;
+#[allow(dead_code)] pub const QS_RX_TEST_TEARDOWN:  u8 = 8;
+#[allow(dead_code)] pub const QS_RX_TEST_PROBE:     u8 = 9;
+#[allow(dead_code)] pub const QS_RX_GLB_FILTER:     u8 = 10;
+#[allow(dead_code)] pub const QS_RX_LOC_FILTER:     u8 = 11;
+#[allow(dead_code)] pub const QS_RX_AO_FILTER:      u8 = 12;
+#[allow(dead_code)] pub const QS_RX_CURR_OBJ:       u8 = 13;
+#[allow(dead_code)] pub const QS_RX_CONTINUE:       u8 = 14;
+#[allow(dead_code)] pub const QS_RX_QUERY_CURR:     u8 = 15;
+#[allow(dead_code)] pub const QS_RX_EVENT:          u8 = 16;
 
 const FLAG: u8 = 0x7E;
 const ESC:  u8 = 0x7D;
@@ -42,6 +49,36 @@ impl CommandSender {
 
     pub fn send_tick(&mut self, rate: u8) -> io::Result<()> {
         self.send(QS_RX_TICK, &[rate])
+    }
+
+    /// Forward a pre-built QS-RX payload verbatim (used by the raw front-end passthrough).
+    pub fn send_raw(&mut self, record_id: u8, payload: &[u8]) -> io::Result<()> {
+        self.send(record_id, payload)
+    }
+
+    #[allow(dead_code)]
+    pub fn send_test_setup(&mut self) -> io::Result<()> {
+        self.send(QS_RX_TEST_SETUP, &[])
+    }
+
+    #[allow(dead_code)]
+    pub fn send_test_teardown(&mut self) -> io::Result<()> {
+        self.send(QS_RX_TEST_TEARDOWN, &[])
+    }
+
+    #[allow(dead_code)]
+    pub fn send_continue(&mut self) -> io::Result<()> {
+        self.send(QS_RX_CONTINUE, &[])
+    }
+
+    #[allow(dead_code)]
+    pub fn send_ao_filter(&mut self, prio: u8) -> io::Result<()> {
+        self.send(QS_RX_AO_FILTER, &[prio])
+    }
+
+    #[allow(dead_code)]
+    pub fn send_query_curr(&mut self, kind: u8) -> io::Result<()> {
+        self.send(QS_RX_QUERY_CURR, &[kind])
     }
 
     pub fn send_command(&mut self, id: u8, p1: u32, p2: u32, p3: u32) -> io::Result<()> {
