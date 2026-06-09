@@ -131,9 +131,10 @@ fn keyword_color(kw: &str) -> &'static str {
         BLUE
     } else if kw.starts_with("TE") || kw.starts_with("QF-") || kw.starts_with("MP-")
               || kw.starts_with("EP-") || kw.starts_with("QS-")
+              || kw.starts_with("New-Ref") || kw.starts_with("EQ-")
     {
         MAGENTA
-    } else if kw.starts_with("rec=") {
+    } else if kw.starts_with("=ASSERT=") || kw.starts_with("rec=") {
         RED
     } else {
         BRIGHT_WHITE

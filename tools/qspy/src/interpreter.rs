@@ -6,7 +6,7 @@ use crate::cursor::Cursor;
 use crate::sizes::TargetSizes;
 use crate::QsFrame;
 use qs::predefined;
-use qs::records::{qep, qf, qf::time_evt, sched};
+use qs::records::{infra, qep, qf, qf::time_evt, sched};
 use qs::{
     FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64, FMT_I8_ENUM, FMT_MEM,
     FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
@@ -38,6 +38,7 @@ impl FrameInterpreter {
         let mut lines = Vec::new();
         match frame.record_type {
             // ── Dictionaries & target info ─────────────────────────────────
+            predefined::ENUM_DICT   => self.handle_enum_dict(&frame.payload, &mut lines),
             predefined::SIG_DICT    => self.handle_sig_dict(&frame.payload, &mut lines),
             predefined::OBJ_DICT    => self.handle_obj_dict(&frame.payload, &mut lines),
             predefined::FUN_DICT    => self.handle_fun_dict(&frame.payload, &mut lines),
@@ -54,37 +55,52 @@ impl FrameInterpreter {
             qep::IGNORED      => self.handle_ignored(&frame.payload, &mut lines),
             qep::DISPATCH     => self.handle_dispatch(&frame.payload, &mut lines),
             qep::UNHANDLED    => self.handle_unhandled(&frame.payload, &mut lines),
+            qep::TRAN_HIST    => self.handle_tran_hist(&frame.payload, &mut lines),
 
             // ── QF: active object ─────────────────────────────────────────
-            qf::ACTIVE_SUBSCRIBE   => self.handle_ao_subscribe(&frame.payload, &mut lines),
-            qf::ACTIVE_UNSUBSCRIBE => self.handle_ao_unsubscribe(&frame.payload, &mut lines),
-            qf::ACTIVE_POST        => self.handle_ao_post(&frame.payload, "AO-Post ", &mut lines),
-            qf::ACTIVE_POST_LIFO   => self.handle_ao_post(&frame.payload, "AO-PostL", &mut lines),
-            qf::ACTIVE_GET         => self.handle_ao_get(&frame.payload, &mut lines),
-            qf::ACTIVE_GET_LAST    => self.handle_ao_get_last(&frame.payload, &mut lines),
+            qf::ACTIVE_DEFER         => self.handle_ao_defer_recall(&frame.payload, "AO-Defer ", &mut lines),
+            qf::ACTIVE_RECALL        => self.handle_ao_defer_recall(&frame.payload, "AO-Rcall ", &mut lines),
+            qf::ACTIVE_SUBSCRIBE     => self.handle_ao_subscribe(&frame.payload, &mut lines),
+            qf::ACTIVE_UNSUBSCRIBE   => self.handle_ao_unsubscribe(&frame.payload, &mut lines),
+            qf::ACTIVE_POST          => self.handle_ao_post(&frame.payload, "AO-Post ", &mut lines),
+            qf::ACTIVE_POST_LIFO     => self.handle_ao_post(&frame.payload, "AO-PostL", &mut lines),
+            qf::ACTIVE_GET           => self.handle_ao_get(&frame.payload, &mut lines),
+            qf::ACTIVE_GET_LAST      => self.handle_ao_get_last(&frame.payload, &mut lines),
+            qf::ACTIVE_POST_ATTEMPT  => self.handle_ao_post(&frame.payload, "AO-PostA", &mut lines),
 
             // ── QF: event queues ─────────────────────────────────────────
-            qf::EQUEUE_POST      => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
-            qf::EQUEUE_POST_LIFO => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
-            qf::EQUEUE_GET       => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
-            qf::EQUEUE_GET_LAST  => self.handle_equeue_get(&frame.payload, "EQ-GetL ", &mut lines),
+            qf::EQUEUE_POST          => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
+            qf::EQUEUE_POST_LIFO     => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
+            qf::EQUEUE_GET           => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
+            qf::EQUEUE_GET_LAST      => self.handle_equeue_get(&frame.payload, "EQ-GetL ", &mut lines),
+            qf::EQUEUE_POST_ATTEMPT  => self.handle_equeue_post(&frame.payload, "EQ-PostA", &mut lines),
 
             // ── QF: memory pool ───────────────────────────────────────────
-            qf::MPOOL_GET => self.handle_mpool_get(&frame.payload, &mut lines),
-            qf::MPOOL_PUT => self.handle_mpool_put(&frame.payload, &mut lines),
+            qf::MPOOL_GET         => self.handle_mpool_get(&frame.payload, &mut lines),
+            qf::MPOOL_PUT         => self.handle_mpool_put(&frame.payload, &mut lines),
+            qf::MPOOL_GET_ATTEMPT => self.handle_mpool_get_labeled(&frame.payload, "MP-GetA ", &mut lines),
 
             // ── QF: event lifecycle ───────────────────────────────────────
             qf::PUBLISH    => self.handle_qf_publish(&frame.payload, &mut lines),
+            qf::NEW_REF    => self.handle_qf_evt_ref(&frame.payload, "New-Ref ", &mut lines),
             qf::NEW        => self.handle_qf_new(&frame.payload, &mut lines),
             qf::GC_ATTEMPT => self.handle_qf_gc(&frame.payload, "QF-gcA  ", &mut lines),
             qf::GC         => self.handle_qf_gc(&frame.payload, "QF-gc   ", &mut lines),
             qf::TICK       => self.handle_qf_tick(&frame.payload, &mut lines),
+            qf::DELETE_REF => self.handle_qf_evt_ref(&frame.payload, "QF-DelRf", &mut lines),
+
+            // ── QF: critical section / ISR ────────────────────────────────
+            qf::CRIT_ENTRY => self.handle_crit(&frame.payload, "QF-CritE", &mut lines),
+            qf::CRIT_EXIT  => self.handle_crit(&frame.payload, "QF-CritX", &mut lines),
+            qf::ISR_ENTRY  => self.handle_isr(&frame.payload, "QF-IsrE ", &mut lines),
+            qf::ISR_EXIT   => self.handle_isr(&frame.payload, "QF-IsrX ", &mut lines),
 
             // ── QF: time events ───────────────────────────────────────────
             time_evt::ARM            => self.handle_time_evt_arm(&frame.payload, &mut lines),
             time_evt::AUTO_DISARM    => self.handle_time_evt_auto_disarm(&frame.payload, &mut lines),
             time_evt::DISARM_ATTEMPT => self.handle_time_evt_disarm_attempt(&frame.payload, &mut lines),
             time_evt::DISARM         => self.handle_time_evt_disarm(&frame.payload, &mut lines),
+            time_evt::REARM          => self.handle_time_evt_rearm(&frame.payload, &mut lines),
             time_evt::POST           => self.handle_time_evt_post(&frame.payload, &mut lines),
 
             // ── Scheduler ─────────────────────────────────────────────────
@@ -92,6 +108,14 @@ impl FrameInterpreter {
             sched::UNLOCK => self.handle_sched_unlock(&frame.payload, &mut lines),
             sched::NEXT   => self.handle_sched_next(&frame.payload, &mut lines),
             sched::IDLE   => self.handle_sched_idle(&frame.payload, &mut lines),
+
+            // ── Infrastructure / test back-channel ────────────────────────
+            infra::TEST_PAUSED => lines.push("           TstPause".to_string()),
+            infra::TEST_PROBE  => self.handle_test_probe(&frame.payload, &mut lines),
+            infra::QUERY_DATA  => self.handle_query_data(&frame.payload, &mut lines),
+            infra::PEEK_DATA   => self.handle_peek_data(&frame.payload, &mut lines),
+            infra::ASSERT_FAIL => self.handle_assert_fail(&frame.payload, &mut lines),
+            infra::QF_RUN      => lines.push("           QF RUN".to_string()),
 
             // ── QSPY back-channel ─────────────────────────────────────────
             65 => lines.push(format!(
@@ -184,6 +208,16 @@ impl FrameInterpreter {
         if let (Some(id), Some(name)) = (cur.read_u8(), cur.read_c_string()) {
             self.dict.users.insert(id, name.clone());
             lines.push(format!("           Usr-Dict {id:03}->{name}"));
+        }
+    }
+
+    fn handle_enum_dict(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(val), Some(grp), Some(name)) =
+            (cur.read_u8(), cur.read_u8(), cur.read_c_string())
+        {
+            self.dict.enums.insert((grp, val), name.clone());
+            lines.push(format!("           Enum-Dict grp={grp} {val}->{name}"));
         }
     }
 
@@ -355,7 +389,39 @@ impl FrameInterpreter {
         }
     }
 
+    /// `QS_QEP_TRAN_HIST` (55): [obj | src | tgt] — no timestamp, RTC step
+    fn handle_tran_hist(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(obj), Some(src), Some(tgt)) = (
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.fun_ptr_size),
+            cur.read_sized(self.sizes.fun_ptr_size),
+        ) {
+            lines.push(format!(
+                "===RTC===> St-Hist  Obj={},State={}->{}",
+                self.obj_str(obj), self.fun_str(src), self.fun_str(tgt)
+            ));
+        }
+    }
+
     // ── QF: active object handlers ────────────────────────────────────────────
+
+    /// `QS_QF_ACTIVE_DEFER` (10) / `QS_QF_ACTIVE_RECALL` (11): [ts | ao | eq | sig | pool | ref]
+    fn handle_ao_defer_recall(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(ao), Some(eq), Some(sig), Some(pool), Some(rref)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Que={},Evt<Sig={},Pool={pool},Ref={rref}>",
+                self.obj_str(ao), self.obj_str(eq), self.sig_str(sig, ao)
+            ));
+        }
+    }
 
     /// `QS_QF_ACTIVE_SUBSCRIBE` (12): [ts | sig | ao]
     fn handle_ao_subscribe(&mut self, payload: &[u8], lines: &mut Vec<String>) {
@@ -480,8 +546,12 @@ impl FrameInterpreter {
 
     // ── QF: memory pool handlers ──────────────────────────────────────────────
 
-    /// `QS_QF_MPOOL_GET` (24): [ts | mp | free | min]
+    /// `QS_QF_MPOOL_GET` (24) / `QS_QF_MPOOL_GET_ATTEMPT` (47): [ts | mp | free | min]
     fn handle_mpool_get(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        self.handle_mpool_get_labeled(payload, "MP-Get  ", lines);
+    }
+
+    fn handle_mpool_get_labeled(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(mp), Some(free), Some(min)) = (
             cur.read_sized(self.sizes.time_size),
@@ -490,7 +560,7 @@ impl FrameInterpreter {
             cur.read_sized(self.sizes.mpool_ctr),
         ) {
             lines.push(format!(
-                "{ts:010} MP-Get   Obj={},Free={free},Min={min}",
+                "{ts:010} {label} Obj={},Free={free},Min={min}",
                 self.obj_str(mp)
             ));
         }
@@ -567,6 +637,40 @@ impl FrameInterpreter {
         }
     }
 
+    /// `QS_QF_NEW_REF` (27) / `QS_QF_DELETE_REF` (38): [ts | sig | pool | ref]
+    fn handle_qf_evt_ref(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sig), Some(pool), Some(rref)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.signal_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Evt<Sig={},Pool={pool},Ref={rref}>",
+                self.sig_str(sig, 0)
+            ));
+        }
+    }
+
+    /// `QS_TR_CRIT_ENTRY` (39) / `QS_TR_CRIT_EXIT` (40): [ts | nesting]
+    fn handle_crit(&self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(nesting)) = (cur.read_sized(self.sizes.time_size), cur.read_u8()) {
+            lines.push(format!("{ts:010} {label} Nesting={nesting}"));
+        }
+    }
+
+    /// `QS_TR_ISR_ENTRY` (41) / `QS_TR_ISR_EXIT` (42): [ts | nesting | prio]
+    fn handle_isr(&self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(nesting), Some(prio)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u8(), cur.read_u8(),
+        ) {
+            lines.push(format!("{ts:010} {label} Nesting={nesting},Pri={prio}"));
+        }
+    }
+
     // ── Time event handlers ───────────────────────────────────────────────────
 
     fn handle_time_evt_arm(&mut self, payload: &[u8], lines: &mut Vec<String>) {
@@ -632,6 +736,23 @@ impl FrameInterpreter {
         }
     }
 
+    fn handle_time_evt_rearm(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(timer), Some(target), Some(remaining), Some(interval), Some(rate)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.obj_ptr_size),
+            cur.read_sized(self.sizes.timeevt_ctr),
+            cur.read_sized(self.sizes.timeevt_ctr),
+            cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} TE{rate}-Rarm Obj={},AO={},Tim={remaining},Int={interval}",
+                self.obj_str(timer), self.obj_str(target)
+            ));
+        }
+    }
+
     fn handle_time_evt_post(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(timer), Some(signal), Some(target), Some(rate)) = (
@@ -685,6 +806,67 @@ impl FrameInterpreter {
             (cur.read_sized(self.sizes.time_size), cur.read_u8())
         {
             lines.push(format!("{ts:010} Sch-Idle Pri={prev}->0"));
+        }
+    }
+
+    // ── Infrastructure / test handlers ───────────────────────────────────────
+
+    /// `QS_TEST_PROBE_GET` (59): [ts | api_fun | data_u32]
+    fn handle_test_probe(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(api), Some(data)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_sized(self.sizes.fun_ptr_size),
+            cur.read_u32(),
+        ) {
+            lines.push(format!(
+                "{ts:010} TstProbe Fun={},Data={data:#010X}",
+                self.fun_str(api)
+            ));
+        }
+    }
+
+    /// `QS_QUERY_DATA` (67): [ts | kind | obj]
+    fn handle_query_data(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(kind), Some(obj)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u8(),
+            cur.read_sized(self.sizes.obj_ptr_size),
+        ) {
+            let kind_str = match kind {
+                0 => "SM",  1 => "AO",  2 => "MP",
+                3 => "EQ",  4 => "TE",  5 => "AP",
+                _ => "??",
+            };
+            lines.push(format!(
+                "{ts:010} Query-{kind_str} Obj={}",
+                self.obj_str(obj)
+            ));
+        }
+    }
+
+    /// `QS_PEEK_DATA` (68): [offset_u16 | size | data...]
+    fn handle_peek_data(&self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(offset), Some(size)) = (cur.read_u16(), cur.read_u8()) {
+            let data = cur.read_bytes(size as usize).unwrap_or(&[]);
+            lines.push(format!(
+                "           Trg-Peek Offset={offset},Size={size},Data={}",
+                hex_bytes(data)
+            ));
+        }
+    }
+
+    /// `QS_ASSERT_FAIL` (69): [ts | id_u16 | module_str]
+    fn handle_assert_fail(&mut self, payload: &[u8], lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(id), Some(module)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u16(),
+            cur.read_c_string(),
+        ) {
+            lines.push(format!("{ts:010} =ASSERT= Mod={module},Loc={id}"));
         }
     }
 
@@ -870,6 +1052,9 @@ impl FrameInterpreter {
         for (id, name) in &self.dict.users {
             writeln!(w, "USR {id} {name}")?;
         }
+        for ((grp, val), name) in &self.dict.enums {
+            writeln!(w, "ENUM {grp} {val} {name}")?;
+        }
         Ok(())
     }
 
@@ -902,6 +1087,11 @@ impl FrameInterpreter {
                         self.dict.users.insert(i, (*name).to_owned());
                     }
                 }
+                ["ENUM", grp, val, name] => {
+                    if let (Ok(g), Ok(v)) = (grp.parse::<u8>(), val.parse::<u8>()) {
+                        self.dict.enums.insert((g, v), (*name).to_owned());
+                    }
+                }
                 _ => {}
             }
         }
@@ -917,6 +1107,8 @@ struct Dictionaries {
     functions: HashMap<u64, String>,
     signals:   HashMap<(u16, u64), String>,
     users:     HashMap<u8, String>,
+    /// Keyed by (group, value).
+    enums:     HashMap<(u8, u8), String>,
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
