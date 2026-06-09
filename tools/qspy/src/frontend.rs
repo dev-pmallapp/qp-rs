@@ -1,17 +1,23 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 
+use crate::commands::{
+    QS_RX_AO_FILTER, QS_RX_CURR_OBJ, QS_RX_EVENT, QS_RX_TEST_PROBE,
+};
+
 // QSPY back-end command record IDs (128–255).
-pub const QSPY_ATTACH:                   u8 = 128;
-pub const QSPY_DETACH:                   u8 = 129;
-pub const QSPY_SAVE_DICT:                u8 = 130;
-#[allow(dead_code)] pub const QSPY_TEXT_OUT:      u8 = 131;
-#[allow(dead_code)] pub const QSPY_BIN_OUT:       u8 = 132;
-#[allow(dead_code)] pub const QSPY_SEND_EVENT:    u8 = 135;
-#[allow(dead_code)] pub const QSPY_SEND_CURR_OBJ: u8 = 137;
-pub const QSPY_SEND_COMMAND:             u8 = 138;
-pub const QSPY_CLEAR_SCREEN:             u8 = 140;
-#[allow(dead_code)] pub const QSPY_SHOW_NOTE:     u8 = 141;
+pub const QSPY_ATTACH:            u8 = 128;
+pub const QSPY_DETACH:            u8 = 129;
+pub const QSPY_SAVE_DICT:         u8 = 130;
+pub const QSPY_TEXT_OUT:          u8 = 131;
+pub const QSPY_BIN_OUT:           u8 = 132;
+pub const QSPY_SEND_EVENT:        u8 = 135;
+pub const QSPY_SEND_AO_FILTER:    u8 = 136;
+pub const QSPY_SEND_CURR_OBJ:     u8 = 137;
+pub const QSPY_SEND_COMMAND:      u8 = 138;
+pub const QSPY_SEND_TEST_PROBE:   u8 = 139;
+pub const QSPY_CLEAR_SCREEN:      u8 = 140;
+pub const QSPY_SHOW_NOTE:         u8 = 141;
 
 pub const CHANNEL_BINARY: u8 = 0x01;
 pub const CHANNEL_TEXT:   u8 = 0x02;
@@ -22,6 +28,14 @@ pub enum FrontendCmd {
     Command { id: u8, p1: u32, p2: u32, p3: u32 },
     SaveDict,
     ClearScreen,
+    /// Request a fresh TARGET_INFO from the target (triggered on ATTACH, GAP-9).
+    Info,
+    /// Toggle the text output file open/closed.
+    ToggleTextOut,
+    /// Toggle the binary save file open/closed.
+    ToggleBinOut,
+    /// Print a note string as a console/text-file line.
+    ShowNote(String),
     /// Raw QS-RX passthrough: forward the frame verbatim to the target's command channel.
     RawQsRx { id: u8, payload: Vec<u8> },
 }
@@ -49,17 +63,14 @@ impl FrontendServer {
     }
 
     /// Drain all pending incoming datagrams and return any commands that
-    /// should be forwarded to the target.  Returns immediately without
-    /// blocking when the socket queue is empty.
+    /// should be forwarded to the target or acted on locally.
     pub fn poll(&mut self) -> Vec<FrontendCmd> {
         let mut cmds = Vec::new();
         let mut buf = [0u8; 2048];
         loop {
             match self.socket.recv_from(&mut buf) {
                 Ok((len, peer)) => {
-                    if let Some(cmd) = self.handle_packet(&buf[..len], peer) {
-                        cmds.push(cmd);
-                    }
+                    cmds.extend(self.handle_packet(&buf[..len], peer));
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -125,11 +136,11 @@ impl FrontendServer {
 
     // ── Private ───────────────────────────────────────────────────────────────
 
-    fn handle_packet(&mut self, data: &[u8], peer: SocketAddr) -> Option<FrontendCmd> {
+    fn handle_packet(&mut self, data: &[u8], peer: SocketAddr) -> Vec<FrontendCmd> {
         if data.len() < 2 {
-            return None;
+            return vec![];
         }
-        let _fe_seq  = data[0];
+        let fe_seq    = data[0];
         let record_id = data[1];
         let payload   = &data[2..];
 
@@ -142,18 +153,43 @@ impl FrontendServer {
                     self.clients.push(Client { addr: peer, channels, seq: 0 });
                 }
                 // ACK: echo the ATTACH packet back to the client.
-                let ack = [_fe_seq, QSPY_ATTACH];
+                let ack = [fe_seq, QSPY_ATTACH];
                 let _ = self.socket.send_to(&ack, peer);
                 println!("front-end attached: {peer} channels={channels:#04x}");
-                None
+                // GAP-9: request a fresh TARGET_INFO so the front-end gets current sizes.
+                vec![FrontendCmd::Info]
             }
             QSPY_DETACH => {
                 self.clients.retain(|c| c.addr != peer);
                 println!("front-end detached: {peer}");
-                None
+                vec![]
             }
-            QSPY_SAVE_DICT  => Some(FrontendCmd::SaveDict),
-            QSPY_CLEAR_SCREEN => Some(FrontendCmd::ClearScreen),
+            QSPY_SAVE_DICT    => vec![FrontendCmd::SaveDict],
+            QSPY_CLEAR_SCREEN => vec![FrontendCmd::ClearScreen],
+            QSPY_TEXT_OUT     => vec![FrontendCmd::ToggleTextOut],
+            QSPY_BIN_OUT      => vec![FrontendCmd::ToggleBinOut],
+            QSPY_SHOW_NOTE    => {
+                let s = String::from_utf8_lossy(payload)
+                    .trim_end_matches('\0')
+                    .to_string();
+                vec![FrontendCmd::ShowNote(s)]
+            }
+
+            // QSPY backend commands that map to QS-RX target commands.
+            // The front-end already encodes fields using the correct target sizes,
+            // so we forward the payload bytes verbatim.
+            QSPY_SEND_EVENT      => vec![FrontendCmd::RawQsRx {
+                id: QS_RX_EVENT,     payload: payload.to_vec()
+            }],
+            QSPY_SEND_AO_FILTER  => vec![FrontendCmd::RawQsRx {
+                id: QS_RX_AO_FILTER, payload: payload.to_vec()
+            }],
+            QSPY_SEND_CURR_OBJ   => vec![FrontendCmd::RawQsRx {
+                id: QS_RX_CURR_OBJ,  payload: payload.to_vec()
+            }],
+            QSPY_SEND_TEST_PROBE => vec![FrontendCmd::RawQsRx {
+                id: QS_RX_TEST_PROBE, payload: payload.to_vec()
+            }],
 
             // QSPY_SEND_COMMAND: payload = [id:u8, p1:u32le, p2:u32le, p3:u32le]
             QSPY_SEND_COMMAND if payload.len() >= 13 => {
@@ -161,14 +197,14 @@ impl FrontendServer {
                 let p1 = u32::from_le_bytes(payload[1..5].try_into().unwrap());
                 let p2 = u32::from_le_bytes(payload[5..9].try_into().unwrap());
                 let p3 = u32::from_le_bytes(payload[9..13].try_into().unwrap());
-                Some(FrontendCmd::Command { id, p1, p2, p3 })
+                vec![FrontendCmd::Command { id, p1, p2, p3 }]
             }
 
             // QS-RX passthrough: forward ALL records 0–127 verbatim to the target.
             rec if rec < 128 => {
-                Some(FrontendCmd::RawQsRx { id: rec, payload: payload.to_vec() })
+                vec![FrontendCmd::RawQsRx { id: rec, payload: payload.to_vec() }]
             }
-            _ => None,
+            _ => vec![],
         }
     }
 }

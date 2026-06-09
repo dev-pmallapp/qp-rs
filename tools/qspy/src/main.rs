@@ -255,7 +255,7 @@ fn run_reader<R: Read>(
             Err(e) => { eprintln!("read error: {e}"); break; }
         }
 
-        if poll_commands(kbd_rx, frontend, interpreter, sender) {
+        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks) {
             break;
         }
         sinks.flush();
@@ -298,7 +298,7 @@ fn run_udp(
             Err(e) => { eprintln!("udp error: {e}"); break; }
         }
 
-        if poll_commands(kbd_rx, frontend, interpreter, sender) {
+        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks) {
             break;
         }
         sinks.flush();
@@ -338,6 +338,7 @@ fn poll_commands(
     frontend: &mut Option<FrontendServer>,
     interp:   &mut FrameInterpreter,
     sender:   &SharedSender,
+    sinks:    &mut OutputSinks,
 ) -> bool {
     while let Ok(cmd) = kbd_rx.try_recv() {
         if dispatch_cmd(cmd, sender, interp) {
@@ -346,7 +347,7 @@ fn poll_commands(
     }
     if let Some(fe) = frontend {
         for fe_cmd in fe.poll() {
-            dispatch_fe_cmd(fe_cmd, sender);
+            dispatch_fe_cmd(fe_cmd, sender, sinks);
         }
     }
     false
@@ -370,15 +371,18 @@ fn dispatch_cmd(cmd: UserCmd, sender: &SharedSender, interp: &mut FrameInterpret
     false
 }
 
-fn dispatch_fe_cmd(cmd: FrontendCmd, sender: &SharedSender) {
+fn dispatch_fe_cmd(cmd: FrontendCmd, sender: &SharedSender, sinks: &mut OutputSinks) {
     match cmd {
-        FrontendCmd::Command { id, p1, p2, p3 }  =>
+        FrontendCmd::Command { id, p1, p2, p3 } =>
             try_send(sender, |s| s.send_command(id, p1, p2, p3)),
-        FrontendCmd::RawQsRx { id, payload }     =>
+        FrontendCmd::RawQsRx { id, payload } =>
             try_send(sender, |s| s.send_raw(id, &payload)),
-        FrontendCmd::SaveDict | FrontendCmd::ClearScreen => {
-            // Handled by the caller if needed; front-end version is a no-op here.
-        }
+        FrontendCmd::Info =>
+            try_send(sender, |s| s.send_info()),
+        FrontendCmd::ToggleTextOut  => sinks.toggle_text(),
+        FrontendCmd::ToggleBinOut   => sinks.toggle_binary(),
+        FrontendCmd::ShowNote(note) => sinks.write_line(&format!("           {note}")),
+        FrontendCmd::SaveDict | FrontendCmd::ClearScreen => {}
     }
 }
 
