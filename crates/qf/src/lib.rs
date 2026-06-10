@@ -15,6 +15,7 @@ The crate keeps modules loosely coupled so that alternative front-ends can reuse
 extern crate alloc;
 
 pub mod active;
+pub mod equeue;
 pub mod event;
 pub mod event_pool;
 pub mod hsm;
@@ -23,6 +24,7 @@ pub mod pool;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
+pub use equeue::{defer, flush_deferred, recall, QEQueue};
 pub use event::{Event, EventHeader, Signal};
 pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
 pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH};

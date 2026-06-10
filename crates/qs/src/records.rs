@@ -17,7 +17,7 @@ pub mod qep {
 
 /// QF (framework) record identifiers.
 pub mod qf {
-    /// Active object records (10–17).
+    /// Active object records (10–18).
     pub const ACTIVE_DEFER:            u8 = 10;
     pub const ACTIVE_RECALL:           u8 = 11;
     pub const ACTIVE_SUBSCRIBE:        u8 = 12;
@@ -26,12 +26,12 @@ pub mod qf {
     pub const ACTIVE_POST_LIFO:        u8 = 15;
     pub const ACTIVE_GET:              u8 = 16;
     pub const ACTIVE_GET_LAST:         u8 = 17;
-    /// Event-queue records (18–22).
-    pub const EQUEUE_INIT:             u8 = 18;
-    pub const EQUEUE_POST:             u8 = 19;
-    pub const EQUEUE_POST_LIFO:        u8 = 20;
-    pub const EQUEUE_GET:              u8 = 21;
-    pub const EQUEUE_GET_LAST:         u8 = 22;
+    pub const ACTIVE_RECALL_ATTEMPT:   u8 = 18;
+    /// Event-queue records (19–22).
+    pub const EQUEUE_INIT:             u8 = 19;
+    pub const EQUEUE_POST:             u8 = 20;
+    pub const EQUEUE_POST_LIFO:        u8 = 21;
+    pub const EQUEUE_GET:              u8 = 22;
     /// Memory-pool records (23–25).
     pub const MPOOL_INIT:              u8 = 23;
     pub const MPOOL_GET:               u8 = 24;
@@ -65,6 +65,8 @@ pub mod qf {
     pub const ACTIVE_POST_ATTEMPT:     u8 = 45;
     pub const EQUEUE_POST_ATTEMPT:     u8 = 46;
     pub const MPOOL_GET_ATTEMPT:       u8 = 47;
+    /// Defer/recall attempt records (added in QP/C++ v8.0.4).
+    pub const ACTIVE_DEFER_ATTEMPT:    u8 = 81;
 }
 
 /// Scheduler related record identifiers (50–53).

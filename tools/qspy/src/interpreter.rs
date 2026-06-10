@@ -75,7 +75,6 @@ impl FrameInterpreter {
             qf::EQUEUE_POST          => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
             qf::EQUEUE_POST_LIFO     => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
             qf::EQUEUE_GET           => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
-            qf::EQUEUE_GET_LAST      => self.handle_equeue_get(&frame.payload, "EQ-GetL ", &mut lines),
             qf::EQUEUE_POST_ATTEMPT  => self.handle_equeue_post(&frame.payload, "EQ-PostA", &mut lines),
 
             // ── QF: memory pool ───────────────────────────────────────────
@@ -512,7 +511,7 @@ impl FrameInterpreter {
 
     // ── QF: event queue / memory pool init handlers ───────────────────────────
 
-    /// `QS_QF_EQUEUE_INIT` (18): [ts | eq | len: equeue_ctr]
+    /// `QS_QF_EQUEUE_INIT` (19): [ts | eq | len: equeue_ctr]
     fn handle_equeue_init(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(eq), Some(len)) = (
@@ -557,7 +556,7 @@ impl FrameInterpreter {
 
     // ── QF: event queue handlers ──────────────────────────────────────────────
 
-    /// `QS_QF_EQUEUE_POST_FIFO/LIFO` (19/20): [ts | sig | eq | pool | ref | free | min]
+    /// `QS_QF_EQUEUE_POST_FIFO/LIFO` (20/21): [ts | sig | eq | pool | ref | free | min]
     fn handle_equeue_post(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(sig), Some(eq),
@@ -576,7 +575,8 @@ impl FrameInterpreter {
         }
     }
 
-    /// `QS_QF_EQUEUE_GET / GET_LAST` (21/22): [ts | sig | eq | pool | ref | free]
+    /// `QS_QF_EQUEUE_GET` (22): [ts | sig | eq | pool | ref | free]
+    /// Free=0 indicates this was the last event in the queue.
     fn handle_equeue_get(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(sig), Some(eq), Some(pool), Some(rref), Some(free)) = (

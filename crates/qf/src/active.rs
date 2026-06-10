@@ -74,6 +74,10 @@ pub trait ActiveRunnable: Send + Sync {
     fn start(&self, trace: Option<TraceHook>);
     fn dispatch_one(&self) -> bool;
     fn post(&self, event: DynEvent);
+    /// Post an event LIFO (to the front of this AO's queue).
+    ///
+    /// Used by `recall()` to give a recalled event priority over pending events.
+    fn post_lifo(&self, event: DynEvent);
     fn has_events(&self) -> bool;
 }
 
@@ -138,6 +142,11 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     fn post(&self, event: DynEvent) {
         let mut queue = self.queue.lock();
         queue.push_back(event);
+    }
+
+    fn post_lifo(&self, event: DynEvent) {
+        let mut queue = self.queue.lock();
+        queue.push_front(event);
     }
 
     fn has_events(&self) -> bool {
