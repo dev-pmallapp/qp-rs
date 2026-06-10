@@ -9,6 +9,12 @@
 //!
 //! Byte stuffing: `0x7E` and `0x7D` are escaped as `0x7D, byte ^ 0x20`.
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 /// Command types sent by the host tool (QP/C++ `QS_RX` command IDs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RxCmd {
