@@ -4,6 +4,7 @@
 //! extended blocking threads, providing a dual-mode execution model.
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 

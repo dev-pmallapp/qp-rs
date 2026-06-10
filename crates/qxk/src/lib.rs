@@ -37,5 +37,5 @@ pub mod thread;
 
 pub use kernel::{QxkKernel, QxkKernelBuilder, QxkKernelError};
 pub use primitives::{CondVar, MessageQueue, MutexPrim, Semaphore, SyncError, SyncResult};
-pub use scheduler::{QxkScheduler, ScheduleMode};
+pub use scheduler::{QxkScheduler, SchedStatus, ScheduleMode};
 pub use thread::{ExtendedThread, ThreadPriority, ThreadState};

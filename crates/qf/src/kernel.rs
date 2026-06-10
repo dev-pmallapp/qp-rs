@@ -4,6 +4,7 @@ use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::sync::{Arc, Mutex};
