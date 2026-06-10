@@ -6,6 +6,12 @@
 //! payload layout of those records so that the Rust tracer can interoperate
 //! with the reference tooling.
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 /// Record identifier for `QS_ENUM_DICT`.
 pub const ENUM_DICT: u8 = 54;
 /// Record identifier for `QS_SIG_DICT`.

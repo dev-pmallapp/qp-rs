@@ -6,5 +6,10 @@ authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
 description = "Quantum Spy (QS) tracing for Quantum Platform ports"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = ["std"]
+std = ["dep:thiserror"]
+
 [dependencies]
-thiserror = "1"
+thiserror = { version = "1", optional = true }
+spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }

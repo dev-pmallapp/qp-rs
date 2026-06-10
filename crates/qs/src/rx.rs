@@ -12,6 +12,12 @@
 //! Command IDs match the `QS_RX*` enum in QP/C++ and the companion QSpy tool
 //! in `tools/qspy/src/commands.rs`.
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 /// Strongly-typed commands decoded from QS-RX frames.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RxCmd {
