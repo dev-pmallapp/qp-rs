@@ -16,11 +16,13 @@ extern crate alloc;
 
 pub mod active;
 pub mod event;
+pub mod hsm;
 pub mod kernel;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
 pub use event::{Event, EventHeader, Signal};
+pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig};
 #[cfg(feature = "qs")]
 pub use qs::{QsConfig, QsRecord, TraceBackend, Tracer, TracerHandle};
@@ -29,3 +31,59 @@ pub use trace::{TraceError, TraceHook, TraceResult};
 #[cfg(test)]
 mod tests;
 mod trace;
+
+// ── HSM convenience macros ────────────────────────────────────────────────────
+
+/// Declare a state transition to `$target`.
+///
+/// Returns `QHsmResult::Tran($target)` from a state handler.
+#[macro_export]
+macro_rules! q_tran {
+    ($target:expr) => {
+        $crate::hsm::QHsmResult::Tran($target)
+    };
+}
+
+/// Delegate the event to super-state `$super`.
+///
+/// Returns `QHsmResult::Super($super)` from a state handler.  This is
+/// the standard catch-all arm for unhandled events:
+/// ```rust,ignore
+/// _ => q_super!(state_a)
+/// ```
+#[macro_export]
+macro_rules! q_super {
+    ($super:expr) => {
+        $crate::hsm::QHsmResult::Super($super)
+    };
+}
+
+/// The event was handled; no state transition.
+///
+/// Returns `QHsmResult::Handled` from a state handler.
+#[macro_export]
+macro_rules! q_handled {
+    () => {
+        $crate::hsm::QHsmResult::Handled
+    };
+}
+
+/// The event was intentionally ignored.
+///
+/// Returns `QHsmResult::Ignored` from a state handler.
+#[macro_export]
+macro_rules! q_ignored {
+    () => {
+        $crate::hsm::QHsmResult::Ignored
+    };
+}
+
+/// Transition to the history of composite state `$parent`.
+///
+/// Returns `QHsmResult::TranHist($parent)` from a state handler.
+#[macro_export]
+macro_rules! q_tran_hist {
+    ($parent:expr) => {
+        $crate::hsm::QHsmResult::TranHist($parent)
+    };
+}
