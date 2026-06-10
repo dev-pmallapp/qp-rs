@@ -5,7 +5,6 @@
 //! objects, the preemptive kernel, time events, and QS tracing integrate in
 //! Rust.
 
-use std::convert::TryInto;
 use std::env;
 use std::error::Error;
 use std::io::Read;
@@ -28,7 +27,10 @@ use qs::records::qep::{
     STATE_EXIT as QS_QEP_STATE_EXIT, STATE_INIT as QS_QEP_STATE_INIT, TRAN as QS_QEP_TRAN,
     UNHANDLED as QS_QEP_UNHANDLED,
 };
-use qs::{TargetInfo, UserRecordBuilder};
+use qs::qutest::make_probe_record;
+use qs::records::infra::TEST_PROBE as QS_TEST_PROBE_GET;
+use qs::rx::{cmd as rx_cmd, RxCmd, RxParser};
+use qs::{clear_test_probes, set_test_probe, GlbFilter, TargetInfo, UserRecordBuilder};
 
 const N_PHILO: usize = 5;
 const TABLE_ID: ActiveObjectId = ActiveObjectId::new(1);
@@ -208,14 +210,8 @@ fn emit_qep_unhandled(ctx: &ActiveContext, obj_addr: u64, signal: Signal, state_
     emit_qep_record(ctx, QS_QEP_UNHANDLED, payload, false, "QS_QEP_UNHANDLED");
 }
 
-const QS_RX_INFO: u8 = 0;
-const QS_RX_COMMAND: u8 = 1;
 const QS_TARGET_DONE: u8 = 65;
 const QS_RX_STATUS: u8 = 66;
-const QS_FRAME_FLAG: u8 = 0x7E;
-const QS_FRAME_ESCAPE: u8 = 0x7D;
-const QS_FRAME_ESCAPE_XOR: u8 = 0x20;
-const MAX_RX_FRAME: usize = 128;
 
 static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
 
@@ -378,6 +374,17 @@ impl ActiveBehavior for Philosopher {
 
         match (self.state, signal) {
             (PhiloState::Thinking, TIMEOUT_SIG) => {
+                // QUTest probe point: test can suppress the think→hungry transition.
+                // Send TEST_PROBE{fn_ptr: dict_handle("Philo::thinking"), data: 1} to engage.
+                let tp_fn = dict_handle(PHILO_THINKING_NAME);
+                if let Some(tp) = qs::qutest::take_test_probe(tp_fn) {
+                    let rec = make_probe_record(tp_fn, tp);
+                    let _ = ctx.emit_trace_with_timestamp(QS_TEST_PROBE_GET, &rec, false);
+                    if tp != 0 {
+                        emit_qep_internal_tran(ctx, self.object_addr, signal, self.state.addr());
+                        return;
+                    }
+                }
                 self.transition_to(ctx, signal, PhiloState::Hungry);
             }
             (PhiloState::Thinking, TEST_SIG) => {
@@ -716,13 +723,13 @@ fn handle_command_stream(mut stream: TcpStream, port: Arc<PosixPort>) {
         println!("QS command channel connected to {peer}");
     }
     let mut buffer = [0u8; 128];
-    let mut decoder = QsRxDecoder::new(port);
+    let mut ctx = QsRxContext::new(port);
     loop {
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => {
                 for &byte in &buffer[..count] {
-                    decoder.ingest(byte);
+                    ctx.ingest(byte);
                 }
             }
             Err(err) => {
@@ -736,145 +743,92 @@ fn handle_command_stream(mut stream: TcpStream, port: Arc<PosixPort>) {
     }
 }
 
-struct QsRxDecoder {
-    port: Arc<PosixPort>,
-    frame: Vec<u8>,
-    escaped: bool,
+struct QsRxContext {
+    port:   Arc<PosixPort>,
+    parser: RxParser,
 }
 
-impl QsRxDecoder {
+impl QsRxContext {
     fn new(port: Arc<PosixPort>) -> Self {
-        Self {
-            port,
-            frame: Vec::with_capacity(32),
-            escaped: false,
-        }
+        Self { port, parser: RxParser::new() }
     }
 
     fn ingest(&mut self, byte: u8) {
-        if byte == QS_FRAME_FLAG {
-            self.finish_frame();
-            self.escaped = false;
-            return;
+        if let Some(cmd) = self.parser.push(byte) {
+            self.handle_cmd(cmd);
         }
-
-        if byte == QS_FRAME_ESCAPE {
-            self.escaped = true;
-            return;
-        }
-
-        let value = if self.escaped {
-            self.escaped = false;
-            byte ^ QS_FRAME_ESCAPE_XOR
-        } else {
-            byte
-        };
-
-        if self.frame.len() >= MAX_RX_FRAME {
-            eprintln!("QS-RX frame exceeded {MAX_RX_FRAME} bytes; dropping");
-            self.frame.clear();
-            self.escaped = false;
-            self.report_error(0x50);
-            return;
-        }
-
-        self.frame.push(value);
     }
 
-    fn finish_frame(&mut self) {
-        if self.frame.is_empty() {
-            return;
-        }
-
-        let mut frame = Vec::new();
-        std::mem::swap(&mut frame, &mut self.frame);
-        self.handle_frame(&frame);
-    }
-
-    fn handle_frame(&self, frame: &[u8]) {
-        if frame.len() < 3 {
-            self.report_error(0x50);
-            return;
-        }
-
-        let (data, checksum_slice) = frame.split_at(frame.len() - 1);
-        let checksum = checksum_slice[0];
-        let mut sum: u8 = 0;
-        for byte in data {
-            sum = sum.wrapping_add(*byte);
-        }
-
-        if sum.wrapping_add(checksum) != 0xFF {
-            eprintln!("QS-RX checksum mismatch (sum={sum:#04x}, checksum={checksum:#04x})");
-            self.report_error(0x51);
-            return;
-        }
-
-        if data.len() < 2 {
-            self.report_error(0x52);
-            return;
-        }
-
-        let record = data[1];
-        let payload = &data[2..];
-
-        match record {
-            QS_RX_INFO => {
+    fn handle_cmd(&self, cmd: RxCmd) {
+        match cmd {
+            RxCmd::Info => {
                 if let Err(err) = self.port.emit_target_info(&TargetInfo::default()) {
-                    eprintln!("failed to emit target info for QS-RX: {err}");
+                    eprintln!("QS-RX INFO error: {err}");
                 }
             }
-            QS_RX_COMMAND => {
-                self.handle_command(payload);
+            RxCmd::Reset => {
+                eprintln!("QS-RX RESET (not implemented in this demo)");
             }
-            other => {
-                eprintln!("unsupported QS-RX record {other}");
-                self.report_error(0x43);
+            RxCmd::Command { id, p1, p2, p3 } => {
+                self.ack(rx_cmd::COMMAND);
+                println!("QS command id={id} params=[{p1}, {p2}, {p3}]");
+                self.done(rx_cmd::COMMAND);
+            }
+            RxCmd::TestSetup => {
+                clear_test_probes();
+                self.ack_done(rx_cmd::TEST_SETUP);
+            }
+            RxCmd::TestTeardown => {
+                clear_test_probes();
+                self.ack_done(rx_cmd::TEST_TEARDOWN);
+            }
+            RxCmd::TestContinue => {
+                self.ack_done(rx_cmd::TEST_CONTINUE);
+            }
+            RxCmd::TestProbe { fn_ptr, data } => {
+                set_test_probe(fn_ptr, data);
+                self.ack_done(rx_cmd::TEST_PROBE);
+            }
+            RxCmd::Event { prio, signal, .. } => {
+                if let Some(kernel) = KERNEL.get() {
+                    let _ = kernel.post(
+                        ActiveObjectId::new(prio),
+                        DynEvent::empty_dyn(Signal(signal)),
+                    );
+                }
+                self.ack_done(rx_cmd::EVENT);
+            }
+            RxCmd::GlbFilter { bits } => {
+                self.port.set_filter(GlbFilter::from_bytes(bits));
+                self.ack_done(rx_cmd::GLB_FILTER);
+            }
+            // Acknowledge the remaining commands without acting on them.
+            RxCmd::Tick { .. }       => self.ack_done(rx_cmd::TICK),
+            RxCmd::AoFilter { .. }   => self.ack_done(rx_cmd::AO_FILTER),
+            RxCmd::LocFilter { .. }  => self.ack_done(rx_cmd::LOC_FILTER),
+            RxCmd::CurrObj { .. }    => self.ack_done(rx_cmd::CURR_OBJ),
+            RxCmd::QueryCurr { .. }  => self.ack_done(rx_cmd::QUERY_CURR),
+            RxCmd::Peek { .. }       => self.ack_done(rx_cmd::PEEK),
+            RxCmd::Poke { .. }       => self.ack_done(rx_cmd::POKE),
+            RxCmd::Fill { .. }       => self.ack_done(rx_cmd::FILL),
+            RxCmd::Unknown { cmd, .. } => {
+                eprintln!("unknown QS-RX record {cmd:#04x}");
+                let _ = self.port.emit_record(QS_RX_STATUS, &[0x80 | 0x43u8], false);
             }
         }
     }
 
-    fn handle_command(&self, payload: &[u8]) {
-        if payload.len() < 13 {
-            eprintln!("QS command payload too short: {} bytes", payload.len());
-            self.report_error(0x50);
-            return;
-        }
-
-        let cmd_id = payload[0];
-        let param1 = u32::from_le_bytes(payload[1..5].try_into().expect("param1"));
-        let param2 = u32::from_le_bytes(payload[5..9].try_into().expect("param2"));
-        let param3 = u32::from_le_bytes(payload[9..13].try_into().expect("param3"));
-
-        self.report_ack(QS_RX_COMMAND);
-        self.dispatch_command(cmd_id, [param1, param2, param3]);
-        self.report_done(QS_RX_COMMAND);
+    fn ack(&self, rec_id: u8) {
+        let _ = self.port.emit_record(QS_RX_STATUS, &[rec_id], false);
     }
 
-    fn dispatch_command(&self, cmd_id: u8, params: [u32; 3]) {
-        println!(
-            "QS command received: id={cmd_id}, param1={}, param2={}, param3={}",
-            params[0], params[1], params[2]
-        );
+    fn done(&self, rec_id: u8) {
+        let _ = self.port.emit_record(QS_TARGET_DONE, &[rec_id], true);
     }
 
-    fn report_ack(&self, rec_id: u8) {
-        if let Err(err) = self.port.emit_record(QS_RX_STATUS, &[rec_id], false) {
-            eprintln!("failed to emit QS-RX ack: {err}");
-        }
-    }
-
-    fn report_done(&self, rec_id: u8) {
-        if let Err(err) = self.port.emit_record(QS_TARGET_DONE, &[rec_id], true) {
-            eprintln!("failed to emit QS target-done: {err}");
-        }
-    }
-
-    fn report_error(&self, code: u8) {
-        let payload = [0x80 | code];
-        if let Err(err) = self.port.emit_record(QS_RX_STATUS, &payload, false) {
-            eprintln!("failed to emit QS-RX error: {err}");
-        }
+    fn ack_done(&self, rec_id: u8) {
+        self.ack(rec_id);
+        self.done(rec_id);
     }
 }
 
