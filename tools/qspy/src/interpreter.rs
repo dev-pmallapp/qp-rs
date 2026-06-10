@@ -6,7 +6,7 @@ use crate::cursor::Cursor;
 use crate::sizes::TargetSizes;
 use crate::QsFrame;
 use qs::predefined;
-use qs::records::{infra, qep, qf, qf::time_evt, sched};
+use qs::records::{infra, qep, qf, qf::time_evt, qxk, sched};
 use qs::{
     FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64, FMT_I8_ENUM, FMT_MEM,
     FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
@@ -112,6 +112,20 @@ impl FrameInterpreter {
             sched::NEXT   => self.handle_sched_next(&frame.payload, &mut lines),
             sched::IDLE   => self.handle_sched_idle(&frame.payload, &mut lines),
 
+            // ── QXK: semaphore ────────────────────────────────────────────
+            qxk::SEM_TAKE          => self.handle_sem(&frame.payload, "Sem-Take ", &mut lines),
+            qxk::SEM_BLOCK         => self.handle_sem(&frame.payload, "Sem-Blk  ", &mut lines),
+            qxk::SEM_SIGNAL        => self.handle_sem(&frame.payload, "Sem-Sig  ", &mut lines),
+            qxk::SEM_BLOCK_ATTEMPT => self.handle_sem(&frame.payload, "Sem-BlkA ", &mut lines),
+
+            // ── QXK: mutex ────────────────────────────────────────────────
+            qxk::MTX_LOCK           => self.handle_mtx(&frame.payload, "Mtx-Lock ", &mut lines),
+            qxk::MTX_BLOCK          => self.handle_mtx(&frame.payload, "Mtx-Blk  ", &mut lines),
+            qxk::MTX_UNLOCK         => self.handle_mtx(&frame.payload, "Mtx-Unlk ", &mut lines),
+            qxk::MTX_LOCK_ATTEMPT   => self.handle_mtx(&frame.payload, "Mtx-LockA", &mut lines),
+            qxk::MTX_BLOCK_ATTEMPT  => self.handle_mtx(&frame.payload, "Mtx-BlkA ", &mut lines),
+            qxk::MTX_UNLOCK_ATTEMPT => self.handle_mtx(&frame.payload, "Mtx-UnlkA", &mut lines),
+
             // ── Infrastructure / test back-channel ────────────────────────
             infra::TEST_PAUSED => lines.push("           TstPause".to_string()),
             infra::TEST_PROBE  => self.handle_test_probe(&frame.payload, &mut lines),
@@ -121,10 +135,10 @@ impl FrameInterpreter {
             infra::QF_RUN      => lines.push("           QF RUN".to_string()),
 
             // ── QSPY back-channel ─────────────────────────────────────────
-            65 => lines.push(format!(
+            infra::TARGET_DONE => lines.push(format!(
                 "           Trg-Done rec={}", frame.payload.first().copied().unwrap_or(0)
             )),
-            66 => self.handle_rx_status(&frame.payload, &mut lines),
+            infra::RX_STATUS => self.handle_rx_status(&frame.payload, &mut lines),
 
             // ── User records ──────────────────────────────────────────────
             rec if rec >= 100 || self.dict.users.contains_key(&rec)
@@ -717,6 +731,39 @@ impl FrameInterpreter {
             cur.read_u8(), cur.read_u8(),
         ) {
             lines.push(format!("{ts:010} {label} Nesting={nesting},Pri={prio}"));
+        }
+    }
+
+    // ── QXK semaphore / mutex handlers ───────────────────────────────────────
+
+    /// Semaphore records (71–74): [ts | sem_ptr(8) | thread_prio(1) | count(2)]
+    fn handle_sem(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sem), Some(prio), Some(count)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u64(),
+            cur.read_u8(),
+            cur.read_u16(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Pri={prio},Cnt={count}",
+                self.obj_str(sem)
+            ));
+        }
+    }
+
+    /// Mutex records (75–80): [ts | mtx_ptr(8) | thread_prio(1)]
+    fn handle_mtx(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(mtx), Some(prio)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u64(),
+            cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Pri={prio}",
+                self.obj_str(mtx)
+            ));
         }
     }
 

@@ -16,8 +16,10 @@ mod record;
 
 pub mod predefined;
 pub mod records;
+pub mod rx;
 
 pub use predefined::TargetInfo;
+pub use rx::{RxCmd, RxParser};
 pub use record::{
     make_format, UserRecordBuilder, FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64,
     FMT_I8_ENUM, FMT_MEM, FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
@@ -92,6 +94,7 @@ pub struct Tracer<B: TraceBackend> {
     cfg: QsConfig,
     seq: u8,
     epoch: SystemTime,
+    filter: GlbFilter,
 }
 
 #[derive(Clone)]
@@ -106,7 +109,18 @@ impl<B: TraceBackend> Tracer<B> {
             cfg,
             seq: 0,
             epoch: SystemTime::now(),
+            filter: GlbFilter::allow_all(),
         }
+    }
+
+    /// Replace the global filter.  Records whose bit is 0 are silently dropped.
+    pub fn set_filter(&mut self, filter: GlbFilter) {
+        self.filter = filter;
+    }
+
+    /// Returns a reference to the current global filter.
+    pub fn filter(&self) -> &GlbFilter {
+        &self.filter
     }
 
     pub fn into_handle(self) -> TracerHandle<B> {
@@ -121,6 +135,14 @@ impl<B: TraceBackend> Tracer<B> {
         payload: &[u8],
         with_timestamp: bool,
     ) -> Result<QsRecord, TraceError> {
+        if !self.filter.is_allowed(record_type) {
+            return Ok(QsRecord {
+                seq: self.seq,
+                record_type,
+                timestamp: None,
+                payload: Vec::new(),
+            });
+        }
         if payload.len() > self.cfg.max_record_len {
             return Err(TraceError::PayloadTooLarge(payload.len()));
         }
@@ -198,6 +220,11 @@ impl<B: TraceBackend> Tracer<B> {
 }
 
 impl<B: TraceBackend + 'static> TracerHandle<B> {
+    /// Replace the global filter on the underlying tracer.
+    pub fn set_filter(&self, filter: GlbFilter) {
+        self.inner.lock().unwrap().set_filter(filter);
+    }
+
     pub fn emit(&self, record_type: u8, payload: &[u8]) -> Result<QsRecord, TraceError> {
         self.emit_internal(record_type, payload, false)
     }
@@ -242,6 +269,51 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
 }
 
 pub type TraceHook = Arc<dyn Fn(u8, &[u8], bool) -> Result<(), TraceError> + Send + Sync>;
+
+/// 128-bit per-record-type filter.
+///
+/// Each bit position corresponds to a QS record type (0–127). When a bit is 0
+/// the corresponding record is suppressed before reaching the backend.
+/// Equivalent to `QS_GLB_FILTER()` in QP/C++.
+#[derive(Clone, Debug)]
+pub struct GlbFilter {
+    bits: [u64; 2],
+}
+
+impl GlbFilter {
+    /// Allow all record types (all bits set).
+    pub const fn allow_all() -> Self {
+        Self { bits: [u64::MAX, u64::MAX] }
+    }
+
+    /// Block all record types (all bits cleared).
+    pub const fn deny_all() -> Self {
+        Self { bits: [0, 0] }
+    }
+
+    /// Allow a single record type.
+    pub fn allow(&mut self, record: u8) {
+        let (word, bit) = Self::addr(record);
+        self.bits[word] |= 1u64 << bit;
+    }
+
+    /// Block a single record type.
+    pub fn block(&mut self, record: u8) {
+        let (word, bit) = Self::addr(record);
+        self.bits[word] &= !(1u64 << bit);
+    }
+
+    /// Returns `true` if `record` is allowed.
+    pub fn is_allowed(&self, record: u8) -> bool {
+        let (word, bit) = Self::addr(record);
+        (self.bits[word] >> bit) & 1 != 0
+    }
+
+    fn addr(record: u8) -> (usize, u32) {
+        let r = record as u32;
+        ((r / 64) as usize, r % 64)
+    }
+}
 
 /// Convenience backend that writes frames to stdout; handy for early bring-up.
 pub fn stdout_backend() -> WriterBackend<io::Stdout> {
