@@ -1,6 +1,7 @@
 //! Cooperative kernel and scheduling services (SRS §3.4).
 
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -222,6 +223,8 @@ pub struct Kernel {
     by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
     scheduler: Mutex<SchedulerState>,
+    /// Set by `stop()` to break out of a `run()` loop.
+    stop_flag: AtomicBool,
 }
 
 impl Kernel {
@@ -263,6 +266,60 @@ impl Kernel {
         if let Some(idle_cb) = self.config.idle_callback {
             idle_cb();
         }
+    }
+
+    /// Blocking run loop equivalent to `QF::run()` in QP/C++.
+    ///
+    /// Calls `tick_fn` once per iteration (for advancing time events), then
+    /// drains all pending events. Returns when `stop()` is called.
+    ///
+    /// `start()` is called automatically before the first iteration.
+    pub fn run(&self, mut tick_fn: impl FnMut()) {
+        self.start();
+        self.stop_flag.store(false, Ordering::Release);
+        loop {
+            if self.stop_flag.load(Ordering::Acquire) {
+                break;
+            }
+            tick_fn();
+            self.run_until_idle();
+        }
+    }
+
+    /// Signal the `run()` loop to exit.
+    ///
+    /// Thread-safe; may be called from any context including a signal handler.
+    pub fn stop(&self) {
+        self.stop_flag.store(true, Ordering::Release);
+    }
+
+    /// `true` if any registered AO has queued events.
+    pub fn has_pending_work(&self) -> bool {
+        self.objects.iter().any(|ao| ao.has_events())
+    }
+
+    /// Post `event` to `target` from an ISR context.
+    ///
+    /// Semantically equivalent to `QActive::postFromISR_()` in QP/C++.
+    /// The caller must have entered ISR context with `qk_isr_entry!()`.
+    pub fn post_from_isr(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), KernelError> {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "post_from_isr called outside ISR context"
+        );
+        self.post(target, event)
+    }
+
+    /// Publish `event` to all registered AOs from an ISR context.
+    ///
+    /// Semantically equivalent to `QActive::publishFromISR_()` in QP/C++.
+    /// The caller must have entered ISR context with `qk_isr_entry!()`.
+    pub fn publish_from_isr(&self, signal: Signal, event: DynEvent) {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "publish_from_isr called outside ISR context"
+        );
+        self.publish(signal, event)
     }
 
     /// Returns the kernel configuration.
@@ -346,6 +403,7 @@ impl Kernel {
             by_id,
             trace,
             scheduler: Mutex::new(SchedulerState::default()),
+            stop_flag: AtomicBool::new(false),
         }
     }
 

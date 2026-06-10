@@ -144,6 +144,13 @@ impl PosixQkRuntime {
         self.timers.tick()
     }
 
+    /// Advance the timer wheel from an ISR context.
+    ///
+    /// Caller must have called `qf::qk_isr_entry!()` before this.
+    pub fn tick_from_isr(&self) -> Result<(), QkTimeEventError> {
+        self.timers.tick_from_isr()
+    }
+
     pub fn run_until_idle(&self) {
         self.kernel.run_until_idle();
     }
