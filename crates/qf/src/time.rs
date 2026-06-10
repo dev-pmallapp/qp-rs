@@ -17,6 +17,8 @@ const QS_QF_TIMEEVT_AUTO_DISARM: u8 = 33;
 const QS_QF_TIMEEVT_DISARM_ATTEMPT: u8 = 34;
 /// QS record: Time event successfully disarmed.
 const QS_QF_TIMEEVT_DISARM: u8 = 35;
+/// QS record: Time event counter updated via rearm() without disarm/rearm cycle.
+const QS_QF_TIMEEVT_REARM: u8 = 36;
 /// QS record: Time event posted to target active object.
 const QS_QF_TIMEEVT_POST: u8 = 37;
 
@@ -67,6 +69,9 @@ struct TimeEventInner {
     cfg: TimeEventConfig,
     remaining: u64,
     armed: bool,
+    /// Sticky "was disarmed" flag — set when a one-shot fires or `disarm()`
+    /// is called.  Cleared (and value returned) by `was_disarmed()`.
+    disarmed_flag: bool,
 }
 
 /// Software time event equivalent to `QTimeEvt`.
@@ -91,6 +96,7 @@ impl TimeEvent {
                 cfg: config,
                 remaining: 0,
                 armed: false,
+                disarmed_flag: false,
             }),
             trace: Mutex::new(None),
             meta: Mutex::new(None),
@@ -114,12 +120,46 @@ impl TimeEvent {
             let interval = inner.cfg.interval_ticks.unwrap_or(0);
             inner.armed = false;
             inner.remaining = 0;
+            inner.disarmed_flag = true;
             drop(inner);
             self.emit_disarm(remaining, interval);
         } else {
             drop(inner);
             self.emit_disarm_attempt();
         }
+    }
+
+    /// Update the expiry counter without a full disarm/rearm cycle.
+    ///
+    /// If the time event is **armed**, the counter is updated and the
+    /// function returns `true` (was armed).  If the time event is
+    /// **disarmed**, it is armed with the new timeout and returns `false`
+    /// (was not armed).
+    ///
+    /// Corresponds to `QTimeEvt::rearm()` in QP/C++.
+    pub fn rearm(&self, timeout_ticks: u64) -> bool {
+        let mut inner = self.inner.lock();
+        let was_armed = inner.armed;
+        inner.remaining = timeout_ticks;
+        inner.armed = true;
+        let interval = inner.cfg.interval_ticks.unwrap_or(0);
+        drop(inner);
+        self.emit_rearm(timeout_ticks, interval);
+        was_armed
+    }
+
+    /// Returns and clears the sticky "was disarmed" flag.
+    ///
+    /// The flag is set when:
+    /// - A one-shot time event fires (auto-disarm), or
+    /// - `disarm()` is called on an armed event.
+    ///
+    /// Corresponds to `QTimeEvt::wasDisarmed()` in QP/C++.
+    pub fn was_disarmed(&self) -> bool {
+        let mut inner = self.inner.lock();
+        let flag = inner.disarmed_flag;
+        inner.disarmed_flag = false;
+        flag
     }
 
     pub fn is_armed(&self) -> bool {
@@ -146,12 +186,15 @@ impl TimeEvent {
 
         if inner.remaining == 0 {
             let target = inner.target;
-            inner.armed = inner.cfg.interval_ticks.is_some();
+            let periodic = inner.cfg.interval_ticks.is_some();
+            inner.armed = periodic;
             if let Some(period) = inner.cfg.interval_ticks {
                 inner.remaining = period;
             }
+            if !periodic {
+                inner.disarmed_flag = true;
+            }
             let signal = inner.cfg.signal;
-            let periodic = inner.cfg.interval_ticks.is_some();
             drop(inner);
             if !periodic {
                 self.emit_auto_disarm();
@@ -193,6 +236,20 @@ impl TimerWheel {
             }
         }
         Ok(())
+    }
+
+    /// Advance the timer wheel from an ISR context.
+    ///
+    /// Semantically identical to `tick()` but signals intent that the caller
+    /// is inside an interrupt service routine (`qk_isr_entry!()` was called).
+    ///
+    /// Corresponds to `QTimeEvt::tickFromISR_()` in QP/C++.
+    pub fn tick_from_isr(&self) -> Result<(), TimeEventError> {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "tick_from_isr called outside ISR context"
+        );
+        self.tick()
     }
 }
 
@@ -244,6 +301,24 @@ impl TimeEvent {
                 buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
                 pos += 8;
                 buf[pos..pos + 2].copy_from_slice(&truncate_u16(remaining).to_le_bytes());
+                pos += 2;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(interval).to_le_bytes());
+                pos += 2;
+                buf[pos] = meta.tick_rate;
+                pos + 1
+            });
+        }
+    }
+
+    fn emit_rearm(&self, n_ticks: u64, interval: u64) {
+        if let Some((_, meta)) = self.obtain_trace() {
+            self.emit_trace(QS_QF_TIMEEVT_REARM, true, |buf| {
+                let mut pos = 0;
+                buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
+                pos += 8;
+                buf[pos..pos + 2].copy_from_slice(&truncate_u16(n_ticks).to_le_bytes());
                 pos += 2;
                 buf[pos..pos + 2].copy_from_slice(&truncate_u16(interval).to_le_bytes());
                 pos += 2;

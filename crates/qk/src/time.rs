@@ -36,6 +36,18 @@ impl QkTimerWheel {
         }
         Ok(())
     }
+
+    /// Advance the timer wheel from an ISR context.
+    ///
+    /// Caller must have called `qf::qk_isr_entry!()` before this.
+    /// Corresponds to `QTimeEvt::tickFromISR_()` in QP/C++.
+    pub fn tick_from_isr(&self) -> Result<(), QkTimeEventError> {
+        debug_assert!(
+            qf::isr::in_isr(),
+            "tick_from_isr called outside ISR context"
+        );
+        self.tick()
+    }
 }
 
 #[derive(Debug)]
