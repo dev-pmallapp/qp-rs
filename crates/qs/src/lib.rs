@@ -5,12 +5,32 @@
 //! tools (for example [`qpspy`](https://www.state-machine.com/qtools/qpspy.html))
 //! can interpret the stream.
 
-use std::io::{self, Write};
-use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use thiserror::Error;
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+#[cfg(not(feature = "std"))]
+use core::time::Duration;
+
+#[cfg(feature = "std")]
+use std::io::{self, Write};
+#[cfg(feature = "std")]
+use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+#[cfg(feature = "std")]
+use std::time::SystemTime;
+#[cfg(feature = "std")]
+use std::time::Duration;
+
+use alloc::sync::Arc;
+
+#[cfg(feature = "std")]
+use std::sync::Mutex;
+#[cfg(not(feature = "std"))]
+use spin::Mutex;
 
 mod record;
 
@@ -56,12 +76,35 @@ pub struct QsRecord {
 }
 
 /// Errors that can occur while emitting QS data.
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum TraceError {
-    #[error("payload too large: {0} bytes")]
     PayloadTooLarge(usize),
-    #[error("backend error: {0}")]
-    Backend(#[from] io::Error),
+    #[cfg(feature = "std")]
+    Backend(io::Error),
+    #[cfg(not(feature = "std"))]
+    Backend,
+}
+
+impl core::fmt::Display for TraceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::PayloadTooLarge(size) => write!(f, "payload too large: {} bytes", size),
+            #[cfg(feature = "std")]
+            Self::Backend(err) => write!(f, "backend error: {}", err),
+            #[cfg(not(feature = "std"))]
+            Self::Backend => write!(f, "backend error"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TraceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(err) => Some(err),
+            _ => None,
+        }
+    }
 }
 
 /// Backend trait that consumes HDLC framed bytes.
@@ -70,10 +113,12 @@ pub trait TraceBackend: Send + Sync {
 }
 
 /// Simple backend that writes frames to any `Write` implementation.
+#[cfg(feature = "std")]
 pub struct WriterBackend<W: Write + Send + Sync + 'static> {
     writer: Arc<Mutex<W>>,
 }
 
+#[cfg(feature = "std")]
 impl<W: Write + Send + Sync + 'static> WriterBackend<W> {
     pub fn new(writer: W) -> Self {
         Self {
@@ -82,6 +127,7 @@ impl<W: Write + Send + Sync + 'static> WriterBackend<W> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<W: Write + Send + Sync + 'static> TraceBackend for WriterBackend<W> {
     fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
         let mut guard = self.writer.lock().unwrap();
@@ -95,6 +141,7 @@ pub struct Tracer<B: TraceBackend> {
     backend: B,
     cfg: QsConfig,
     seq: u8,
+    #[cfg(feature = "std")]
     epoch: SystemTime,
     filter: GlbFilter,
 }
@@ -110,6 +157,7 @@ impl<B: TraceBackend> Tracer<B> {
             backend,
             cfg,
             seq: 0,
+            #[cfg(feature = "std")]
             epoch: SystemTime::now(),
             filter: GlbFilter::allow_all(),
         }
@@ -150,13 +198,16 @@ impl<B: TraceBackend> Tracer<B> {
         }
 
         let timestamp = if self.cfg.include_timestamp && with_timestamp {
-            Some(self.epoch.elapsed().unwrap_or_default())
+            #[cfg(feature = "std")]
+            { Some(self.epoch.elapsed().unwrap_or_default()) }
+            #[cfg(not(feature = "std"))]
+            { None }
         } else {
             None
         };
 
         self.seq = self.seq.wrapping_add(1);
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "std"))]
         {
             println!("QS TX record_type={record_type} len={}", payload.len());
         }
@@ -224,7 +275,10 @@ impl<B: TraceBackend> Tracer<B> {
 impl<B: TraceBackend + 'static> TracerHandle<B> {
     /// Replace the global filter on the underlying tracer.
     pub fn set_filter(&self, filter: GlbFilter) {
+        #[cfg(feature = "std")]
         self.inner.lock().unwrap().set_filter(filter);
+        #[cfg(not(feature = "std"))]
+        self.inner.lock().set_filter(filter);
     }
 
     pub fn emit(&self, record_type: u8, payload: &[u8]) -> Result<QsRecord, TraceError> {
@@ -255,14 +309,20 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         payload: &[u8],
         with_timestamp: bool,
     ) -> Result<QsRecord, TraceError> {
+        #[cfg(feature = "std")]
         let mut guard = self.inner.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let mut guard = self.inner.lock();
         guard.record(record_type, payload, with_timestamp)
     }
 
     pub fn hook(&self) -> TraceHook {
         let inner = Arc::clone(&self.inner);
         Arc::new(move |record_type, payload, with_timestamp| {
+            #[cfg(feature = "std")]
             let mut guard = inner.lock().unwrap();
+            #[cfg(not(feature = "std"))]
+            let mut guard = inner.lock();
             guard
                 .record(record_type, payload, with_timestamp)
                 .map(|_| ())
@@ -286,6 +346,13 @@ impl GlbFilter {
     /// Allow all record types (all bits set).
     pub const fn allow_all() -> Self {
         Self { bits: [u64::MAX, u64::MAX] }
+    }
+
+    /// Create a global filter from a raw 16-byte (128-bit) little-endian bitmask.
+    pub fn from_bits(bits: [u8; 16]) -> Self {
+        let low = u64::from_le_bytes(bits[0..8].try_into().unwrap());
+        let high = u64::from_le_bytes(bits[8..16].try_into().unwrap());
+        Self { bits: [low, high] }
     }
 
     /// Block all record types (all bits cleared).
@@ -324,53 +391,61 @@ impl GlbFilter {
     }
 }
 
-/// Convenience backend that writes frames to stdout; handy for early bring-up.
-pub fn stdout_backend() -> WriterBackend<io::Stdout> {
-    WriterBackend::new(io::stdout())
-}
+#[cfg(feature = "std")]
+pub use std_backends::*;
 
-/// Backend that streams QS frames over a TCP connection.
-pub struct TcpBackend {
-    stream: Arc<Mutex<TcpStream>>,
-}
+#[cfg(feature = "std")]
+mod std_backends {
+    use super::*;
 
-impl TcpBackend {
-    /// Establishes a TCP connection to the provided socket address.
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr)?;
-        stream.set_nodelay(true).ok();
-        Ok(Self {
-            stream: Arc::new(Mutex::new(stream)),
-        })
+    /// Convenience backend that writes frames to stdout; handy for early bring-up.
+    pub fn stdout_backend() -> WriterBackend<io::Stdout> {
+        WriterBackend::new(io::stdout())
     }
-}
 
-impl TraceBackend for TcpBackend {
-    fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
-        let mut guard = self.stream.lock().unwrap();
-        guard.write_all(frame).map_err(TraceError::from)
+    /// Backend that streams QS frames over a TCP connection.
+    pub struct TcpBackend {
+        stream: Arc<Mutex<TcpStream>>,
     }
-}
 
-/// Backend that streams QS frames over a UDP socket.
-pub struct UdpBackend {
-    socket: Arc<Mutex<UdpSocket>>,
-}
-
-impl UdpBackend {
-    /// Binds a local UDP socket and connects it to the provided remote address.
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.connect(addr)?;
-        Ok(Self {
-            socket: Arc::new(Mutex::new(socket)),
-        })
+    impl TcpBackend {
+        /// Establishes a TCP connection to the provided socket address.
+        pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+            let stream = TcpStream::connect(addr)?;
+            stream.set_nodelay(true).ok();
+            Ok(Self {
+                stream: Arc::new(Mutex::new(stream)),
+            })
+        }
     }
-}
 
-impl TraceBackend for UdpBackend {
-    fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
-        let guard = self.socket.lock().unwrap();
-        guard.send(frame).map(|_| ()).map_err(TraceError::from)
+    impl TraceBackend for TcpBackend {
+        fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
+            let mut guard = self.stream.lock().unwrap();
+            guard.write_all(frame).map_err(TraceError::from)
+        }
+    }
+
+    /// Backend that streams QS frames over a UDP socket.
+    pub struct UdpBackend {
+        socket: Arc<Mutex<UdpSocket>>,
+    }
+
+    impl UdpBackend {
+        /// Binds a local UDP socket and connects it to the provided remote address.
+        pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+            let socket = UdpSocket::bind("0.0.0.0:0")?;
+            socket.connect(addr)?;
+            Ok(Self {
+                socket: Arc::new(Mutex::new(socket)),
+            })
+        }
+    }
+
+    impl TraceBackend for UdpBackend {
+        fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
+            let guard = self.socket.lock().unwrap();
+            guard.send(frame).map(|_| ()).map_err(TraceError::from)
+        }
     }
 }
