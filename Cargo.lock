@@ -975,6 +975,7 @@ dependencies = [
 name = "qs"
 version = "8.1.1"
 dependencies = [
+ "spin",
  "thiserror",
 ]
 
