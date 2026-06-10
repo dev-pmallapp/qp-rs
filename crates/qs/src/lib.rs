@@ -15,10 +15,12 @@ use thiserror::Error;
 mod record;
 
 pub mod predefined;
+pub mod qutest;
 pub mod records;
 pub mod rx;
 
 pub use predefined::TargetInfo;
+pub use qutest::{clear_test_probes, set_test_probe, take_test_probe};
 pub use rx::{RxCmd, RxParser};
 pub use record::{
     make_format, UserRecordBuilder, FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64,
@@ -307,6 +309,13 @@ impl GlbFilter {
     pub fn is_allowed(&self, record: u8) -> bool {
         let (word, bit) = Self::addr(record);
         (self.bits[word] >> bit) & 1 != 0
+    }
+
+    /// Construct from a 16-byte little-endian bitmask (as received in `RxCmd::GlbFilter`).
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        let lo = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let hi = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        Self { bits: [lo, hi] }
     }
 
     fn addr(record: u8) -> (usize, u32) {

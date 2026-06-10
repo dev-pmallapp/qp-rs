@@ -12,7 +12,7 @@ use qf::time::TimeEvent;
 use qf::{QsConfig, TraceError, TraceHook, Tracer, TracerHandle};
 use qk::{QkKernel, QkKernelBuilder, QkKernelError, QkTimeEventError, QkTimerWheel};
 use qs::predefined::{self, TargetInfo};
-use qs::{stdout_backend, TcpBackend, UdpBackend, WriterBackend};
+use qs::{stdout_backend, GlbFilter, TcpBackend, UdpBackend, WriterBackend};
 
 enum BackendHandle {
     Stdout(TracerHandle<WriterBackend<std::io::Stdout>>),
@@ -107,6 +107,15 @@ impl PosixPort {
     pub fn emit_sig_dict(&self, signal: u16, object: u64, name: &str) -> Result<(), TraceError> {
         let payload = predefined::sig_dict_payload(signal, object, name);
         self.emit_dictionary(predefined::SIG_DICT, &payload)
+    }
+
+    /// Update the global trace filter.  Records whose bit is 0 are suppressed.
+    pub fn set_filter(&self, filter: GlbFilter) {
+        match &self.backend {
+            BackendHandle::Stdout(handle) => handle.set_filter(filter),
+            BackendHandle::Tcp(handle)    => handle.set_filter(filter),
+            BackendHandle::Udp(handle)    => handle.set_filter(filter),
+        }
     }
 }
 
