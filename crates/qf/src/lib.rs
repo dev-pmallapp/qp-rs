@@ -16,14 +16,18 @@ extern crate alloc;
 
 pub mod active;
 pub mod event;
+pub mod event_pool;
 pub mod hsm;
 pub mod kernel;
+pub mod pool;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
 pub use event::{Event, EventHeader, Signal};
+pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
 pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig};
+pub use pool::QMPool;
 #[cfg(feature = "qs")]
 pub use qs::{QsConfig, QsRecord, TraceBackend, Tracer, TracerHandle};
 pub use time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo, TimerWheel};
