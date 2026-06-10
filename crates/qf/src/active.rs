@@ -101,6 +101,21 @@ impl<B: ActiveBehavior> ActiveObject<B> {
         })
     }
 
+    /// Borrow the behavior under its lock and apply `f`.
+    ///
+    /// Used by the kernel host to read active-object state snapshots
+    /// (e.g. current HSM mode, last reading) without exposing the mutex.
+    pub fn with_behavior<R>(&self, f: impl FnOnce(&B) -> R) -> R {
+        let guard = self.behavior.lock();
+        f(&*guard)
+    }
+
+    /// Mutably borrow the behavior under its lock and apply `f`.
+    pub fn with_behavior_mut<R>(&self, f: impl FnOnce(&mut B) -> R) -> R {
+        let mut guard = self.behavior.lock();
+        f(&mut *guard)
+    }
+
     fn pop_event(&self) -> Option<DynEvent> {
         let mut queue = self.queue.lock();
         queue.pop_front()
@@ -110,6 +125,16 @@ impl<B: ActiveBehavior> ActiveObject<B> {
         let trace = self.trace_hook.lock().clone();
         ActiveContext::new(self.id, trace)
     }
+}
+
+/// Erase a typed active-object `Arc` to the [`ActiveRunnable`] trait object.
+///
+/// This is a convenience wrapper around the trait-object coercion
+/// `Arc<ActiveObject<B>> as Arc<dyn ActiveRunnable>`.  It exists because
+/// some `Arc` backends (e.g. `portable_atomic_util::Arc`) do not implement
+/// `CoerceUnsized` on stable Rust.
+pub fn arc_as_runnable<B: ActiveBehavior>(ao: Arc<ActiveObject<B>>) -> ActiveObjectRef {
+    ao as ActiveObjectRef
 }
 
 impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
