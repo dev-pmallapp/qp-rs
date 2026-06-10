@@ -53,6 +53,25 @@ pub mod context;
 pub use context::{ContextFrame, ThreadStack};
 
 use qxk::QxkKernel;
+#[cfg(feature = "hw")]
+use qxk::ScheduleMode;
+
+#[cfg(feature = "hw")]
+#[no_mangle]
+pub static mut CURRENT_THREAD_SP: *mut u8 = core::ptr::null_mut();
+
+#[cfg(feature = "hw")]
+#[no_mangle]
+pub static mut NEXT_THREAD_SP: *mut u8 = core::ptr::null_mut();
+
+#[cfg(feature = "hw")]
+static mut KERNEL_PTR: *const spin::Mutex<QxkKernel> = core::ptr::null();
+
+#[cfg(feature = "hw")]
+const MAX_THREADS: usize = 32;
+
+#[cfg(feature = "hw")]
+static mut THREAD_SPS: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
 
 /// Cortex-M QXK runtime.
 ///
@@ -79,7 +98,24 @@ impl CortexMQxkRuntime {
     pub fn start(&self) {
         self.kernel.lock().start();
         #[cfg(feature = "hw")]
-        Self::set_pendsv_priority_lowest();
+        unsafe {
+            KERNEL_PTR = &*self.kernel as *const spin::Mutex<QxkKernel>;
+            Self::set_pendsv_priority_lowest();
+        }
+    }
+
+    /// Registers a thread's stack pointer with the runtime.
+    pub fn register_thread_sp(&self, _id: u8, _sp: *mut u8) {
+        #[cfg(feature = "hw")]
+        unsafe {
+            let id = _id as usize;
+            if id < MAX_THREADS {
+                THREAD_SPS[id] = _sp;
+                if CURRENT_THREAD_SP.is_null() {
+                    CURRENT_THREAD_SP = _sp;
+                }
+            }
+        }
     }
 
     /// Runs one scheduling cycle: dispatch pending events, then let threads run.
@@ -117,6 +153,24 @@ impl CortexMQxkRuntime {
 
 // ── PendSV / SVC stubs ────────────────────────────────────────────────────────
 
+#[cfg(feature = "hw")]
+#[no_mangle]
+pub unsafe extern "C" fn qxk_schedule() {
+    if KERNEL_PTR.is_null() {
+        return;
+    }
+    let kernel = &*KERNEL_PTR;
+    let guard = kernel.lock();
+    let next_mode = guard.scheduler().plan_next();
+    guard.scheduler().set_active(next_mode);
+    if let ScheduleMode::ExtendedThread { id, .. } = next_mode {
+        let thread_id = id.0 as usize;
+        if thread_id < MAX_THREADS {
+            NEXT_THREAD_SP = THREAD_SPS[thread_id];
+        }
+    }
+}
+
 /// PendSV exception handler (context switch).
 ///
 /// On a real Cortex-M target the linker script must route `PendSV_Handler` here.
@@ -129,19 +183,43 @@ impl CortexMQxkRuntime {
 /// This is an interrupt handler; it must be called only by the processor's
 /// exception entry mechanism.
 #[cfg(feature = "hw")]
+#[unsafe(naked)]
 #[no_mangle]
 pub unsafe extern "C" fn PendSV_Handler() {
-    // TODO: implement in inline assembly for the target triple.
-    // Required assembly steps:
-    //   1. MRS  r0, PSP          ; get current thread SP
-    //   2. STMDB r0!, {r4-r11}   ; save callee-saved registers (+ s16-s31 on FP)
-    //   3. Store r0 to current thread's stack pointer field
-    //   4. Call scheduler to pick next thread (via SVC or direct call)
-    //   5. Load next thread's saved SP into r0
-    //   6. LDMIA r0!, {r4-r11}   ; restore callee-saved registers
-    //   7. MSR PSP, r0           ; set PSP to restored value
-    //   8. BX   LR               ; return from exception
-    core::hint::unreachable_unchecked()
+    core::arch::naked_asm!(
+        "mrs r0, psp",
+        "stmdb r0!, {{r4-r11}}",
+        "ldr r1, =CURRENT_THREAD_SP",
+        "str r0, [r1]",
+        "push {{lr}}",
+        "bl qxk_schedule",
+        "pop {{lr}}",
+        "ldr r1, =NEXT_THREAD_SP",
+        "ldr r0, [r1]",
+        "ldr r2, =CURRENT_THREAD_SP",
+        "str r0, [r2]",
+        "ldmia r0!, {{r4-r11}}",
+        "msr psp, r0",
+        "bx lr"
+    );
+}
+
+#[cfg(feature = "hw")]
+#[no_mangle]
+pub unsafe extern "C" fn rust_svc_handler(frame: *mut ContextFrame) {
+    let pc = (*frame).pc;
+    // PC points to instruction after SVC. The SVC opcode is 2 bytes before PC.
+    let svc_instr_ptr = (pc - 2) as *const u16;
+    let svc_instr = core::ptr::read_volatile(svc_instr_ptr);
+    let svc_num = (svc_instr & 0xFF) as u8;
+
+    match svc_num {
+        0 => {
+            // SVC #0: scheduler lock/unlock/yield.
+            CortexMQxkRuntime::pend_sv();
+        }
+        _ => {}
+    }
 }
 
 /// SVC exception handler (privileged kernel calls).
@@ -149,10 +227,17 @@ pub unsafe extern "C" fn PendSV_Handler() {
 /// Used for operations that must execute at the kernel privilege level:
 /// scheduler lock, thread yield, etc.
 #[cfg(feature = "hw")]
+#[unsafe(naked)]
 #[no_mangle]
 pub unsafe extern "C" fn SVC_Handler() {
-    // TODO: decode SVC number from stacked PC and dispatch.
-    core::hint::unreachable_unchecked()
+    core::arch::naked_asm!(
+        "tst lr, #4",
+        "ite eq",
+        "mrseq r0, msp",
+        "mrsne r0, psp",
+        "b {rust_svc_handler}",
+        rust_svc_handler = sym rust_svc_handler
+    );
 }
 
 #[cfg(test)]
