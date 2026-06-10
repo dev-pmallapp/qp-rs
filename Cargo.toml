@@ -10,6 +10,7 @@ members = [
     "ports/posix",
     "ports/esp32-s3",
     "ports/esp32-c6",
+    "ports/cortex-m",
     "tools/qspy",
 ]
 exclude = ["hal"]

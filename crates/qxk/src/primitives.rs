@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::time::Duration;
 
-use crate::scheduler::QxkScheduler;
+use crate::scheduler::{QxkScheduler, SchedStatus};
 use crate::sync::{Arc, Mutex};
 use crate::thread::{ThreadId, ThreadPriority};
 
@@ -23,6 +23,18 @@ use crate::thread::{ThreadId, ThreadPriority};
 use qf::TraceHook;
 #[cfg(feature = "qs")]
 use qs::records::qxk as rec;
+
+// Fallback record-ID module when the `qs` feature is disabled.
+// The values are never used (emit() is a no-op), but the names must resolve.
+#[cfg(not(feature = "qs"))]
+mod rec {
+    pub const SEM_TAKE:   u8 = 71;
+    pub const SEM_BLOCK:  u8 = 72;
+    pub const SEM_SIGNAL: u8 = 73;
+    pub const MTX_LOCK:   u8 = 75;
+    pub const MTX_BLOCK:  u8 = 76;
+    pub const MTX_UNLOCK: u8 = 77;
+}
 
 /// Error types for synchronization primitives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +250,16 @@ impl Semaphore {
         Ok(())
     }
 
+    /// Signals the semaphore from an ISR context.
+    ///
+    /// Identical to `signal()` but asserts that the caller is inside an ISR
+    /// (i.e. `qk_isr_entry!()` has been called).  Corresponds to
+    /// `QXSemaphore::signalFromISR()` in QP/C++.
+    pub fn signal_from_isr(&self, scheduler: &QxkScheduler) -> SyncResult<()> {
+        debug_assert!(qf::isr::in_isr(), "signal_from_isr called outside ISR context");
+        self.signal(scheduler)
+    }
+
     /// Returns the current count.
     pub fn count(&self) -> usize {
         self.inner.lock().count
@@ -274,6 +296,11 @@ struct MutexInner {
     locked: bool,
     owner: Option<ThreadId>,
     original_priority: Option<u8>,
+    /// Priority ceiling.  When set, the scheduler is locked to this ceiling
+    /// while the mutex is held, preventing lower-priority preemption.
+    ceiling: Option<u8>,
+    /// Saved scheduler lock status applied when ceiling was raised; restored on unlock.
+    ceiling_sched_status: Option<SchedStatus>,
     waiting: Vec<WaitingThread>,
 }
 
@@ -285,11 +312,39 @@ impl MutexPrim {
                 locked: false,
                 owner: None,
                 original_priority: None,
+                ceiling: None,
+                ceiling_sched_status: None,
                 waiting: Vec::new(),
             })),
             #[cfg(feature = "qs")]
             trace: None,
         }
+    }
+
+    /// Creates a priority-ceiling mutex.
+    ///
+    /// While this mutex is held the scheduler is locked at `ceiling`, preventing
+    /// any task with priority ≤ `ceiling` from preempting the holder.  This
+    /// eliminates unbounded priority inversion without full priority inheritance.
+    /// Corresponds to `QXMutex` with `QF_QMPOOL_CTR_SIZE` ceiling in QP/C++.
+    pub fn with_ceiling(ceiling: u8) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(MutexInner {
+                locked: false,
+                owner: None,
+                original_priority: None,
+                ceiling: Some(ceiling),
+                ceiling_sched_status: None,
+                waiting: Vec::new(),
+            })),
+            #[cfg(feature = "qs")]
+            trace: None,
+        }
+    }
+
+    /// Returns the priority ceiling, if one was configured.
+    pub fn ceiling(&self) -> Option<u8> {
+        self.inner.lock().ceiling
     }
 
     /// Attach a QS trace hook.  Records are emitted on lock/unlock.
@@ -327,23 +382,31 @@ impl MutexPrim {
 
     /// Locks the mutex, blocking until available.
     ///
-    /// If the mutex is unlocked, acquires it and returns Ok.
+    /// If the mutex is unlocked, acquires it and returns Ok.  If a priority
+    /// ceiling was configured, the scheduler is locked to that ceiling for the
+    /// duration of the lock (preventing lower-priority preemption).
     /// Otherwise, registers as waiting and returns WouldBlock.
     pub fn lock(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
-        let acquired = {
+        let (acquired, ceiling) = {
             let mut inner = self.inner.lock();
             if !inner.locked {
                 inner.locked = true;
                 inner.owner = Some(thread);
                 inner.original_priority = Some(priority);
-                true
+                (true, inner.ceiling)
             } else {
                 inner.waiting.push(WaitingThread::new(thread, priority));
-                false
+                (false, None)
             }
         };
 
         if acquired {
+            // Apply priority ceiling: lock the scheduler so no task with
+            // priority <= ceiling can preempt the mutex holder.
+            if let Some(c) = ceiling {
+                let status = scheduler.lock(c);
+                self.inner.lock().ceiling_sched_status = Some(status);
+            }
             self.emit(rec::MTX_LOCK, priority);
             Ok(())
         } else {
@@ -358,6 +421,7 @@ impl MutexPrim {
     /// Wakes the highest priority waiting thread if any are blocked.
     pub fn unlock(&self, thread: ThreadId, scheduler: &QxkScheduler) -> SyncResult<()> {
         let thread_prio;
+        let ceiling_status;
         let woken_thread = {
             let mut inner = self.inner.lock();
 
@@ -366,6 +430,7 @@ impl MutexPrim {
             }
 
             thread_prio = inner.original_priority.unwrap_or(0);
+            ceiling_status = inner.ceiling_sched_status.take();
             inner.locked = false;
             inner.owner = None;
             inner.original_priority = None;
@@ -380,6 +445,10 @@ impl MutexPrim {
             }
         };
 
+        // Restore ceiling lock before emitting trace or unblocking waiters.
+        if let Some(status) = ceiling_status {
+            scheduler.unlock(status);
+        }
         self.emit(rec::MTX_UNLOCK, thread_prio);
 
         // Unblock in scheduler (outside lock)
@@ -388,6 +457,15 @@ impl MutexPrim {
         }
 
         Ok(())
+    }
+
+    /// Unlocks the mutex from an ISR context.
+    ///
+    /// Identical to `unlock()` but asserts ISR context.  Corresponds to
+    /// `QXMutex::unlockFromISR()` in QP/C++.
+    pub fn unlock_from_isr(&self, thread: ThreadId, scheduler: &QxkScheduler) -> SyncResult<()> {
+        debug_assert!(qf::isr::in_isr(), "unlock_from_isr called outside ISR context");
+        self.unlock(thread, scheduler)
     }
 
     /// Checks if the mutex is currently locked.
@@ -802,5 +880,79 @@ mod tests {
 
         cv.notify_all(&sched);
         assert_eq!(cv.waiting_count(), 0);
+    }
+
+    // ── Phase 7: priority ceiling + ISR-safe methods ──────────────────────────
+
+    #[test]
+    fn mutex_with_ceiling_locks_scheduler() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
+        let mutex = MutexPrim::with_ceiling(10);
+        assert_eq!(mutex.ceiling(), Some(10));
+        let thread = ThreadId(1);
+
+        // Before lock: a priority-3 task is schedulable.
+        sched.mark_ao_ready(3);
+        assert!(matches!(
+            sched.plan_next(),
+            crate::scheduler::ScheduleMode::ActiveObject { priority: 3 }
+        ));
+
+        // Lock the mutex: scheduler ceiling should be raised to 10.
+        mutex.lock(thread, 3, &sched).expect("lock should succeed");
+        // Priority-3 task is now blocked by ceiling-10 lock.
+        assert!(matches!(sched.plan_next(), crate::scheduler::ScheduleMode::Idle));
+
+        // Unlock: ceiling is restored, priority-3 becomes schedulable again.
+        mutex.unlock(thread, &sched).expect("unlock should succeed");
+        assert!(matches!(
+            sched.plan_next(),
+            crate::scheduler::ScheduleMode::ActiveObject { priority: 3 }
+        ));
+    }
+
+    #[test]
+    fn mutex_without_ceiling_does_not_lock_scheduler() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
+        let mutex = MutexPrim::new();
+        assert_eq!(mutex.ceiling(), None);
+        let thread = ThreadId(2);
+
+        sched.mark_ao_ready(5);
+        mutex.lock(thread, 5, &sched).expect("lock");
+        // No ceiling: AO is still schedulable.
+        assert!(matches!(
+            sched.plan_next(),
+            crate::scheduler::ScheduleMode::ActiveObject { priority: 5 }
+        ));
+        mutex.unlock(thread, &sched).expect("unlock");
+    }
+
+    #[test]
+    fn signal_from_isr_increments_count() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
+        let sem = Semaphore::new(0);
+
+        qf::qk_isr_entry!();
+        sem.signal_from_isr(&sched).expect("signal_from_isr ok");
+        qf::qk_isr_exit!();
+
+        assert_eq!(sem.count(), 1);
+    }
+
+    #[test]
+    fn unlock_from_isr_releases_mutex() {
+        let sched = crate::scheduler::QxkScheduler::new(None);
+        let mutex = MutexPrim::new();
+        let thread = ThreadId(3);
+
+        mutex.try_lock(thread);
+        assert!(mutex.is_locked());
+
+        qf::qk_isr_entry!();
+        mutex.unlock_from_isr(thread, &sched).expect("unlock_from_isr ok");
+        qf::qk_isr_exit!();
+
+        assert!(!mutex.is_locked());
     }
 }
