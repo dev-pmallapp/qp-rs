@@ -81,8 +81,36 @@ pub mod sched {
 pub mod infra {
     pub const TEST_PAUSED: u8 = 58;
     pub const TEST_PROBE:  u8 = 59;
+    /// Host-tool back-channel: target acknowledges a command.
+    pub const TARGET_DONE: u8 = 65;
+    /// Host-tool back-channel: status of last RX command.
+    pub const RX_STATUS:   u8 = 66;
     pub const QUERY_DATA:  u8 = 67;
     pub const PEEK_DATA:   u8 = 68;
     pub const ASSERT_FAIL: u8 = 69;
     pub const QF_RUN:      u8 = 70;
+}
+
+/// QXK extended-kernel record identifiers (71–80).
+pub mod qxk {
+    /// Semaphore taken (count was > 0).
+    pub const SEM_TAKE:           u8 = 71;
+    /// Semaphore wait blocked (count == 0, thread suspended).
+    pub const SEM_BLOCK:          u8 = 72;
+    /// Semaphore signalled (count incremented, waiter possibly woken).
+    pub const SEM_SIGNAL:         u8 = 73;
+    /// Semaphore `try_wait` attempt failed (non-blocking path).
+    pub const SEM_BLOCK_ATTEMPT:  u8 = 74;
+    /// Mutex locked by calling thread.
+    pub const MTX_LOCK:           u8 = 75;
+    /// Mutex lock blocked (already held, thread suspended).
+    pub const MTX_BLOCK:          u8 = 76;
+    /// Mutex unlocked by calling thread.
+    pub const MTX_UNLOCK:         u8 = 77;
+    /// Mutex `try_lock` attempt failed (already held).
+    pub const MTX_LOCK_ATTEMPT:   u8 = 78;
+    /// Mutex `try_lock` attempt failed (non-blocking path, already held).
+    pub const MTX_BLOCK_ATTEMPT:  u8 = 79;
+    /// Mutex `unlock` attempt failed (caller is not the owner).
+    pub const MTX_UNLOCK_ATTEMPT: u8 = 80;
 }
