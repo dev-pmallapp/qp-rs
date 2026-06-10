@@ -7,7 +7,9 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "std"))]
+// `alloc` is needed in both configs: `use alloc::sync::Arc` below is
+// unconditional, and `alloc` is available under `std` too. Gating this to
+// `not(std)` made std builds (e.g. the qspy host tool) fail to resolve `alloc`.
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]
@@ -102,6 +104,13 @@ impl std::error::Error for TraceError {
             Self::Backend(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<io::Error> for TraceError {
+    fn from(err: io::Error) -> Self {
+        Self::Backend(err)
     }
 }
 
