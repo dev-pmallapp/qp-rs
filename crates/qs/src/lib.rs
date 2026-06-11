@@ -365,32 +365,42 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
 /// `(record_type, payload, with_timestamp)`.
 pub type TraceHook = Arc<dyn Fn(u8, &[u8], bool) -> Result<(), TraceError> + Send + Sync>;
 
-/// 128-bit per-record-type filter.
+/// 256-bit per-record-type filter.
 ///
-/// Each bit position corresponds to a QS record type (0–127). When a bit is 0
+/// Each bit position corresponds to a QS record type (0–255). When a bit is 0
 /// the corresponding record is suppressed before reaching the backend.
 /// Equivalent to `QS_GLB_FILTER()` in QP/C++.
+///
+/// The storage is 256 bits (`[u64; 4]`) because record ids are `u8` (0–255);
+/// the SWM application records, for example, occupy 0x80–0x96. The QS/Spy
+/// `GLB_FILTER` wire command only carries 128 bits (records 0–127) — see
+/// [`from_bits`](Self::from_bits) / [`from_bytes`](Self::from_bytes) for how
+/// the upper 128 records are handled.
 #[derive(Clone, Debug)]
 pub struct GlbFilter {
-    bits: [u64; 2],
+    bits: [u64; 4],
 }
 
 impl GlbFilter {
     /// Allow all record types (all bits set).
     pub const fn allow_all() -> Self {
-        Self { bits: [u64::MAX, u64::MAX] }
+        Self { bits: [u64::MAX; 4] }
     }
 
     /// Create a global filter from a raw 16-byte (128-bit) little-endian bitmask.
+    ///
+    /// The 16 bytes set records 0–127; records 128–255 (e.g. the SWM
+    /// application records) are left **allowed**, so a legacy 128-bit
+    /// `GLB_FILTER` command cannot silently suppress them.
     pub fn from_bits(bits: [u8; 16]) -> Self {
         let low = u64::from_le_bytes(bits[0..8].try_into().unwrap());
         let high = u64::from_le_bytes(bits[8..16].try_into().unwrap());
-        Self { bits: [low, high] }
+        Self { bits: [low, high, u64::MAX, u64::MAX] }
     }
 
     /// Block all record types (all bits cleared).
     pub const fn deny_all() -> Self {
-        Self { bits: [0, 0] }
+        Self { bits: [0; 4] }
     }
 
     /// Allow a single record type.
@@ -412,10 +422,13 @@ impl GlbFilter {
     }
 
     /// Construct from a 16-byte little-endian bitmask (as received in `RxCmd::GlbFilter`).
+    ///
+    /// As with [`from_bits`](Self::from_bits), the 16 wire bytes cover records
+    /// 0–127; records 128–255 are left allowed.
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         let lo = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let hi = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        Self { bits: [lo, hi] }
+        Self { bits: [lo, hi, u64::MAX, u64::MAX] }
     }
 
     fn addr(record: u8) -> (usize, u32) {
