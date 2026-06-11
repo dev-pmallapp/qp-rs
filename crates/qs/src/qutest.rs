@@ -32,7 +32,10 @@
 //! });
 //! ```
 
+#[cfg(feature = "std")]
 use std::sync::Mutex;
+#[cfg(not(feature = "std"))]
+use spin::Mutex;
 
 /// Maximum number of simultaneously active test probes (mirrors QP/C++ default of 8).
 pub const MAX_TEST_PROBES: usize = 8;
@@ -98,7 +101,10 @@ static REGISTRY: Mutex<ProbeRegistry> = Mutex::new(ProbeRegistry::new());
 /// Called when `RxCmd::TestProbe` arrives from the host tool.  The next call
 /// to [`take_test_probe`] with the same `fn_ptr` will return `data`.
 pub fn set_test_probe(fn_ptr: u64, data: u32) {
+    #[cfg(feature = "std")]
     REGISTRY.lock().unwrap().set(fn_ptr, data);
+    #[cfg(not(feature = "std"))]
+    REGISTRY.lock().set(fn_ptr, data);
 }
 
 /// Remove and return the probe data for `fn_ptr`, if one is registered.
@@ -106,14 +112,20 @@ pub fn set_test_probe(fn_ptr: u64, data: u32) {
 /// The probe is **consumed** on the first call — subsequent calls for the same
 /// function pointer return `None` until the host registers a new probe.
 pub fn take_test_probe(fn_ptr: u64) -> Option<u32> {
-    REGISTRY.lock().unwrap().take(fn_ptr)
+    #[cfg(feature = "std")]
+    { REGISTRY.lock().unwrap().take(fn_ptr) }
+    #[cfg(not(feature = "std"))]
+    { REGISTRY.lock().take(fn_ptr) }
 }
 
 /// Clear all registered test probes.
 ///
 /// Called when `RxCmd::TestSetup` or `RxCmd::TestTeardown` arrives.
 pub fn clear_test_probes() {
+    #[cfg(feature = "std")]
     REGISTRY.lock().unwrap().clear();
+    #[cfg(not(feature = "std"))]
+    REGISTRY.lock().clear();
 }
 
 /// Build the `QS_TEST_PROBE_GET` (record 59) payload.
