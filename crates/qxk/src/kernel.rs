@@ -30,9 +30,19 @@ pub enum QxkKernelError {
     /// Thread not found.
     ThreadNotFound(ThreadId),
     /// Invalid active object priority.
-    InvalidAoPriority { priority: u8, reason: &'static str },
+    InvalidAoPriority {
+        /// The offending priority value.
+        priority: u8,
+        /// Why the priority was rejected.
+        reason: &'static str,
+    },
     /// Invalid thread priority.
-    InvalidThreadPriority { priority: u8, reason: &'static str },
+    InvalidThreadPriority {
+        /// The offending priority value.
+        priority: u8,
+        /// Why the priority was rejected.
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for QxkKernelError {

@@ -58,12 +58,15 @@ pub struct FotaSession<R: Rf> {
 }
 
 impl<R: Rf> FotaSession<R> {
+    /// Creates a FOTA session for an image of `image_size` bytes, computing the
+    /// number of fixed-size chunks needed to transfer it.
     pub fn new(rf: R, image_size: u32) -> Self {
         let total_chunks =
             (image_size + FOTA_CHUNK_BYTES as u32 - 1) / FOTA_CHUNK_BYTES as u32;
         Self { rf, image_size, total_chunks }
     }
 
+    /// Returns the total number of chunks the image is split into.
     pub fn total_chunks(&self) -> u32 { self.total_chunks }
 
     /// Broadcast a FOTA availability announcement.

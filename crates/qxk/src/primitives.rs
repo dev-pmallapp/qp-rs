@@ -69,6 +69,7 @@ impl fmt::Display for SyncError {
 #[cfg(feature = "std")]
 impl std::error::Error for SyncError {}
 
+/// Result type returned by the QXK synchronization primitives.
 pub type SyncResult<T> = Result<T, SyncError>;
 
 /// Waiting thread information.

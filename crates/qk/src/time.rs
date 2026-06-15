@@ -7,6 +7,8 @@ use qf::TraceHook;
 use crate::kernel::{QkKernel, QkKernelError};
 use crate::sync::Arc;
 
+/// Timer wheel that polls registered [`TimeEvent`]s and posts expired events to
+/// their target active objects through the [`QkKernel`].
 pub struct QkTimerWheel {
     kernel: Arc<QkKernel>,
     events: Vec<Arc<TimeEvent>>,
@@ -14,6 +16,7 @@ pub struct QkTimerWheel {
 }
 
 impl QkTimerWheel {
+    /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
     pub fn new(kernel: Arc<QkKernel>) -> Self {
         let trace = kernel.trace_hook();
         Self {
@@ -23,11 +26,13 @@ impl QkTimerWheel {
         }
     }
 
+    /// Registers a time event with the wheel, wiring up the wheel's trace hook.
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
         self.events.push(event);
     }
 
+    /// Advances the wheel by one tick, posting any events that have expired.
     pub fn tick(&self) -> Result<(), QkTimeEventError> {
         for event in &self.events {
             if let Some((target, evt)) = event.poll() {
@@ -50,8 +55,10 @@ impl QkTimerWheel {
     }
 }
 
+/// Errors that can occur while ticking the QK timer wheel.
 #[derive(Debug)]
 pub enum QkTimeEventError {
+    /// The kernel rejected the posting of an expired time event.
     Kernel(QkKernelError),
 }
 

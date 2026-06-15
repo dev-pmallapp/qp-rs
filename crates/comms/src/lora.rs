@@ -36,19 +36,25 @@ pub struct LoRaRf<D: RfDriver> {
 }
 
 impl<D: RfDriver> LoRaRf<D> {
+    /// Creates a LoRa transport over the given RF driver, session, and TX config.
     pub fn new(driver: D, session: LoRaSession, tx_config: LoRaTxConfig) -> Self {
         let name = driver.chip_name();
         Self { driver, session, tx_config, name, trace_hook: None }
     }
 
+    /// Installs (or clears) the QS trace hook used to emit RF trace records.
     pub fn set_trace_hook(&mut self, hook: Option<TraceHook>) {
         self.trace_hook = hook;
     }
 
+    /// Returns the current LoRaWAN session state.
     pub fn session(&self) -> &LoRaSession { &self.session }
+    /// Returns the transmit configuration (frequency, spreading factor, …).
     pub fn tx_config(&self) -> &LoRaTxConfig { &self.tx_config }
+    /// Returns the underlying radio chip name reported by the driver.
     pub fn chip_name(&self) -> &'static str { self.name }
 
+    /// Initializes the underlying radio hardware.
     pub fn init(&mut self) -> Result<(), CommsError> {
         self.driver.init().map_err(CommsError::from)
     }

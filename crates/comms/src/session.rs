@@ -14,6 +14,8 @@ pub struct LoRaSession {
 }
 
 impl LoRaSession {
+    /// Creates a LoRaWAN session from a device address and the network/app
+    /// session keys, with the uplink frame counter starting at zero.
     pub fn new(dev_addr: [u8; 4], nwk_skey: [u8; 16], app_skey: [u8; 16]) -> Self {
         Self { dev_addr, nwk_skey, app_skey, fcnt_up: 0 }
     }

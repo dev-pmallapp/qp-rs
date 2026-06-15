@@ -3,6 +3,7 @@
 use core::fmt;
 use hal::error::HalError;
 
+/// Errors returned by the comms stack (LoRa transport, MAC, FOTA).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommsError {
     /// Nothing to receive right now.
@@ -17,6 +18,7 @@ pub enum CommsError {
     Fota(FotaError),
 }
 
+/// Errors specific to firmware-over-the-air (FOTA) transfers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FotaError {
     /// Chunk index is out of range.

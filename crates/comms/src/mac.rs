@@ -18,6 +18,7 @@ pub struct CommsAO<D: RfDriver + 'static> {
 }
 
 impl<D: RfDriver + 'static> CommsAO<D> {
+    /// Creates a comms active object wrapping the given LoRa transport.
     pub fn new(rf: LoRaRf<D>) -> Self {
         Self { rf, initialized: false }
     }

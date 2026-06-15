@@ -20,6 +20,7 @@ pub struct RfTxReqPayload {
 }
 
 impl RfTxReqPayload {
+    /// Creates a transmit-request payload for the given data and LoRaWAN FPort.
     pub fn new(data: Vec<u8>, fport: u8) -> Self {
         Self { data, fport }
     }

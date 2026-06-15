@@ -14,13 +14,18 @@ mod sched {
 
 const SCHED_UNLOCKED: u8 = 0xFF;
 
+/// Saved scheduler-lock status, returned by [`QkScheduler::lock`] and passed
+/// back to [`QkScheduler::unlock`] to restore the previous ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedStatus {
+    /// Scheduler is locked at the given priority ceiling.
     Locked(u8),
+    /// Scheduler is unlocked.
     Unlocked,
 }
 
 impl SchedStatus {
+    /// Decodes a status from its raw `u8` encoding (`0xFF` means unlocked).
     pub fn from_raw(raw: u8) -> Self {
         if raw == SCHED_UNLOCKED {
             Self::Unlocked
@@ -29,6 +34,7 @@ impl SchedStatus {
         }
     }
 
+    /// Encodes the status as a raw `u8` (`0xFF` means unlocked).
     pub fn to_raw(self) -> u8 {
         match self {
             Self::Locked(value) => value,
@@ -36,6 +42,7 @@ impl SchedStatus {
         }
     }
 
+    /// Returns `true` if the scheduler is currently locked.
     pub fn is_locked(self) -> bool {
         matches!(self, Self::Locked(_))
     }
@@ -100,18 +107,25 @@ struct State {
     ready: ReadySet,
 }
 
+/// Outcome of a scheduling pass: which priority should run next and which one
+/// it displaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduleDecision {
+    /// Priority selected to run next.
     pub next_prio: u8,
+    /// Priority of the active object that was running before this decision.
     pub previous_prio: u8,
 }
 
+/// O(1) priority scheduler for the QK kernel: a 64-bit ready-set bitmap plus
+/// preemption-threshold and lock-ceiling bookkeeping.
 pub struct QkScheduler {
     state: Mutex<State>,
     trace: Mutex<Option<TraceHook>>,
 }
 
 impl QkScheduler {
+    /// Creates a scheduler with an optional QS trace hook.
     pub fn new(trace: Option<TraceHook>) -> Self {
         Self {
             state: Mutex::new(State::default()),
@@ -119,6 +133,7 @@ impl QkScheduler {
         }
     }
 
+    /// Installs (or clears) the QS trace hook.
     pub fn set_trace_hook(&self, trace: Option<TraceHook>) {
         *self.trace.lock() = trace;
     }
@@ -159,32 +174,40 @@ impl QkScheduler {
         }
     }
 
+    /// Marks the given priority as ready to run.
     pub fn mark_ready(&self, prio: u8) {
         let mut state = self.state.lock();
         state.ready.insert(prio);
     }
 
+    /// Clears the ready flag for the given priority.
     pub fn mark_not_ready(&self, prio: u8) {
         let mut state = self.state.lock();
         state.ready.remove(prio);
     }
 
+    /// Returns `true` if the given priority is currently ready.
     pub fn is_ready(&self, prio: u8) -> bool {
         let state = self.state.lock();
         state.ready.contains(prio)
     }
 
+    /// Clears the entire ready set.
     pub fn reset_ready(&self) {
         let mut state = self.state.lock();
         state.ready.clear();
     }
 
+    /// Records the currently running active object's priority and preemption
+    /// threshold, used to gate subsequent scheduling decisions.
     pub fn configure_active(&self, active_prio: u8, threshold: u8) {
         let mut state = self.state.lock();
         state.active_prio = active_prio;
         state.active_threshold = threshold;
     }
 
+    /// Selects the highest-priority ready task that may preempt the current one
+    /// (above both the active threshold and the lock ceiling), or `None`.
     pub fn plan_activation(&self) -> Option<ScheduleDecision> {
         let mut state = self.state.lock();
 
@@ -203,11 +226,15 @@ impl QkScheduler {
         })
     }
 
+    /// Returns `true` if any ready task could preempt the current one under the
+    /// active threshold and lock ceiling.
     pub fn has_ready_to_run(&self) -> bool {
         let state = self.state.lock();
         matches!(state.ready.max(), Some(prio) if prio > state.active_threshold && prio > state.lock_ceiling)
     }
 
+    /// Like [`plan_activation`](Self::plan_activation) but gated by an explicit
+    /// initial threshold — used after a dispatch completes to pick the follow-up.
     pub fn next_after_dispatch(&self, initial_threshold: u8) -> Option<ScheduleDecision> {
         let mut state = self.state.lock();
 
@@ -226,6 +253,8 @@ impl QkScheduler {
         })
     }
 
+    /// Commits a planned [`ScheduleDecision`], making `next_prio` the active
+    /// priority with the given threshold and emitting a `NEXT` trace record.
     pub fn commit_activation(&self, decision: &ScheduleDecision, next_threshold: u8) {
         let mut state = self.state.lock();
         debug_assert_eq!(state.next_prio, decision.next_prio);
@@ -241,6 +270,8 @@ impl QkScheduler {
         }
     }
 
+    /// Restores the active priority and threshold after a preemption returns,
+    /// emitting a `NEXT` or `IDLE` trace record as appropriate.
     pub fn restore_active(&self, prio: u8, threshold: u8) {
         let mut state = self.state.lock();
         let previous = state.active_prio;
@@ -258,14 +289,17 @@ impl QkScheduler {
         }
     }
 
+    /// Returns the priority that would preempt the current task, if any.
     pub fn preemption_candidate(&self) -> Option<u8> {
         self.plan_activation().map(|decision| decision.next_prio)
     }
 
+    /// Returns the priority planned to run next (0 if none is planned).
     pub fn next_priority(&self) -> u8 {
         self.state.lock().next_prio
     }
 
+    /// Returns the priority of the currently active task.
     pub fn current_priority(&self) -> u8 {
         self.state.lock().active_prio
     }

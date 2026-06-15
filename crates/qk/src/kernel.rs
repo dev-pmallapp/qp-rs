@@ -26,12 +26,15 @@ struct ActiveSlot {
     threshold: u8,
 }
 
+/// Builder for a [`QkKernel`]: register active objects (optionally with a
+/// preemption threshold), attach a trace hook, then [`build`](Self::build).
 pub struct QkKernelBuilder {
     registrations: Vec<Registration>,
     trace: Option<TraceHook>,
 }
 
 impl QkKernelBuilder {
+    /// Creates an empty builder.
     pub fn new() -> Self {
         Self {
             registrations: Vec::new(),
@@ -39,6 +42,8 @@ impl QkKernelBuilder {
         }
     }
 
+    /// Registers an active object using its own priority as its preemption
+    /// threshold (i.e. fully preemptible by any higher priority).
     pub fn register(mut self, object: ActiveObjectRef) -> Result<Self, QkKernelError> {
         let priority = object.priority();
         self.validate_priority(priority)?;
@@ -52,6 +57,9 @@ impl QkKernelBuilder {
         Ok(self)
     }
 
+    /// Registers an active object with an explicit preemption threshold; the
+    /// AO can only be preempted by priorities greater than `threshold`
+    /// (which must be `>=` the AO's own priority).
     pub fn register_with_threshold(
         mut self,
         object: ActiveObjectRef,
@@ -102,22 +110,39 @@ impl QkKernelBuilder {
         Ok(())
     }
 
+    /// Attaches a QS trace hook to the kernel and its scheduler.
     pub fn with_trace_hook(mut self, hook: TraceHook) -> Self {
         self.trace = Some(hook);
         self
     }
 
+    /// Validates the registrations and constructs the [`QkKernel`].
     pub fn build(self) -> Result<QkKernel, QkKernelError> {
         QkKernel::new(self.registrations, self.trace)
     }
 }
 
+/// Errors returned when building or operating the QK kernel.
 #[derive(Debug)]
 pub enum QkKernelError {
+    /// Two active objects were registered at the same priority.
     DuplicatePriority(u8),
+    /// No active object is registered for the given id.
     NotFound(ActiveObjectId),
-    InvalidPriority { priority: u8, reason: &'static str },
-    InvalidThreshold { threshold: u8, priority: u8 },
+    /// A priority was outside the supported `1..=63` range (0 is reserved).
+    InvalidPriority {
+        /// The offending priority value.
+        priority: u8,
+        /// Why the priority was rejected.
+        reason: &'static str,
+    },
+    /// A preemption threshold was smaller than the AO's own priority.
+    InvalidThreshold {
+        /// The offending threshold value.
+        threshold: u8,
+        /// The AO priority the threshold must be `>=`.
+        priority: u8,
+    },
 }
 
 impl fmt::Display for QkKernelError {
@@ -143,6 +168,9 @@ impl fmt::Display for QkKernelError {
 #[cfg(feature = "std")]
 impl std::error::Error for QkKernelError {}
 
+/// Preemptive, priority-based QK kernel: dispatches registered active objects,
+/// allowing higher-priority AOs to preempt lower-priority ones subject to each
+/// AO's preemption threshold and the scheduler lock ceiling.
 pub struct QkKernel {
     scheduler: Arc<QkScheduler>,
     slots: Vec<Option<ActiveSlot>>,
@@ -151,6 +179,7 @@ pub struct QkKernel {
 }
 
 impl QkKernel {
+    /// Returns a new [`QkKernelBuilder`].
     pub fn builder() -> QkKernelBuilder {
         QkKernelBuilder::new()
     }
@@ -185,18 +214,26 @@ impl QkKernel {
         })
     }
 
+    /// Returns a shared handle to the underlying scheduler.
     pub fn scheduler(&self) -> Arc<QkScheduler> {
         Arc::clone(&self.scheduler)
     }
 
+    /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
     }
 
+    /// Locks the scheduler at `ceiling`, preventing preemption by tasks at or
+    /// below it. Returns the previous status to pass to [`unlock_scheduler`].
+    ///
+    /// [`unlock_scheduler`]: Self::unlock_scheduler
     pub fn lock_scheduler(&self, ceiling: u8) -> SchedStatus {
         self.scheduler.lock(ceiling)
     }
 
+    /// Restores a previous scheduler-lock status and runs any task that became
+    /// eligible to preempt while the lock was held.
     pub fn unlock_scheduler(&self, status: SchedStatus) {
         let should_activate = matches!(status, SchedStatus::Locked(_));
         self.scheduler.unlock(status);
@@ -208,6 +245,8 @@ impl QkKernel {
         }
     }
 
+    /// Starts every registered active object and marks those with queued events
+    /// as ready. Call once before driving the dispatch loop.
     pub fn start(&self) {
         for slot in self.slots.iter().flatten() {
             slot.object.start(self.trace.clone());
@@ -217,6 +256,8 @@ impl QkKernel {
         }
     }
 
+    /// Posts an event to the target active object's queue and marks it ready.
+    /// Does not itself run the scheduler.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), QkKernelError> {
         let prio = self
             .id_to_prio
@@ -234,6 +275,7 @@ impl QkKernel {
         Ok(())
     }
 
+    /// Posts an event and immediately drives the scheduler until idle.
     pub fn post_and_run(
         &self,
         target: ActiveObjectId,
@@ -244,6 +286,8 @@ impl QkKernel {
         Ok(())
     }
 
+    /// Broadcasts an event (with `signal`) to every registered active object,
+    /// marking each as ready. Does not itself run the scheduler.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
         for (prio, slot_opt) in self.slots.iter().enumerate() {
             if let Some(slot) = slot_opt {
@@ -258,11 +302,14 @@ impl QkKernel {
         }
     }
 
+    /// Broadcasts an event to all active objects and drives the scheduler until idle.
     pub fn publish_and_run(&self, signal: Signal, event: DynEvent) {
         self.publish(signal, event);
         self.run_until_idle();
     }
 
+    /// Runs the single highest-priority ready task (with nested preemption),
+    /// returning `true` if any task ran.
     pub fn dispatch_once(&self) -> bool {
         match self.scheduler.plan_activation() {
             Some(decision) => {
@@ -273,10 +320,12 @@ impl QkKernel {
         }
     }
 
+    /// Repeatedly dispatches ready tasks until none remain.
     pub fn run_until_idle(&self) {
         while self.dispatch_once() {}
     }
 
+    /// Returns `true` if any task is ready to run under current constraints.
     pub fn has_pending_work(&self) -> bool {
         self.scheduler.has_ready_to_run()
     }
