@@ -1,7 +1,5 @@
 //! CSR read/write helpers for RISC-V
 
-use core::arch::asm;
-
 pub const MSTATUS: u32 = 0x300;
 pub const MIE:     u32 = 0x304;
 pub const MIP:     u32 = 0x344;
@@ -12,9 +10,16 @@ pub const MTVEC:   u32 = 0x305;
 /// Read a CSR.
 #[inline(always)]
 pub fn csrr<const CSR: u32>() -> u32 {
-    let val: u32;
-    unsafe { asm!("csrr {0}, {1}", out(reg) val, const CSR, options(nomem, nostack)) }
-    val
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    {
+        let val: u32;
+        unsafe { core::arch::asm!("csrr {0}, {1}", out(reg) val, const CSR, options(nomem, nostack)) }
+        val
+    }
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    {
+        0
+    }
 }
 
 /// Write a CSR.
@@ -23,7 +28,14 @@ pub fn csrr<const CSR: u32>() -> u32 {
 /// Writing CSRs changes machine-mode privilege state.
 #[inline(always)]
 pub unsafe fn csrw<const CSR: u32>(val: u32) {
-    unsafe { asm!("csrw {0}, {1}", const CSR, in(reg) val, options(nomem, nostack)) }
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    {
+        unsafe { core::arch::asm!("csrw {0}, {1}", const CSR, in(reg) val, options(nomem, nostack)) }
+    }
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    {
+        let _ = val;
+    }
 }
 
 /// Atomic read-and-set bits in a CSR.
@@ -32,9 +44,17 @@ pub unsafe fn csrw<const CSR: u32>(val: u32) {
 /// Writing CSRs changes machine-mode privilege state.
 #[inline(always)]
 pub unsafe fn csrrs<const CSR: u32>(mask: u32) -> u32 {
-    let old: u32;
-    unsafe { asm!("csrrs {0}, {1}, {2}", out(reg) old, const CSR, in(reg) mask, options(nomem, nostack)) }
-    old
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    {
+        let old: u32;
+        unsafe { core::arch::asm!("csrrs {0}, {1}, {2}", out(reg) old, const CSR, in(reg) mask, options(nomem, nostack)) }
+        old
+    }
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    {
+        let _ = mask;
+        0
+    }
 }
 
 /// Atomic read-and-clear bits in a CSR.
@@ -43,9 +63,17 @@ pub unsafe fn csrrs<const CSR: u32>(mask: u32) -> u32 {
 /// Writing CSRs changes machine-mode privilege state.
 #[inline(always)]
 pub unsafe fn csrrc<const CSR: u32>(mask: u32) -> u32 {
-    let old: u32;
-    unsafe { asm!("csrrc {0}, {1}, {2}", out(reg) old, const CSR, in(reg) mask, options(nomem, nostack)) }
-    old
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    {
+        let old: u32;
+        unsafe { core::arch::asm!("csrrc {0}, {1}, {2}", out(reg) old, const CSR, in(reg) mask, options(nomem, nostack)) }
+        old
+    }
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    {
+        let _ = mask;
+        0
+    }
 }
 
 /// Macro for reading a CSR

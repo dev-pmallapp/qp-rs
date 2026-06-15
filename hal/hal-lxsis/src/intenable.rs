@@ -5,31 +5,65 @@ use hal::error::{HalError, HalResult};
 use hal::interrupt::{InterruptController, InterruptPriority};
 
 fn read_intenable() -> u32 {
-    let v: u32;
-    unsafe { asm!("rsr.intenable {0}", out(reg) v, options(nomem, nostack)) }
-    v
+    #[cfg(target_arch = "xtensa")]
+    {
+        let v: u32;
+        unsafe { core::arch::asm!("rsr.intenable {0}", out(reg) v, options(nomem, nostack)) }
+        v
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        0
+    }
 }
 
 unsafe fn write_intenable(val: u32) {
-    unsafe { asm!("wsr.intenable {0}", in(reg) val, options(nomem, nostack)) }
-    unsafe { asm!("isync", options(nostack, preserves_flags)) }
+    #[cfg(target_arch = "xtensa")]
+    {
+        unsafe { core::arch::asm!("wsr.intenable {0}", in(reg) val, options(nomem, nostack)) }
+        unsafe { core::arch::asm!("isync", options(nostack, preserves_flags)) }
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        let _ = val;
+    }
 }
 
 fn read_interrupt() -> u32 {
-    let v: u32;
-    unsafe { asm!("rsr.interrupt {0}", out(reg) v, options(nomem, nostack)) }
-    v
+    #[cfg(target_arch = "xtensa")]
+    {
+        let v: u32;
+        unsafe { core::arch::asm!("rsr.interrupt {0}", out(reg) v, options(nomem, nostack)) }
+        v
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        0
+    }
 }
 
-/// Set a software interrupt (if the source supports it).
 #[allow(dead_code)]
 unsafe fn write_intset(mask: u32) {
-    unsafe { asm!("wsr.intset {0}", in(reg) mask, options(nomem, nostack)) }
+    #[cfg(target_arch = "xtensa")]
+    {
+        unsafe { core::arch::asm!("wsr.intset {0}", in(reg) mask, options(nomem, nostack)) }
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        let _ = mask;
+    }
 }
 
 /// Clear a software interrupt.
 unsafe fn write_intclear(mask: u32) {
-    unsafe { asm!("wsr.intclear {0}", in(reg) mask, options(nomem, nostack)) }
+    #[cfg(target_arch = "xtensa")]
+    {
+        unsafe { core::arch::asm!("wsr.intclear {0}", in(reg) mask, options(nomem, nostack)) }
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        let _ = mask;
+    }
 }
 
 /// Intenable controller structure

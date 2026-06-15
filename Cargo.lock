@@ -652,6 +652,20 @@ name = "hal"
 version = "0.1.0"
 
 [[package]]
+name = "hal-cmsis"
+version = "0.1.0"
+dependencies = [
+ "hal",
+]
+
+[[package]]
+name = "hal-lxsis"
+version = "0.1.0"
+dependencies = [
+ "hal",
+]
+
+[[package]]
 name = "hal-rvsis"
 version = "0.1.0"
 dependencies = [
@@ -935,6 +949,7 @@ dependencies = [
 name = "qf-port-cortex-m"
 version = "8.1.1"
 dependencies = [
+ "hal-cmsis",
  "qf",
  "qk",
  "qxk",
@@ -946,6 +961,8 @@ name = "qf-port-esp32-c6"
 version = "8.1.1"
 dependencies = [
  "critical-section",
+ "hal",
+ "hal-rvsis",
  "qf",
  "qk",
  "qs",
@@ -956,6 +973,8 @@ name = "qf-port-esp32-s3"
 version = "8.1.1"
 dependencies = [
  "critical-section",
+ "hal",
+ "hal-lxsis",
  "qf",
  "qk",
  "qs",
@@ -968,6 +987,28 @@ dependencies = [
  "qf",
  "qk",
  "qs",
+]
+
+[[package]]
+name = "qf-port-riscv"
+version = "8.1.1"
+dependencies = [
+ "hal-rvsis",
+ "qf",
+ "qk",
+ "qxk",
+ "spin",
+]
+
+[[package]]
+name = "qf-port-xtensa"
+version = "8.1.1"
+dependencies = [
+ "hal-lxsis",
+ "qf",
+ "qk",
+ "qxk",
+ "spin",
 ]
 
 [[package]]

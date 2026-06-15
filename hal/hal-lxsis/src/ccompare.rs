@@ -5,20 +5,41 @@ use hal::error::{HalError, HalResult};
 use hal::timer::{Timer, TimerMode};
 
 fn read_ccount() -> u32 {
-    let v: u32;
-    unsafe { asm!("rsr.ccount {0}", out(reg) v, options(nomem, nostack)) }
-    v
+    #[cfg(target_arch = "xtensa")]
+    {
+        let v: u32;
+        unsafe { core::arch::asm!("rsr.ccount {0}", out(reg) v, options(nomem, nostack)) }
+        v
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        0
+    }
 }
 
 fn read_ccompare0() -> u32 {
-    let v: u32;
-    unsafe { asm!("rsr.ccompare0 {0}", out(reg) v, options(nomem, nostack)) }
-    v
+    #[cfg(target_arch = "xtensa")]
+    {
+        let v: u32;
+        unsafe { core::arch::asm!("rsr.ccompare0 {0}", out(reg) v, options(nomem, nostack)) }
+        v
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        0
+    }
 }
 
 unsafe fn write_ccompare0(val: u32) {
-    unsafe { asm!("wsr.ccompare0 {0}", in(reg) val, options(nomem, nostack)) }
-    unsafe { asm!("isync", options(nostack, preserves_flags)) }
+    #[cfg(target_arch = "xtensa")]
+    {
+        unsafe { core::arch::asm!("wsr.ccompare0 {0}", in(reg) val, options(nomem, nostack)) }
+        unsafe { core::arch::asm!("isync", options(nostack, preserves_flags)) }
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        let _ = val;
+    }
 }
 
 /// Ccompare Timer implementation

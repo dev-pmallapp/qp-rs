@@ -49,8 +49,10 @@
 extern crate alloc;
 
 pub mod context;
+pub mod nvic_cfg;
 
 pub use context::{ContextFrame, ThreadStack};
+pub use nvic_cfg::{qk_lock, qk_unlock, QK_BASEPRI};
 
 use qxk::QxkKernel;
 #[cfg(feature = "hw")]

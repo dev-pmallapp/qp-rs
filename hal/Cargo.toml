@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    # "hal-esp",
+    # "hal-esp-idf",   # ESP-IDF C SDK wrapper — requires xtensa/riscv C toolchain
     "hal-cmsis",
     "hal-lxsis",
     "hal-rvsis",
