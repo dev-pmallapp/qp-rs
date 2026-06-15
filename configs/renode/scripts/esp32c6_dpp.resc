@@ -1,0 +1,34 @@
+# Renode simulation script — ESP32-C6 DPP demo.
+#
+# Prerequisites:
+#   1. Build the firmware:
+#      cargo build --bin dpp-esp32-c6 --features esp32c6,qs --no-default-features --target riscv32imac-esp-espidf
+#   2. Start qspy listening:
+#      qspy -t -p 7777
+#   3. Run this script from the workspace root:
+#      renode configs/renode/scripts/esp32c6_dpp.resc
+
+$name ?= "esp32c6-dpp"
+mach create $name
+
+# Compile and register custom console and lora peripherals
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+i @configs/renode/shared/peripherals/lora/lora.cs
+
+# Load the platform description
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+# Expose USB Serial JTAG over TCP for qspy
+emulation CreateServerSocketTerminal 7777 "qspy_term" false
+connector Connect usb_serial_jtag qspy_term
+
+# Load ROM and firmware ELFs
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF @target/riscv32imac-esp-espidf/debug/dpp-esp32-c6
+
+# Pre-set transaction done in analog I2C master so target PLL calibration completes
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+showAnalyzer usb_serial_jtag
+
+start

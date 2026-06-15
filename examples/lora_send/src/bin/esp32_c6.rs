@@ -30,6 +30,9 @@ use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult};
 use qf_port_esp32_c6::{Esp32C6Port, Esp32C6QkRuntime, PortConfig};
 use qk::QkKernel;
 
+#[cfg(feature = "qs")]
+use qs;
+
 use comms::{
     lora::LoRaRf,
     mac::CommsAO,
@@ -121,6 +124,18 @@ fn main() -> ! {
     let builder = QkKernel::builder()
         .register(comms_ao).expect("comms register")
         .register(sender_ao).expect("sender register");
+
+    #[cfg(feature = "qs")]
+    let builder = {
+        let tracer = qs::Tracer::new(qs::QsConfig::default(), qs::stdout_backend()).into_handle();
+        let payload = qs::predefined::target_info_payload(&qs::TargetInfo::default());
+        let _ = tracer.emit(qs::predefined::TARGET_INFO, &payload);
+
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(TIMEOUT_SIG.0, 0, "TIMEOUT"));
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(RF_TX_REQ_SIG.0, 0, "RF_TX_REQ"));
+
+        builder.with_trace_hook(tracer.hook())
+    };
 
     let kernel = Arc::new(builder.build().expect("kernel build"));
     kernel.start();

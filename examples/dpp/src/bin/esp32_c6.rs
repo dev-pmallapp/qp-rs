@@ -15,6 +15,9 @@ use qf::{qm_tran, qm_super, qm_handled, qm_ignored, QMsm, QMState, QMsmResult};
 use qf_port_esp32_c6::{Esp32C6Port, Esp32C6QkRuntime, PortConfig};
 use qk::{QkKernel, QkKernelBuilder};
 
+#[cfg(feature = "qs")]
+use qs;
+
 static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
 
 const N_PHILO: usize = 5;
@@ -65,6 +68,20 @@ struct ApplicationResources {
 
 fn build_application() -> ApplicationResources {
     let mut builder = QkKernel::builder();
+
+    #[cfg(feature = "qs")]
+    let mut builder = {
+        let tracer = qs::Tracer::new(qs::QsConfig::default(), qs::stdout_backend()).into_handle();
+        let payload = qs::predefined::target_info_payload(&qs::TargetInfo::default());
+        let _ = tracer.emit(qs::predefined::TARGET_INFO, &payload);
+
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(EAT_SIG.0, 0, "EAT"));
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(DONE_SIG.0, 0, "DONE"));
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(TIMEOUT_SIG.0, 0, "TIMEOUT"));
+        let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(HUNGRY_SIG.0, 0, "HUNGRY"));
+
+        builder.with_trace_hook(tracer.hook())
+    };
 
     let table_sm = QMsm::new(Table::new(), &TABLE_ACTIVE);
     builder = builder
