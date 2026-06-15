@@ -1,5 +1,8 @@
 # Generated build artifacts
 /target/
 
+# mdBook rendered output
+/docs/book/
+
 # Cargo lockfile is optional for workspaces with multiple crates
 # (keep tracked if desired)
