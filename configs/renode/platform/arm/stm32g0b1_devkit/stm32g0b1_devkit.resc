@@ -1,0 +1,80 @@
+####################################################################
+# SWM STM32G0B1CETx Dev-Kit — Renode Simulation Script
+# File: configs/renode/platform/arm/stm32g0b1_devkit/stm32g0b1_devkit.resc
+#
+# Default role: Dhara actuator (bin `dhara` in ports/stm32g0b1/Cargo.toml).
+# Override with: $bin=@ports/stm32g0b1/target/thumbv6m-none-eabi/debug/nalvar
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/platform/arm/stm32g0b1_devkit/stm32g0b1_devkit.resc
+####################################################################
+
+mach create "SWM-G0b1-Devkit"
+
+# Resolve relative paths via the workspace root (PWD).
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom peripheral models before loading the
+# platform description so their types are known when the .repl is parsed.
+# Order matters: lr1121_subghz.cs defines the base class that
+# lr1121_radio.cs's LR1121SpiRadio alias derives from.
+i @configs/renode/shared/peripherals/lora/lr1121_subghz.cs
+i @configs/renode/shared/peripherals/lora/lr1121_radio.cs
+
+# Load the SoC platform.  Phase 2 will register custom peripheral
+# models (relay GPIO, valve actuator, external sensors) above this line.
+machine LoadPlatformDescription @configs/renode/soc/arm/stm32g0b1/stm32g0b1.repl
+
+# Replace the stock STM32SPI controller at SPI1 with the LR1121 model.
+# The external LR1121 module is wired to SPI1 on the swm-dhara-g0b1 board.
+sysbus Unregister "spi1"
+machine LoadPlatformDescriptionFromString "spi1: SPI.LR1121SpiRadio @ sysbus 0x40013000"
+
+# Solar charger model — shared stub at a magic STM32-region address
+# (0x60010000 — FMC bank 1 on STM32G0; unmapped on the G0B1 part, free
+# for sim use).  Bus-agnostic peripheral; same address as the WLE5 and
+# ESP32 platforms so Robot keywords are portable.
+machine LoadPlatformDescriptionFromString "solar_charger: Python.PythonPeripheral @ sysbus <0x60010000, +0x1000> { size: 0x1000; initable: true; filename: \"configs/renode/shared/peripherals/solar_charger/solar_charger_stub.py\" }"
+
+# Replace GPIOB with the relay / valve stub. PB3 = RELAY_1, PB4 = RELAY_2,
+# PB5 = FDBK_1, PB6 = FDBK_2 (SCH_SWM §4/§5). State observable via
+# magic registers at +0x3E0 / +0x3E4 / +0x3E8 / +0x3F0 — Robot keywords
+# read these to assert Dhara / Nalvar actuator behaviour. EXTI lines
+# from PB are not wired — Phase 2 testing relies on polled GPIO; a
+# future hybrid C# model can forward bit changes to gpioPortB / EXTI
+# if needed.
+sysbus Unregister "gpioPortB"
+machine LoadPlatformDescriptionFromString "relay_gpio: Python.PythonPeripheral @ sysbus <0x50000400, +0x400> { size: 0x400; initable: true; filename: \"configs/renode/shared/peripherals/relay/relay_gpio.py\" }"
+
+# Shared macros (reset, log helpers).
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# USART1 (PA9/PA10 on the G0B1 Nucleo) is the bring-up console.
+showAnalyzer sysbus.usart1
+
+# Default firmware path.  Build with:
+#   make arm TARGET=stm32g0b1 ROLE=dhara
+# from the workspace root; the ELF lands at $CARGO_TARGET_DIR/<triple>/debug/<bin>.
+$bin?=@target/thumbv6m-none-eabi/debug/dhara
+
+macro reset
+"""
+    sysbus LoadELF $bin
+"""
+
+# Abort / panic hooks — pause the simulation on Cortex-M faults.
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler" "pause"
+cpu AddSymbolHook "_default_abort" "pause"
+
+# GDB on 3334 (RISC-V ports use 3333; avoid the clash).
+machine StartGdbServer 3334
+
+runMacro $reset
+
+echo "──────────────────────────────────────────────────────"
+echo " SWM STM32G0B1CETx dev-kit simulation ready"
+echo " Console: usart1   Role-default: dhara (override \$bin)"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────"

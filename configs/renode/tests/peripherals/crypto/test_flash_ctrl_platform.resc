@@ -1,0 +1,10 @@
+####################################################################
+# test_flash_ctrl_platform.resc — STM32WL_FlashCtrl isolation harness.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/crypto/stm32wl_flash_ctrl.cs
+
+mach create "FlashCtrlIsolation"
+machine LoadPlatformDescription @configs/renode/tests/peripherals/crypto/test_flash_ctrl_platform.repl

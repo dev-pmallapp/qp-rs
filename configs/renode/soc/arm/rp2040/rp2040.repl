@@ -1,0 +1,74 @@
+// Raspberry Pi Pico — RP2040
+// Dual ARM Cortex-M0+ @ 133 MHz
+// Reference: RP2040 Datasheet (2021)
+//
+// RP2040 is dual-core SMP; Renode models each hart separately.
+
+cpu0: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic:     nvic0
+
+cpu1: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic:     nvic1
+
+nvic0: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu0@0
+    systickFrequency: 12000000   // default ROSC ~12 MHz; PLL brings to 125/133 MHz
+
+nvic1: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu1@0
+    systickFrequency: 12000000
+
+// 2 MB external QSPI Flash (XIP mapped)
+flash: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x200000
+
+// 264 KB SRAM (split into 4×64KB + 4KB scratch banks, mapped contiguously here)
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x42000
+
+// Boot ROM (16 KB)
+rom: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x4000
+
+// UART0 (GPIO0/1 by default)
+uart0: UART.PL011 @ sysbus 0x40034000
+    -> nvic0@20
+    -> nvic1@20
+
+// UART1
+uart1: UART.PL011 @ sysbus 0x40038000
+    -> nvic0@21
+    -> nvic1@21
+
+// GPIO (SIO — single-cycle IO block owns GPIO on RP2040)
+// RP2040 GPIO is routed through SIO at 0xD0000000
+sio: Miscellaneous.RP2040_SIO @ sysbus 0xD0000000
+
+// SPI0
+spi0: SPI.PL022 @ sysbus 0x4003C000
+    -> nvic0@18
+
+// I2C0
+i2c0: I2C.RP2040_I2C @ sysbus 0x40044000
+    -> nvic0@23
+
+// Timer (4 alarms)
+timer: Timers.RP2040_Timer @ sysbus 0x40054000
+    -> nvic0@0
+    -> nvic0@1
+    -> nvic0@2
+    -> nvic0@3
+
+// Watchdog
+watchdog: Timers.RP2040_Watchdog @ sysbus 0x40058000
+
+// PIO0 / PIO1 (state machines — stub only)
+pio0: Miscellaneous.RP2040_PIO @ sysbus 0x50200000
+    -> nvic0@7
+    -> nvic0@8
+
+pio1: Miscellaneous.RP2040_PIO @ sysbus 0x50300000
+    -> nvic0@9
+    -> nvic0@10

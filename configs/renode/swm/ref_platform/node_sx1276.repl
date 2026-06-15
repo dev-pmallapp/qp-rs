@@ -1,0 +1,39 @@
+// ─────────────────────────────────────────────────────────
+//  node_sx1276.repl  —  STM32F4 + SX1276 LoRa node
+//
+//  Peripheral path used by the wireless medium:  sysbus.radio
+//  DIO0 (TxDone/RxDone IRQ) wired to GPIOA pin 4
+// ─────────────────────────────────────────────────────────
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xFF
+    systickFrequency: 168000000
+    IRQ -> cpu@0
+
+// ── Memory ──────────────────────────────────────────────
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x20000       // 128 KB
+
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000      // 1 MB
+
+// ── GPIO ────────────────────────────────────────────────
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus 0x40020000
+    numberOfAFIOs: 16
+
+// ── SPI1 (used for SX1276) ──────────────────────────────
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+    IRQ -> nvic@35
+
+// ── SX1276 LoRa radio on SPI1, CS=0 ────────────────────
+//    Implements IRadio — can be connected to a wireless medium
+radio: SPI.SX1276 @ spi1 0
+    DIO0 -> gpioPortA@4     // TxDone / RxDone / CadDone
+    DIO1 -> gpioPortA@5     // RxTimeout / FhssChangeChannel / CadDetected
+
+// ── USART1 (debug / test output) ────────────────────────
+uart1: UART.STM32_UART @ sysbus 0x40011000
+    IRQ -> nvic@37

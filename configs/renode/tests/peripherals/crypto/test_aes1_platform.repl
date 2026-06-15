@@ -1,0 +1,16 @@
+// test_aes1_platform.repl — STM32WL AES1 isolation platform.
+// No firmware execution; Robot drives the model via sysbus reads/writes.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+
+aes1: Miscellaneous.STM32WL_AES1 @ sysbus <0x58005000, +0x400>

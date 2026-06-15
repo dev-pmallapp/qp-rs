@@ -1,0 +1,24 @@
+# ══════════════════════════════════════════════════════════════════
+#  Endpoint @@SIDE@@ — STM32G0B1CETx (Cortex-M0+, external LR1121 on SPI1)
+#  Role: @@ROLE@@
+# ══════════════════════════════════════════════════════════════════
+mach create "@@MACHINE@@"
+
+machine LoadPlatformDescription @configs/renode/platform/arm/stm32g0b1_devkit/stm32g0b1_devkit.repl
+
+sysbus Unregister "spi1"
+machine LoadPlatformDescriptionFromString "spi1: SPI.LR1121SpiRadio @ sysbus 0x40013000"
+
+connector Connect sysbus.spi1 wireless
+
+include $ORIGIN/../../shared/macros/common.resc
+include $ORIGIN/../../shared/macros/helpers.resc
+showAnalyzer sysbus.usart1
+
+sysbus LoadELF @@@FW@@
+
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler"    "pause"
+cpu AddSymbolHook "_default_abort"    "pause"
+
+logLevel 1 sysbus.spi1

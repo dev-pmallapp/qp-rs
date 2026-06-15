@@ -1,0 +1,13 @@
+####################################################################
+# Minimal platform for MCP73831T peripheral tests.
+# Loads gagan.repl (ESP32-C6 + MCP73831T ADC) without firmware —
+# peripheral registers are accessible via sysbus without running the CPU.
+####################################################################
+
+mach create "SWM-Gagan-Battery-Test"
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+machine LoadPlatformDescription @configs/renode/swm/gagan.repl
+
+echo "MCP73831T battery test platform loaded"

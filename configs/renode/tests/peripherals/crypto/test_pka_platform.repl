@@ -1,0 +1,15 @@
+// test_pka_platform.repl — STM32WL PKA isolation platform.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+
+pka: Miscellaneous.STM32WL_PKA @ sysbus <0x58002000, +0x1800>

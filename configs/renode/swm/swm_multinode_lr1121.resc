@@ -1,0 +1,129 @@
+####################################################################
+# SWM Multi-Node Simulation — Gagan OHT + Pramukh MC over LoRa
+# File: configs/renode/swm/swm_multinode.resc
+#
+# Creates two machines sharing an IEEE802_15_4 wireless medium so
+# that LoRa frames transmitted by one node are delivered to the other
+# via LR1121Radio.ReceiveFrame().
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/swm/swm_multinode.resc
+#   start        — begin execution
+#   pause        — stop both machines
+#
+# Firmware override (before include):
+#   $gagan_fw   ?= @path/to/gagan.elf
+#   $pramukh_fw ?= @path/to/pramukh.elf
+####################################################################
+
+# Set CWD to repo root so that CWD-relative paths in .repl files resolve correctly
+# regardless of which directory renode-test was launched from.
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# ── Firmware paths (override from CLI: -e '$gagan_fw=...' ) ──────
+$gagan_fw    ?= @target/riscv32imac-unknown-none-elf/debug/swm-gagan-esp32c6
+$pramukh_fw  ?= @target/riscv32imac-unknown-none-elf/debug/swm-pramukh-esp32c6
+$medium_name ?= "wireless"
+
+# ── Compile C# peripheral types (once, before creating machines) ──
+i $ORIGIN/../shared/peripherals/console/usb_serial_jtag.cs
+i $ORIGIN/../shared/peripherals/lora/lora.cs
+# Order matters: lr1121_subghz.cs defines the base class that
+# lr1121_radio.cs's LR1121SpiRadio alias derives from.
+i $ORIGIN/../shared/peripherals/lora/lr1121_subghz.cs
+i $ORIGIN/../shared/peripherals/lora/lr1121_radio.cs
+
+# ── Wireless medium ───────────────────────────────────────────────
+emulation CreateIEEE802_15_4Medium $medium_name
+wireless SetRangeWirelessFunction 200
+
+# ══════════════════════════════════════════════════════════════════
+#  GAGAN — OHT Sensor Node
+# ══════════════════════════════════════════════════════════════════
+mach create "SWM-Gagan-OHT"
+
+machine LoadPlatformDescription $ORIGIN/../soc/riscv/esp32c6/esp32c6.repl
+
+# Replace the Python LoRa stub with the IRadio-capable C# model
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+# Connect the radio to the shared wireless medium
+connector Connect sysbus.spi2 $medium_name
+
+include $ORIGIN/../shared/macros/common.resc
+include $ORIGIN/../shared/macros/helpers.resc
+
+# Route USB Serial/JTAG through qspy TCP terminal on port 7777.
+# Connect qspy with: make qp-qspy ARGS="--tcp-remote 7777"
+emulation CreateServerSocketTerminal 7777 "gagan_qs_term" false
+connector Connect usb_serial_jtag gagan_qs_term
+
+# CSR trigger stubs (ESP32-C6 custom CSRs)
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# Performance counter CSR stubs
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+sysbus LoadELF $ORIGIN/../soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF $gagan_fw
+
+# LP I2C PLL completion stub
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+logLevel 1 sysbus.spi2
+
+# ══════════════════════════════════════════════════════════════════
+#  PRAMUKH — MC Master Controller
+# ══════════════════════════════════════════════════════════════════
+mach create "SWM-Pramukh-MC"
+
+machine LoadPlatformDescription $ORIGIN/../soc/riscv/esp32c6/esp32c6.repl
+
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+connector Connect sysbus.spi2 $medium_name
+
+# Route USB Serial/JTAG through qspy TCP terminal on port 7778.
+# Connect qspy with: make qp-qspy ARGS="--tcp-remote 7778"
+emulation CreateServerSocketTerminal 7778 "pramukh_qs_term" false
+connector Connect usb_serial_jtag pramukh_qs_term
+
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+sysbus LoadELF $ORIGIN/../soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF $pramukh_fw
+
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+logLevel 1 sysbus.spi2
+
+# ── Traffic capture (optional) ───────────────────────────────────
+# Uncomment the line below to write all LoRa frames to a PCAP file
+# (requires the logs/ directory to exist):
+#   emulation LogIEEE802_15_4Traffic @logs/lora_traffic.pcap $medium_name
+
+echo "──────────────────────────────────────────────────────────────"
+echo " SWM multi-node simulation ready"
+echo "  SWM-Gagan-OHT  → spi2 at (0,0,0)"
+echo "  SWM-Pramukh-MC → spi2 at (50,0,0)"
+echo "  Medium: $medium_name"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────────────"

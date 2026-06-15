@@ -1,0 +1,16 @@
+# Baseline: txrx multi-node boot UART transcript (OHT side).
+# Format: one expected line per row. Lines starting with '#' or blank
+# lines are ignored. The baselines.robot suite calls
+# `Wait For Line On Uart` for each non-comment row in file order; a
+# missing or out-of-order line fails the suite.
+#
+# Prefix match — the substring is searched anywhere on the captured
+# UART line, so trailing tokens (seq numbers, timestamps, flags) can
+# drift without breaking the baseline.
+#
+# Keep this minimal — only the absolutely stable boot anchors.
+# Extending the baseline is fine but every added line increases churn.
+# See README.md in this directory for the update playbook.
+
+SWM boot
+SWM TX telemetry

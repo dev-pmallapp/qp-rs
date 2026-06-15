@@ -1,0 +1,25 @@
+####################################################################
+# RISC-V Platform Launch Script Template
+# Copy to platform/riscv/<platform>/<platform>_platform.resc and fill TODOs.
+####################################################################
+
+# TODO: rename the machine
+mach create "RISCV-PLATFORM"
+
+# Set the process's current working directory to the workspace root (from the PWD env variable)
+# so standard .NET file APIs resolve relative paths correctly
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# TODO: point to the correct .repl file
+machine LoadPlatformDescription @configs/renode/soc/riscv/PLATFORM_NAME/PLATFORM_NAME.repl
+
+# Show UART0 output in terminal
+showAnalyzer uart0
+
+# TODO: update ELF path
+# sysbus LoadELF @firmware/riscv/<platform>/app.elf
+
+machine StartGdbServer 3333
+
+echo "Platform ready — type 'start' to run"
+# start

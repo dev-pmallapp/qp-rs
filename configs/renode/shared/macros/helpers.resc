@@ -1,0 +1,102 @@
+####################################################################
+# shared/macros/helpers.resc
+# ESP32-C6-specific helper macros.
+# Sourced after common.resc — overrides the generic 'status' macro.
+####################################################################
+
+# ── Dump core CPU registers ───────────────────────────────────────
+macro dump_cpu
+"""
+    echo "=== CPU0 Registers ==="
+    cpu0 PC
+    cpu0 GetRegisters
+"""
+
+# ── Dump UART0 status registers ──────────────────────────────────
+macro dump_uart0
+"""
+    echo "=== UART0 Registers ==="
+    echo "STATUS   :" sysbus ReadDoubleWord 0x6000001C
+    echo "FIFO_CNT :" sysbus ReadDoubleWord 0x60000014
+"""
+
+# ── Read GPIO output/input registers ─────────────────────────────
+macro read_gpio
+"""
+    echo "=== GPIO ==="
+    echo "GPIO_OUT :" sysbus ReadDoubleWord 0x60091004
+    echo "GPIO_IN  :" sysbus ReadDoubleWord 0x60091000
+"""
+
+# ── Status overview (overrides common.resc generic version) ───────
+macro status
+"""
+    echo ""
+    echo "┌─ ESP32-C6 Simulation Status ──────────────────────────┐"
+    echo "│  PC     :" cpu0 PC
+    echo "└────────────────────────────────────────────────────────┘"
+    runMacro $read_gpio
+"""
+
+# ── Soft-reset: keep firmware, restart from reset vector ─────────
+macro soft_reset
+"""
+    pause
+    machine Reset
+    echo "Machine reset. Type 'start' to resume."
+"""
+
+# ── Reboot: reload firmware ELF from disk, then reset ────────────
+# Uses $firmware_path set by the main launch script.
+macro reboot
+"""
+    pause
+    machine Reset
+    sysbus LoadELF $firmware_path
+    echo "Firmware reloaded from $firmware_path"
+    echo "Type 'start' to run."
+"""
+
+# ── Enable verbose logging for one peripheral ─────────────────────
+# Usage: runMacro $logwatch "gpio_stub"
+macro logwatch
+"""
+    logLevel 3 $1
+    echo "Verbose logging enabled for $1"
+"""
+
+# ── Battery simulation controls (ESP32-C6 adc_stub magic registers) ─
+# Usage: runMacro $battery_set_mv 3700
+macro battery_set_mv
+"""
+    sysbus WriteDoubleWord 0x6000EFF0 $1
+    echo "Battery voltage set to $1 mV"
+"""
+
+# Usage: runMacro $battery_set_solar 5000
+macro battery_set_solar
+"""
+    sysbus WriteDoubleWord 0x6000EFF4 $1
+    echo "Solar voltage set to $1 mV"
+"""
+
+# Usage: runMacro $battery_show
+macro battery_show
+"""
+    echo "Battery:" sysbus ReadDoubleWord 0x6000EFF0 "mV"
+    echo "Solar  :" sysbus ReadDoubleWord 0x6000EFF4 "mV"
+"""
+
+# ── qspy TCP terminal (manual use only) ──────────────────────────
+# Exposes USB Serial JTAG output over TCP so qspy can connect.
+# Start qspy BEFORE calling this macro:  qspy -t -p 7777
+# Not used by Robot Framework tests (port conflict avoidance).
+macro setup_qspy
+"""
+    emulation CreateServerSocketTerminal 7777 "qspy_term" false
+    connector Connect usb_serial_jtag qspy_term
+    echo "qspy TCP terminal ready on port 7777."
+    echo "Connect with: qspy -t -p 7777"
+"""
+
+echo "[helpers.resc] Macros loaded: dump_cpu, dump_uart0, read_gpio, status, soft_reset, reboot, logwatch, battery_set_mv, battery_set_solar, battery_show, setup_qspy"

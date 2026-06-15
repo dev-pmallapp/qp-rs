@@ -1,0 +1,48 @@
+// ─────────────────────────────────────────────────────────────
+//  gagan.repl  —  SWM Gagan OHT Sensor Node
+//
+//  Platform: ESP32-C6 (RISC-V HP core, RV32IMAC @ up to 160 MHz)
+//  Role:     Endpoint — ultrasonic water level + battery telemetry + LoRa TX
+//  Power:    Single-cell Li-ion + solar panel (MCP73831T charger, DW01A protection)
+//  Radio:    Semtech transceiver on SPI2 — replaced by gagan.resc at load time
+//
+//  Inherits the full ESP32-C6 SoC platform; node-specific peripherals
+//  override the generic stubs from the base file below.
+// ─────────────────────────────────────────────────────────────
+
+using "../soc/riscv/esp32c6/esp32c6.repl"
+
+// ── Ultrasonic Level Sensor (HC-SR04-class, waterproof)
+// Inherited: gpio_hcsr04 @ 0x60091000  (ultrasonic_hcsr04.py)
+// GPIO5=power_enable, GPIO6=trigger, GPIO7=echo
+
+// ── Battery Controller + Solar Charger (MCP73831T)
+// Overrides the generic battery_adc_stub.py with the full MCP73831T model.
+// The model implements the charge state machine (SHUTDOWN/PRECHARGE/FAST_CHARGE/
+// COMPLETE) and drives CHG_STAT_N automatically based on solar_mv and battery_mv.
+//
+// ADC register interface (same as battery_adc_stub.py):
+//   +0x40  SAR1DATA_STATUS → battery_mv ADC count
+//   +0x44  SAR2DATA_STATUS → solar_mv ADC count
+//
+// Magic registers (Robot test injection):
+//   +0xFF0  r/w → battery_mv    +0xFF4  r/w → solar_mv
+//   +0xFF8  r/w → chg_stat_n    (also write to gpio_hcsr04 +0xFF8 to sync GPIO3)
+//   +0xFFC  r/w → season        (0=AUTO, 1=SUNNY, 2=CLOUDY, 3=CRITICAL)
+adc_stub: Python.PythonPeripheral @ sysbus 0x6000E000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/battery/mcp73831t.py"
+
+// ── Pressure Sensor (I2C — BMP388/DPS310-class, address 0x77)
+// Overrides the generic MappedMemory i2c_stub with a functional model.
+// Returns 980 hPa / 25 °C by default; write magic registers in .resc to
+// inject test scenarios.  See pressure_i2c_stub.py for register protocol.
+i2c_stub: Python.PythonPeripheral @ sysbus 0x60004000
+    size: 0x2000
+    initable: true
+    filename: "configs/renode/shared/peripherals/sensor/pressure_i2c_stub.py"
+
+// ── LoRa Module (Semtech SX1278 SPI transceiver)
+// Inherited: spi2 @ 0x60081000  (ESP32C6_LoraSpi C# stub)
+// gagan.resc unregisters this and loads the SX1278 Python model (sx1278_spi.py) in its place.

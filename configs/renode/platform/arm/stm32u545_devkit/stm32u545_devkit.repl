@@ -1,0 +1,32 @@
+// ─────────────────────────────────────────────────────────────
+//  stm32u545_devkit.repl — SWM Pramukh / Griha on STM32U545RETxQ
+//
+//  Platform: STM32U545RE (Cortex-M33, TZEN=0 for RevA).
+//  Role:     Master Controller (Pramukh) or Home Controller (Griha),
+//            plus the four shim bins (gagan/talab/dhara/nalvar) for
+//            the Phase 3.3 brand-name matrix.
+//  Power:    Mains-derived 3V3 (Pramukh) or USB-C (Griha) — no charger.
+//  Radio:    External LR1121 on SPI1 — same external-module pattern
+//            as the STM32G0B1 path.  Phase 6.2.2 inherits the
+//            LR1121SpiRadio model from configs/renode/shared/peripherals/lora.
+//
+//  Inherits the STM32U545 SoC; node-specific peripherals (sensor
+//  stubs, relay GPIO) are attached via .resc bindings.
+// ─────────────────────────────────────────────────────────────
+
+using "../../../soc/arm/stm32u545/stm32u545.repl"
+
+// ── LoRa radio (SPI1 @ 0x40013000)
+// External LR1121 module on SPI1 (PA5=SCK, PA6=MISO, PA7=MOSI, PA4=NSS).
+// stm32u545_devkit.resc unregisters spi1 and loads LR1121SpiRadio.
+
+// ── Ultrasonic / Pressure / Battery
+// The U5 ports run the four "non-native" role bins (gagan/talab/dhara/
+// nalvar) against the Null sensor HAL today; the .resc still wires the
+// shared Python stubs so platform-level smoke tests run identically to
+// WLE5 / G0B1.
+
+// ── Relay (Dhara / Nalvar shim bins)
+// GPIOB carries relay outputs on the SWM actuator boards.  The .resc
+// replaces gpioPortB with the shared relay_gpio stub when the role bin
+// is dhara/nalvar.

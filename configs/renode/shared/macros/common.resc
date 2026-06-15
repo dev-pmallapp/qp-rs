@@ -1,0 +1,87 @@
+####################################################################
+# shared/macros/common.resc
+# Architecture-agnostic macros — sourced from every platform script.
+####################################################################
+
+# ── Machine status ────────────────────────────────────────────────
+# Overridden by platform helpers.resc with peripheral details.
+macro status
+"""
+    echo ""
+    echo "┌─ Renode Machine Status ─────────────────────────────┐"
+    echo "│  Use 'pause' / 'start' to control execution.        │"
+    echo "│  Use 'quit'  to exit Renode.                        │"
+    echo "└──────────────────────────────────────────────────────┘"
+"""
+
+# ── Reset (keep firmware in memory, restart from reset vector) ───
+macro reset
+"""
+    pause
+    machine Reset
+    echo "Machine reset. Type 'start' to resume."
+"""
+
+# ── Enable verbose peripheral logging ────────────────────────────
+macro verbose
+"""
+    logLevel 3
+    echo "Verbose (DEBUG) logging enabled globally."
+"""
+
+# ── Disable all non-error logging ────────────────────────────────
+macro quiet
+"""
+    logLevel 0
+    echo "Logging set to ERROR-only."
+"""
+
+# ── Dump 64 bytes from address $1 ────────────────────────────────
+macro hexdump
+"""
+    sysbus ReadBytes $1 64
+"""
+
+# ── Snapshot: save/load simulation state to/from a file ──────────
+# Usage: runMacro $save_snapshot "path/to/file.save"
+#        runMacro $load_snapshot "path/to/file.save"
+macro save_snapshot
+"""
+    emulation Save $1
+    echo "Snapshot saved to $1"
+"""
+
+macro load_snapshot
+"""
+    emulation Load $1
+    echo "Snapshot loaded from $1"
+"""
+
+# ── Battery fault injection ───────────────────────────────────────
+# Injects a battery voltage below the 2400 mV fault threshold so
+# BatteryManagerAO transitions Sampling→Fault on the next health check.
+# Usage: runMacro $inject_battery_fault
+macro inject_battery_fault
+"""
+    sysbus WriteDoubleWord 0x6000EFF0 1000
+    echo "Battery fault injected: 1000 mV (threshold: 2400 mV)"
+"""
+
+# Restores battery voltage to a healthy 3700 mV.
+# Usage: runMacro $restore_battery
+macro restore_battery
+"""
+    sysbus WriteDoubleWord 0x6000EFF0 3700
+    echo "Battery restored: 3700 mV"
+"""
+
+# Sets battery to a low-but-valid voltage (2500 mV) to trigger the
+# low-battery path (< low_threshold_percent) without a hard fault.
+# Usage: runMacro $inject_battery_low
+macro inject_battery_low
+"""
+    sysbus WriteDoubleWord 0x6000EFF0 2500
+    echo "Battery low injected: 2500 mV (valid range, but low SoC)"
+"""
+
+echo "[common.resc] Macros loaded: status, reset, verbose, quiet, hexdump, save_snapshot, load_snapshot, inject_battery_fault, restore_battery, inject_battery_low"

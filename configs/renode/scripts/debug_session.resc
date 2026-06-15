@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────
+#  debug_session.resc  —  Interactive debugging helper script
+#
+#  Run this instead of lora_multinode.resc when you want to
+#  manually poke around the simulation in the Renode monitor.
+#
+#  Usage:
+#      include @scripts/debug_session.resc
+#      (then use monitor commands below)
+# ─────────────────────────────────────────────────────────────────
+
+# Load the full multi-node setup
+include @scripts/lora_multinode.resc
+
+# ── Useful monitor commands to paste/run manually ─────────────
+#
+#  CHECK MACHINE LIST
+#      help mach
+#
+#  SWITCH CONTEXT
+#      mach set "node-sensor-1"
+#      mach set "node-gateway"
+#      mach set "node-out-of-range"
+#
+#  LIST PERIPHERALS ON CURRENT MACHINE
+#      peripherals
+#
+#  CHECK RADIO STATE
+#      sysbus.radio
+#
+#  READ RADIO PROPERTIES
+#      sysbus.radio Frequency         # current carrier frequency
+#      sysbus.radio OutputPower       # TX power in dBm
+#
+#  SEND UART INPUT TO A NODE  (simulates typed user input)
+#      sysbus.uart1 WriteChar 0x54    # 'T'
+#      sysbus.uart1 WriteChar 0x58    # 'X'
+#      sysbus.uart1 WriteChar 0x0A    # '\n'
+#
+#  PAUSE / RESUME INDIVIDUAL NODES
+#      pause      # pauses current machine only
+#      start      # resumes current machine only
+#
+#  PAUSE/RESUME ALL
+#      emulation Pause
+#      emulation Start
+#
+#  STEP ONE CPU INSTRUCTION (single machine)
+#      sysbus.cpu Step
+#
+#  CHANGE RANGE DYNAMICALLY
+#      loraMedium SetRangeWirelessFunction 200
+#
+#  MOVE A NODE
+#      wireless SetPosition sysbus.radio 75 0 0
+#
+#  DISCONNECT / RECONNECT
+#      connector Disconnect sysbus.radio loraMedium
+#      connector Connect    sysbus.radio loraMedium
+#
+#  DUMP PCAP TRAFFIC  (view in Wireshark)
+#      emulation LogIEEE802_15_4Traffic @logs/debug_capture.pcap loraMedium
+#
+#  SAVE SIMULATION STATE
+#      emulation Save @snapshots/checkpoint1.dat
+#
+#  RESTORE STATE
+#      emulation Load @snapshots/checkpoint1.dat

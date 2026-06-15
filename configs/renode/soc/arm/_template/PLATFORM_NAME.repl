@@ -1,0 +1,49 @@
+// ============================================================
+// ARM Cortex-M Platform Template
+// Copy this folder to soc/arm/<your-board>/
+// Rename the file and fill in the TODOs.
+//
+// Reference docs:
+//   - https://renode.readthedocs.io/en/latest/basic/describing_platforms.html
+// ============================================================
+
+// ── CPU ──────────────────────────────────────────────────────
+// TODO: choose the correct Cortex-M variant
+//   Options: cortex-m0, cortex-m0+, cortex-m3, cortex-m4, cortex-m4f,
+//            cortex-m7, cortex-m23, cortex-m33, cortex-m55
+cpu0: CPU.CortexM @ sysbus
+    cpuType:   "cortex-m4f"     // TODO: adjust
+    nvic:       nvic
+
+// ── NVIC ─────────────────────────────────────────────────────
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu0@0
+    systickFrequency: 72000000  // TODO: match your clock
+
+// ── Flash ────────────────────────────────────────────────────
+// TODO: correct base and size (Cortex-M typically starts at 0x08000000)
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000   // 1 MB — adjust
+
+// ── SRAM ─────────────────────────────────────────────────────
+// TODO: correct base and size
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x20000    // 128 KB — adjust
+
+// ── UART (USART1) ────────────────────────────────────────────
+// TODO: correct base address and IRQ number
+usart1: UART.STM32_UART @ sysbus 0x40011000
+    -> nvic@37
+
+// ── GPIO ─────────────────────────────────────────────────────
+// TODO: correct base addresses
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x40020000, +0x400>
+    modeResetValue: 0xA8000000
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x40020400, +0x400>
+    modeResetValue: 0x00000280
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x40020800, +0x400>
+
+// ── SysTick (provided by NVIC) ───────────────────────────────
+// SysTick is part of NVIC on Cortex-M; no separate entry needed.

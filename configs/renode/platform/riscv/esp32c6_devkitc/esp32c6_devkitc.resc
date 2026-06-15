@@ -1,0 +1,147 @@
+####################################################################
+# ESP32-C6 DevKit-M1 — Renode Simulation Script
+# File: platform/riscv/esp32c6_devkitc/esp32c6_devkitc.resc
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/platform/riscv/esp32c6_devkitc/esp32c6_devkitc.resc
+#
+# Or from CLI:
+#   renode configs/renode/platform/riscv/esp32c6_devkitc/esp32c6_devkitc.resc
+#
+# Prerequisites:
+#   - Renode >= 1.14
+#   - Firmware ELF built via `make esp` (or update the path below)
+####################################################################
+
+# ── Machine setup ─────────────────────────────────────────────────
+mach create "ESP32-C6-DevKit-M1"
+
+# Set the process's current working directory to the workspace root (from the PWD env variable)
+# so standard .NET file APIs (like File.Exists in PythonPeripheral) resolve relative paths correctly
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register the custom JTAG and LoRa SPI peripherals before the
+# platform description so their types are known when the .repl is parsed.
+# `i` = include; Renode compiles .cs on the fly.
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+i @configs/renode/shared/peripherals/lora/lora.cs
+
+# Load the platform description relative to the executing script using $ORIGIN
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+# ── Load shared macros ────────────────────────────────────────────
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# ── UART consoles ─────────────────────────────────────────────────
+# uart0 is a Python.PythonPeripheral stub — showAnalyzer is not supported.
+# UART0 output is silently discarded; use usb_serial_jtag for QS trace output.
+
+# Optional: connect UART1 to a virtual terminal as well
+# showAnalyzer uart1
+
+# Show USB Serial JTAG output in its own Renode terminal window
+showAnalyzer usb_serial_jtag
+
+# Expose USB Serial JTAG over TCP for qspy.
+# Start `nc localhost 7777` or qspy BEFORE typing `start` — data is dropped
+# if no client is connected when the firmware first writes.
+# Run: qspy -t -p 7777
+emulation CreateServerSocketTerminal 7777 "qspy_term" false
+connector Connect usb_serial_jtag qspy_term
+
+# ── Execution tracing ─────────────────────────────────────────────
+# Log every peripheral register read/write to the Monitor log.
+# Very verbose — disable once the firmware boots cleanly.
+sysbus LogAllPeripheralsAccess true
+
+# Log every Rust function entry (symbol resolved from ELF DWARF).
+# Shows the call sequence as the firmware runs.
+cpu0 LogFunctionNames true
+
+
+# ── RISC-V CSR stubs ─────────────────────────────────────────────
+# Debug trigger CSRs — signal no hardware watchpoints/triggers
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# PULP performance counter CSRs (0x800=PCER, 0x801=PCMR, 0x802=PCCR0)
+# Used by the ESP32-C6 ROM startup; unimplemented in Renode → illegal instruction
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+# ── Load firmware ─────────────────────────────────────────────────
+# Default firmware path — override $firmware_path before sourcing
+# this script if needed
+macro env_firmware_path
+"""
+    set firmware_path @target/riscv32imac-unknown-none-elf/debug/swm-gagan-esp32c6
+"""
+runMacro $env_firmware_path
+
+# Load the ROM ELF first (startup / ROM functions the firmware calls)
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+
+# Load the firmware ELF; Renode resolves symbol addresses automatically
+sysbus LoadELF $firmware_path
+
+# request_pll_clk (esp-hal) spins on bit 24 of I2C_ANA_MST register at 0x600AF818
+# waiting for the analog I2C master to signal "transaction done". Pre-set that
+# bit so the spin exits immediately on first read.
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+# TIMG0 RTCCALICFG/1/2 are handled by the Python.PythonPeripheral in esp32c6.repl.
+# On ESP32-C6: DONE is bit 15 of RTCCALICFG (0x68), result is RTCCALICFG1 (0x6C).
+# The script ignores writes and returns fixed values so measure_rtc_clock() exits.
+
+# If you only have a raw binary (e.g. from esptool flash read):
+#   sysbus LoadBinary @firmware/app.bin 0x42000000
+
+# ── Abort / panic hooks ──────────────────────────────────────────
+# Automatically pause the simulation on panic or abort
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+# Pause the first time EspQsSink::emit_frame is entered so you can confirm
+# the firmware reaches the USB JTAG write path. Remove once confirmed.
+cpu0 AddSymbolHook "_ZN17swm_gagan_esp32c65board9EspQsSink10emit_frame17hde09397ad03c0622E" "pause"
+
+# ── GDB server ────────────────────────────────────────────────────
+# Exposes a GDB stub on port 3333; connect with:
+#   riscv32-unknown-elf-gdb build/app.elf
+#   (gdb) target remote :3333
+machine StartGdbServer 3333
+
+# ── Logging ───────────────────────────────────────────────────────
+# Global tracing is enabled above (sysbus LogAllPeripheralsAccess + LogFunctionNames).
+# To narrow logging to a single peripheral once the boot sequence is understood:
+#   logLevel 3 uart0
+#   logLevel 3 timg_stub
+#   logLevel 3 lp_i2c_ana
+# To turn off global peripheral access logging:
+#   sysbus LogAllPeripheralsAccess false
+
+# Capture UART0 output to a file
+# logFile @logs/uart0.log true
+
+# ── Virtual time ──────────────────────────────────────────────────
+# By default Renode runs as fast as the host allows.
+# Uncomment to synchronise to wall clock (useful for timing-sensitive tests):
+# emulation SetAdvanceImmediately false
+
+# ── Peripheral hooks (optional) ───────────────────────────────────
+# Print a message whenever GPIO pin 2 (LED on DevKit-M1) changes
+# gpio OnGPIOChanged 2 "echo 'LED state changed'"
+
+# ── Start ─────────────────────────────────────────────────────────
+echo "──────────────────────────────────────────────"
+echo " ESP32-C6 DevKit-M1 simulation ready"
+echo " GDB stub listening on port 3333"
+echo " Type 'start' to begin execution"
+echo " Type 'pause' / 'quit' to control the sim"
+echo "──────────────────────────────────────────────"
+
+# Uncomment the line below to auto-start when the script is loaded:
+# start

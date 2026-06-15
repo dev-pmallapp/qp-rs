@@ -1,0 +1,23 @@
+// ============================================================
+// ARM ISA Layer Template  (Layer 0)
+// ============================================================
+// Documents the CPU + NVIC block for the ISA layer.
+// Currently informational only (Option B: CPU is kept inline
+// in each SoC .repl).
+//
+// To promote to an import chain (Option A), add to your SoC:
+//   using @configs/renode/isa/arm/_template.repl
+// ============================================================
+
+// ── CPU ──────────────────────────────────────────────────────
+// TODO: choose the correct Cortex-M variant
+//   Options: cortex-m0, cortex-m0+, cortex-m3, cortex-m4, cortex-m4f,
+//            cortex-m7, cortex-m23, cortex-m33, cortex-m55
+cpu0: CPU.CortexM @ sysbus
+    cpuType:   "cortex-m4f"     // TODO: adjust
+    nvic:       nvic
+
+// ── NVIC ─────────────────────────────────────────────────────
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu0@0
+    systickFrequency: 72000000  // TODO: match your clock

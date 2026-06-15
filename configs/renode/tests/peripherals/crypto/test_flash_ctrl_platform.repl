@@ -1,0 +1,15 @@
+// test_flash_ctrl_platform.repl — STM32WL flash-controller isolation.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+
+flash_ctrl: Miscellaneous.STM32WL_FlashCtrl @ sysbus <0x58004000, +0x400>

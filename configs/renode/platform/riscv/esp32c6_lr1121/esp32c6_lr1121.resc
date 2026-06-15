@@ -1,0 +1,77 @@
+####################################################################
+# ESP32-C6 DevKit-M1 — Semtech LR1121 LoRa Simulation Script
+# File: platform/riscv/esp32c6_lr1121/esp32c6_lr1121.resc
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/platform/riscv/esp32c6_lr1121/esp32c6_lr1121.resc
+####################################################################
+
+mach create "ESP32-C6-DevKit-LR1121"
+
+# Set current working directory
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom peripherals before the platform description
+# so their types are known when the .repl is parsed.
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+i @configs/renode/shared/peripherals/lora/lora.cs
+# Order matters: lr1121_subghz.cs defines the base class that
+# lr1121_radio.cs's LR1121SpiRadio alias derives from.
+i @configs/renode/shared/peripherals/lora/lr1121_subghz.cs
+i @configs/renode/shared/peripherals/lora/lr1121_radio.cs
+
+# Load base platform description
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+# Unregister the default C# LoRa SPI stub (replaced by LR1121Radio below)
+sysbus Unregister "spi2"
+
+# Load the LR1121Radio Semtech LR1121 transceiver peripheral
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+# Load shared macros
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# Show JTAG analyzer
+showAnalyzer usb_serial_jtag
+
+# qspy TCP terminal is opt-in — call: runMacro $setup_qspy
+# (Omitted here so Robot Framework tests don't conflict on port 7777)
+
+# Log accesses for debugging
+sysbus LogAllPeripheralsAccess true
+cpu0 LogFunctionNames true
+
+# CSR trigger stubs
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# performance counter CSR stubs
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+# Default firmware path (compiled with lr1121 feature)
+macro env_firmware_path
+"""
+    set firmware_path @target/riscv32imac-unknown-none-elf/debug/swm-gagan-esp32c6
+"""
+runMacro $env_firmware_path
+
+# Load the ROM and firmware ELFs
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF $firmware_path
+
+# Analog I2C master completion stub
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+# Abort / panic hooks
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+echo "──────────────────────────────────────────────"
+echo " ESP32-C6 LR1121 simulation ready"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────"

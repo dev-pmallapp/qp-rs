@@ -1,0 +1,69 @@
+// STM32F4 Discovery / Nucleo-F4xx
+// ARM Cortex-M4F @ up to 180 MHz (F446) / 168 MHz (F407)
+// Reference: RM0090 (STM32F405/407/415/417) or RM0390 (STM32F446)
+//
+// Renode ships built-in STM32F4 models; this file supplements them.
+// For a full Discovery board use:
+//   machine LoadPlatformDescriptionFromString
+//     "using \"platforms/boards/stm32f4_discovery.repl\""
+
+cpu0: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic:     nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu0@0
+    systickFrequency: 168000000
+
+// 1 MB Flash
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000
+
+// 192 KB SRAM (128 KB SRAM1 + 64 KB SRAM2)
+sram1: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x20000
+
+sram2: Memory.MappedMemory @ sysbus 0x20020000
+    size: 0x10000
+
+// 64 KB CCM SRAM (data only, not DMA-accessible)
+ccmSram: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x10000
+
+// USART1 — common debug UART (PA9 TX / PA10 RX)
+usart1: UART.STM32_UART @ sysbus 0x40011000
+    -> nvic@37
+
+// USART2
+usart2: UART.STM32_UART @ sysbus 0x40004400
+    -> nvic@38
+
+// GPIO ports A–E
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x40020000, +0x400>
+    modeResetValue: 0xA8000000
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x40020400, +0x400>
+    modeResetValue: 0x00000280
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x40020800, +0x400>
+
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x40020C00, +0x400>
+
+gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x40021000, +0x400>
+
+// SysTick is part of NVIC — no separate block needed
+
+// TIM2 — general purpose 32-bit timer
+tim2: Timers.STM32_Timer @ sysbus 0x40000000
+    -> nvic@28
+    frequency: 84000000
+    initialLimit: 0xFFFFFFFF
+
+// I2C1
+i2c1: I2C.STM32_I2C @ sysbus 0x40005400
+    -> nvic@31
+    -> nvic@32
+
+// SPI1
+spi1: SPI.STM32_SPI @ sysbus 0x40013000
+    -> nvic@35

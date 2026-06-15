@@ -1,0 +1,33 @@
+// ============================================================
+// RISC-V ISA Layer Template  (Layer 0)
+// ============================================================
+// Documents the CPU + interrupt-controller block for the ISA
+// layer.  Currently informational only (Option B: CPU is kept
+// inline in each SoC .repl).
+//
+// To promote to an import chain (Option A), add to your SoC:
+//   using @configs/renode/isa/riscv/_template.repl
+// ============================================================
+
+// ── CPU ──────────────────────────────────────────────────────
+// TODO: choose RiscV32 or RiscV64; adjust cpuType ISA string
+cpu0: CPU.RiscV32 @ sysbus
+    cpuType:               "rv32imac_zicsr_zifencei"
+    privilegeArchitecture: PrivilegeArchitecture.Priv1_10
+    timeProvider:          clint
+    hartId:                0
+
+// ── CLINT ────────────────────────────────────────────────────
+// TODO: set correct base address from datasheet
+clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x02000000
+    frequency: 1000000
+    [0] -> cpu0@3
+    [1] -> cpu0@7
+
+// ── PLIC ─────────────────────────────────────────────────────
+// TODO: set correct base address; adjust numberOfSources
+plic: IRQControllers.PlatformLevelInterruptController @ sysbus 0x0C000000
+    [0] -> cpu0@11
+    numberOfSources:   32
+    numberOfContexts:  1
+    prioritiesEnabled: true

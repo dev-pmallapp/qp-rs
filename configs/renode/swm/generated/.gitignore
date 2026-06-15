@@ -1,0 +1,5 @@
+# Generated pair-matrix .resc files — re-emitted by
+# scripts/gen-multinode-resc.sh (Phase 6.3.1).  Robot suite (6.3.2)
+# calls the generator at setup time so the tree stays clean.
+*.resc
+!.gitignore

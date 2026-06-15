@@ -1,0 +1,24 @@
+# ══════════════════════════════════════════════════════════════════
+#  Endpoint @@SIDE@@ — STM32WLE5JC (Cortex-M4F, integrated SUBGHZSPI)
+#  Role: @@ROLE@@
+# ══════════════════════════════════════════════════════════════════
+mach create "@@MACHINE@@"
+
+machine LoadPlatformDescription @configs/renode/platform/arm/stm32wle5_devkit/stm32wle5_devkit.repl
+
+sysbus Unregister "subghzspi"
+machine LoadPlatformDescriptionFromString "subghzspi: SPI.LR1121SubGhzRadio @ sysbus 0x58010000"
+
+connector Connect sysbus.subghzspi wireless
+
+include $ORIGIN/../../shared/macros/common.resc
+include $ORIGIN/../../shared/macros/helpers.resc
+showAnalyzer sysbus.usart2
+
+sysbus LoadELF @@@FW@@
+
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler"    "pause"
+cpu AddSymbolHook "_default_abort"    "pause"
+
+logLevel 1 sysbus.subghzspi

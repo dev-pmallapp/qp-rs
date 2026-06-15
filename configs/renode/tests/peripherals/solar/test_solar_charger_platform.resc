@@ -1,0 +1,12 @@
+####################################################################
+# test_solar_charger_platform.resc — Solar-charger stub isolation
+#
+# Loads only solar_charger_stub.py at base 0x60010000. No firmware,
+# no CPU execution — Robot tests drive registers directly via
+# sysbus Write/ReadDoubleWord.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+mach create "SolarChargerTest"
+machine LoadPlatformDescription @configs/renode/tests/peripherals/solar/test_solar_charger_platform.repl

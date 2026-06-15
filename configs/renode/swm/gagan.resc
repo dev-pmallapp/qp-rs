@@ -1,0 +1,69 @@
+####################################################################
+# SWM Gagan OHT Sensor — Renode Simulation Script
+# File: configs/renode/swm/gagan.resc
+#
+# Node: Gagan  Role: OHT endpoint  Firmware: oht (ports/esp32c6)
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/swm/gagan.resc
+####################################################################
+
+mach create "SWM-Gagan-OHT"
+
+# Set current working directory so relative paths in platform files resolve
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom peripheral models before loading the platform
+# description so their types are known when the .repl is parsed.
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+
+# Load the Gagan node platform (includes esp32c6.repl via using, adds
+# pressure sensor I2C stub and inherits battery/solar ADC + HC-SR04).
+machine LoadPlatformDescription @configs/renode/swm/gagan.repl
+
+# Replace the default C# LoRa SPI stub with the SX1278 Python model.
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: Python.PythonPeripheral @ sysbus 0x60081000 { size: 0x1000; initable: true; filename: \"configs/renode/shared/peripherals/lora/sx1278_spi.py\" }"
+
+# Load shared macros
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# Show USB-Serial-JTAG analyzer for QS trace output
+showAnalyzer usb_serial_jtag
+
+# CSR trigger stubs (ESP32-C6 custom CSRs)
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# Performance counter CSR stubs
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+# Default firmware path — build with: cargo build --features sx1278
+# from ports/esp32c6/
+macro env_firmware_path
+"""
+    set firmware_path @target/riscv32imac-unknown-none-elf/debug/swm-gagan-esp32c6
+"""
+runMacro $env_firmware_path
+
+# Load SoC ROM and firmware ELF
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF $firmware_path
+
+# Analog I2C master completion stub (LP I2C PLL config)
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+# Abort / panic hook
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+echo "──────────────────────────────────────────────────────"
+echo " SWM Gagan OHT Sensor simulation ready"
+echo " Peripherals: HC-SR04 ultrasonic, battery+solar ADC,"
+echo "              pressure sensor (I2C), SX1278 LoRa"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────"

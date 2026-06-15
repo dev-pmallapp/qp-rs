@@ -1,0 +1,110 @@
+####################################################################
+# SWM STM32WLE5JC Dev-Kit — Renode Simulation Script
+# File: configs/renode/platform/arm/stm32wle5_devkit/stm32wle5_devkit.resc
+#
+# Default role: Gagan OHT (bin `gagan` in ports/stm32wle5/Cargo.toml).
+# Override with: $bin=@target/thumbv7em-none-eabihf/debug/talab
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/platform/arm/stm32wle5_devkit/stm32wle5_devkit.resc
+####################################################################
+
+mach create "SWM-Wle5-Devkit"
+
+# Resolve relative paths via the workspace root (PWD).
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom peripheral models before loading the platform
+# description so their types are known when the .repl is parsed.
+i @configs/renode/shared/peripherals/lora/lr1121_subghz.cs
+i @configs/renode/shared/peripherals/crypto/stm32wl_aes1.cs
+i @configs/renode/shared/peripherals/crypto/stm32wl_pka.cs
+i @configs/renode/shared/peripherals/crypto/stm32wl_flash_ctrl.cs
+
+# Load the node platform.  The repl declares subghzspi as a stock
+# STM32SPI controller; the LR1121SubGhzRadio replaces it below so the
+# LR1121 byte-stream FSM owns the SUBGHZ_SPI register block.
+machine LoadPlatformDescription @configs/renode/platform/arm/stm32wle5_devkit/stm32wle5_devkit.repl
+
+# Replace the stock SPI controller at SUBGHZ_SPI with the LR1121 model.
+sysbus Unregister "subghzspi"
+machine LoadPlatformDescriptionFromString "subghzspi: SPI.LR1121SubGhzRadio @ sysbus 0x58010000"
+
+# Replace gpioPortA with the ultrasonic HC-SR04 stub.  Trigger is PA9,
+# echo is PA10; other PA bits pass through the stub as plain ODR/IDR
+# without driving any side effects.  EXTI lines from PA are not wired in
+# this configuration — Phase 2 smoke tests rely on polled GPIO reads
+# only; if a future role bin needs PA EXTI, swap this for a hybrid C#
+# model that forwards bit changes back to gpioPortA / EXTI.
+sysbus Unregister "gpioPortA"
+machine LoadPlatformDescriptionFromString "ultrasonic: Python.PythonPeripheral @ sysbus <0x48000000, +0x400> { size: 0x400; initable: true; filename: \"configs/renode/shared/peripherals/sensor/ultrasonic_stm32.py\" }"
+
+# Replace the stock STM32G0_ADC with a Python stub that returns the
+# board's battery / solar voltages on the appropriate channels.  Magic
+# registers at +0x3F0 / +0x3F4 / +0x3F8 allow the Robot suite to inject
+# mV values for the charge-model and fault-injection tests.
+sysbus Unregister "adc"
+machine LoadPlatformDescriptionFromString "battery_adc: Python.PythonPeripheral @ sysbus <0x50040000, +0x400> { size: 0x400; initable: true; filename: \"configs/renode/shared/peripherals/battery/battery_adc_stm32.py\" }"
+
+# Replace I2C1 with the pressure sensor stub.  Decodes STM32 I2C v2
+# RXDR / ISR layout; returns a 6-byte BMP388/DPS310-class payload
+# (pressure + temperature) on RXDR reads.  Magic registers at
+# +0x3F0 / +0x3F4 inject pressure_pa / temp_c100 for Robot suites.
+sysbus Unregister "i2c1"
+machine LoadPlatformDescriptionFromString "pressure_i2c: Python.PythonPeripheral @ sysbus <0x40005400, +0x400> { size: 0x400; initable: true; filename: \"configs/renode/shared/peripherals/sensor/pressure_i2c_stm32.py\" }"
+
+# AES1 peripheral model (Phase 5.1) — owns the 0x58005000 register block.
+# Produces RustCrypto-identical AES-128/256 ECB/CBC/CTR results so the
+# `hw-aes-stm32wl` firmware feature can be tested in Renode.
+machine LoadPlatformDescriptionFromString "aes1: Miscellaneous.STM32WL_AES1 @ sysbus <0x58005000, +0x400>"
+
+# PKA peripheral model (Phase 5.2) — owns 0x58002000..0x58003800.
+# Real P-256 scalar mult for ECDH (mode 0x22); ECDSA modes stub to
+# SR_RAMERR until follow-up modelling lands.
+machine LoadPlatformDescriptionFromString "pka: Miscellaneous.STM32WL_PKA @ sysbus <0x58002000, +0x1800>"
+
+# FLASH controller with RDP / option-byte enforcement (Phase 5.4).
+# Replaces the stock STM32F4_FlashController so the firmware's
+# RDP-enable sequence at provisioning end can be validated in Renode.
+sysbus Unregister "flash_ctrl"
+machine LoadPlatformDescriptionFromString "flash_ctrl: Miscellaneous.STM32WL_FlashCtrl @ sysbus <0x58004000, +0x400>"
+
+# Solar charger model — re-uses the shared stub at a magic STM32-region
+# address (0x60010000 — FMC bank 1 on STM32WL; unmapped on parts without
+# external memory, free for sim use).  The stub itself is bus-agnostic;
+# only the binding address differs from the ESP32 path.
+machine LoadPlatformDescriptionFromString "solar_charger: Python.PythonPeripheral @ sysbus <0x60010000, +0x1000> { size: 0x1000; initable: true; filename: \"configs/renode/shared/peripherals/solar_charger/solar_charger_stub.py\" }"
+
+# Shared macros (reset, log helpers).
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# USART2 is the console on Nucleo-WL55JC1.  Bring-up firmware uses
+# defmt-rtt, so this analyser is empty until UART logging is wired in.
+showAnalyzer sysbus.usart2
+
+# Default firmware path.  Build with:
+#   make arm TARGET=stm32wle5 ROLE=gagan
+# from the workspace root; the ELF lands at $CARGO_TARGET_DIR/<triple>/debug/<bin>.
+$bin?=@target/thumbv7em-none-eabihf/debug/gagan
+
+macro reset
+"""
+    sysbus LoadELF $bin
+"""
+
+# Abort / panic hooks — pause the simulation on Cortex-M faults.
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler" "pause"
+cpu AddSymbolHook "_default_abort" "pause"
+
+# GDB on 3334 (RISC-V ports use 3333; avoid the clash).
+machine StartGdbServer 3334
+
+runMacro $reset
+
+echo "──────────────────────────────────────────────────────"
+echo " SWM STM32WLE5JC dev-kit simulation ready"
+echo " Console: usart2   Radio: LR1121SubGhzRadio @ SUBGHZSPI"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────"

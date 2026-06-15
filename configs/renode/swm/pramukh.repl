@@ -1,0 +1,46 @@
+// ─────────────────────────────────────────────────────────────
+//  pramukh.repl  —  SWM Pramukh MC Master Controller
+//
+//  Platform: ESP32-C6 (RISC-V HP core, RV32IMAC @ up to 160 MHz)
+//  Role:     Coordinator — LoRa network coordinator + cloud relay + automation
+//  Power:    Mains — no battery/solar; supply-sense ADC only
+//  Radio:    Semtech transceiver on SPI2 — replaced by pramukh.resc at load time
+//
+//  Inherits the full ESP32-C6 SoC platform; OHT-specific stubs are replaced
+//  with plain pass-through models since this node has no sensors.
+// ─────────────────────────────────────────────────────────────
+
+using "../soc/riscv/esp32c6/esp32c6.repl"
+
+// ── SYSTIMER — 1 ms per snapshot (MC variant)
+// Override the sensor-node systimer (100 µs/snapshot) with a coarser 1 ms
+// increment.  Pramukh has no busy-wait sensor loop, so Instant::now() fires
+// only on explicit timer reads; without this override all QS timestamps show 0.
+systimer: Python.PythonPeripheral @ sysbus 0x6000A000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/timer/systimer_mc_stub.py"
+
+// ── No Ultrasonic Sensor
+// Override HC-SR04 stub: Pramukh has no level sensor.
+gpio_hcsr04: Python.PythonPeripheral @ sysbus 0x60091000
+    size: 0x1000
+    initable: false
+    script: "request.Value = 0"
+
+// ── Mains Supply Sense
+// Override battery/solar ADC stub: Pramukh is mains-powered.
+// Returns a fixed 5 V supply-sense value (no battery, no solar panel).
+// SAR1_DATA (+0x40): VALID=1, count = 5000 mV × 4095 / 6600 ≈ 3102 = 0xC1E
+adc_stub: Python.PythonPeripheral @ sysbus 0x6000E000
+    size: 0x1000
+    initable: false
+    script: "request.Value = 0x010C1E if request.Offset == 0x40 else 0"
+
+// ── No I2C Sensors
+// Pramukh has no I2C-connected sensors; keep plain MappedMemory stub.
+// (Inherited from base platform — no override needed.)
+
+// ── LoRa Module (Semtech SX1278 SPI transceiver)
+// Inherited: spi2 @ 0x60081000  (ESP32C6_LoraSpi C# stub)
+// pramukh.resc unregisters this and loads the SX1278 Python model (sx1278_spi.py) in its place.
