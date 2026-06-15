@@ -4,6 +4,8 @@ members = [
     "hal-ti",
     "hal-cmsis",
     "hal-ht32",
+    "hal-lxsis",
+    "hal-rvsis",
     "examples/gpio-blink",
     "examples/uart-echo",
 ]

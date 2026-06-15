@@ -9,6 +9,7 @@
 extern crate alloc;
 
 pub mod error;
+pub mod mmio;
 pub mod gpio;
 pub mod uart;
 pub mod spi;
