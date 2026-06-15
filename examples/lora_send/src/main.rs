@@ -28,10 +28,11 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use qf::active::{new_active_object, ActiveBehavior, ActiveContext, ActiveObjectId};
+use qf::active::{new_active_object, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event, Signal};
+use qf::hsm::reserved::*;
 use qf::time::{TimeEvent, TimeEventConfig};
-use qf::TraceError;
+use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult, TraceError};
 use qf_port_posix::{PosixPort, PosixQkRuntime};
 use qk::{QkKernel, QkKernelError};
 use qs::predefined::TargetInfo;
@@ -59,27 +60,25 @@ static KERNEL: OnceLock<Arc<qk::QkKernel>> = OnceLock::new();
 
 // ── LoRaSenderAO ─────────────────────────────────────────────────────────────
 
-struct LoRaSenderAO {
+struct LoRaSenderData {
     timer: Arc<TimeEvent>,
     count: u32,
 }
 
-impl LoRaSenderAO {
-    fn new(timer: Arc<TimeEvent>) -> Self {
-        Self { timer, count: 0 }
-    }
+fn sender_initial(_sm: &mut LoRaSenderData, _e: &DynEvent) -> QHsmResult<LoRaSenderData> {
+    q_tran!(sending)
 }
 
-impl ActiveBehavior for LoRaSenderAO {
-    fn on_start(&mut self, _ctx: &mut ActiveContext) {
-        println!("LoRaSenderAO: started — sending every 5 ticks");
-        self.timer.arm(5, Some(5));
-    }
-
-    fn on_event(&mut self, _ctx: &mut ActiveContext, event: DynEvent) {
-        if event.signal() == TIMEOUT_SIG {
-            self.count += 1;
-            let msg = format!("hello LoRa #{}", self.count);
+fn sending(sm: &mut LoRaSenderData, e: &DynEvent) -> QHsmResult<LoRaSenderData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            println!("LoRaSenderAO: started — sending every 5 ticks");
+            sm.timer.arm(5, Some(5));
+            q_handled!()
+        }
+        10 => { // TIMEOUT_SIG
+            sm.count += 1;
+            let msg = format!("hello LoRa #{}", sm.count);
             let payload: DynPayload = Arc::new(RfTxReqPayload::new(
                 msg.into_bytes(),
                 1, // FPort 1
@@ -87,7 +86,9 @@ impl ActiveBehavior for LoRaSenderAO {
             if let Some(kernel) = KERNEL.get() {
                 let _ = kernel.post(COMMS_ID, Event::with_arc(RF_TX_REQ_SIG, payload));
             }
+            q_handled!()
         }
+        _ => q_super!(QHsm::<LoRaSenderData>::top_state),
     }
 }
 
@@ -124,7 +125,13 @@ fn build_runtime(port: &Arc<PosixPort>)
     let timer = Arc::new(TimeEvent::new(SENDER_ID, TimeEventConfig::new(TIMEOUT_SIG)));
     let sender_ao = new_active_object(
         SENDER_ID, 3,
-        LoRaSenderAO::new(Arc::clone(&timer)),
+        QHsm::new(
+            LoRaSenderData {
+                timer: Arc::clone(&timer),
+                count: 0,
+            },
+            sender_initial,
+        ),
     );
 
     let builder = QkKernel::builder()

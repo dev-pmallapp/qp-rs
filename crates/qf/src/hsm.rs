@@ -143,6 +143,14 @@ pub fn same_state<S>(a: StateHandler<S>, b: StateHandler<S>) -> bool {
     (a as usize) == (b as usize)
 }
 
+/// Abstract state machine interface.
+pub trait QAsm: Send + 'static {
+    /// Initialise the state machine (execute initial transition).
+    fn init(&mut self);
+    /// Dispatch an event to the state machine.
+    fn dispatch(&mut self, event: &DynEvent);
+}
+
 // ── QHsm struct ──────────────────────────────────────────────────────────────
 
 /// Hierarchical State Machine.
@@ -165,6 +173,16 @@ pub struct QHsm<S> {
     history: BTreeMap<usize, StateHandler<S>>,
 }
 
+impl<S: Send + 'static> QAsm for QHsm<S> {
+    fn init(&mut self) {
+        self.init();
+    }
+
+    fn dispatch(&mut self, event: &DynEvent) {
+        self.dispatch(event);
+    }
+}
+
 impl<S: Send + 'static> QHsm<S> {
     // ── Construction ─────────────────────────────────────────────────────────
 
@@ -179,6 +197,21 @@ impl<S: Send + 'static> QHsm<S> {
             sm,
             history: BTreeMap::new(),
         }
+    }
+
+    /// Returns `true` if the state machine is in the given state (or any of its substates).
+    pub fn is_in(&mut self, state: StateHandler<S>) -> bool {
+        let mut cur = self.state;
+        loop {
+            if same_state(cur, state) {
+                return true;
+            }
+            if same_state(cur, Self::top_state) {
+                break;
+            }
+            cur = self.get_super(cur);
+        }
+        false
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────

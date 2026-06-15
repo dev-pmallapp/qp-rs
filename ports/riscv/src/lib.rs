@@ -10,9 +10,103 @@ pub mod mstatus_cfg;
 pub use context::{ContextFrame, ThreadStack};
 pub use mstatus_cfg::{qk_lock, qk_unlock};
 
+use qf::kernel::Kernel;
+use qf::time::TimerWheel;
+use qk::QkKernel;
+use qk::QkTimerWheel;
 use qxk::QxkKernel;
 #[cfg(feature = "hw")]
 use qxk::ScheduleMode;
+
+/// RISC-V QF runtime.
+pub struct RiscVQfRuntime {
+    kernel: alloc::sync::Arc<Kernel>,
+    timers: TimerWheel,
+}
+
+impl RiscVQfRuntime {
+    /// Creates a runtime from an already-built kernel.
+    pub fn new(kernel: Kernel) -> Self {
+        let kernel = alloc::sync::Arc::new(kernel);
+        let timers = TimerWheel::new(alloc::sync::Arc::clone(&kernel));
+        Self { kernel, timers }
+    }
+
+    /// Starts all registered active objects.
+    pub fn start(&self) {
+        self.kernel.start();
+    }
+
+    /// Registers a time event.
+    pub fn register_time_event(&mut self, event: alloc::sync::Arc<qf::time::TimeEvent>) {
+        self.timers.register(event);
+    }
+
+    /// Processes a system tick.
+    pub fn tick(&self) -> Result<(), qf::time::TimeEventError> {
+        self.timers.tick()
+    }
+
+    /// Processes a system tick from an ISR.
+    pub fn tick_from_isr(&self) -> Result<(), qf::time::TimeEventError> {
+        self.timers.tick_from_isr()
+    }
+
+    /// Runs one scheduling cycle.
+    pub fn run_until_idle(&self) {
+        self.kernel.run_until_idle();
+    }
+
+    /// Check if there is pending work.
+    pub fn has_pending_work(&self) -> bool {
+        self.kernel.has_pending_work()
+    }
+}
+
+/// RISC-V QK runtime.
+pub struct RiscVQkRuntime {
+    kernel: alloc::sync::Arc<QkKernel>,
+    timers: QkTimerWheel,
+}
+
+impl RiscVQkRuntime {
+    /// Creates a runtime from an already-built kernel.
+    pub fn new(kernel: QkKernel) -> Self {
+        let kernel = alloc::sync::Arc::new(kernel);
+        let timers = QkTimerWheel::new(alloc::sync::Arc::clone(&kernel));
+        Self { kernel, timers }
+    }
+
+    /// Starts the kernel and all registered active objects.
+    pub fn start(&self) {
+        self.kernel.start();
+    }
+
+    /// Registers a time event.
+    pub fn register_time_event(&mut self, event: alloc::sync::Arc<qf::time::TimeEvent>) {
+        self.timers.register(event);
+    }
+
+    /// Processes a system tick.
+    pub fn tick(&self) -> Result<(), qk::QkTimeEventError> {
+        self.timers.tick()
+    }
+
+    /// Processes a system tick from an ISR.
+    pub fn tick_from_isr(&self) -> Result<(), qk::QkTimeEventError> {
+        self.timers.tick_from_isr()
+    }
+
+    /// Runs one scheduling cycle.
+    pub fn run_until_idle(&self) {
+        self.kernel.run_until_idle();
+    }
+
+    /// Check if there is pending work.
+    pub fn has_pending_work(&self) -> bool {
+        self.kernel.has_pending_work()
+    }
+}
 
 #[cfg(feature = "hw")]
 #[no_mangle]

@@ -19,6 +19,7 @@ pub mod equeue;
 pub mod event;
 pub mod event_pool;
 pub mod hsm;
+pub mod qmsm;
 pub mod isr;
 pub mod kernel;
 pub mod pool;
@@ -26,11 +27,12 @@ pub mod pubsub;
 pub mod priospec;
 mod sync;
 pub mod time;
-pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
+pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef, QActive, Q};
 pub use equeue::{defer, flush_deferred, recall, QEQueue};
 pub use event::{Event, EventHeader, Signal};
 pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
-pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH};
+pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH, QAsm};
+pub use qmsm::{QMsm, QMState, QMsmResult, QMStateHandler, same_qmstate};
 pub use isr::{in_isr, isr_nesting};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig};
 pub use pool::QMPool;
@@ -97,6 +99,58 @@ macro_rules! q_ignored {
 macro_rules! q_tran_hist {
     ($parent:expr) => {
         $crate::hsm::QHsmResult::TranHist($parent)
+    };
+}
+
+// ── QMsm convenience macros ───────────────────────────────────────────────────
+
+/// Declare a QMsm state transition to `$target`.
+///
+/// Returns `QMsmResult::Tran($target)` from a QMsm state handler.
+#[macro_export]
+macro_rules! qm_tran {
+    ($target:expr) => {
+        $crate::qmsm::QMsmResult::Tran($target)
+    };
+}
+
+/// Delegate the event to super-state `$super`.
+///
+/// Returns `QMsmResult::Super($super)` from a QMsm state handler.
+#[macro_export]
+macro_rules! qm_super {
+    ($super:expr) => {
+        $crate::qmsm::QMsmResult::Super($super)
+    };
+}
+
+/// The event was handled; no state transition.
+///
+/// Returns `QMsmResult::Handled` from a QMsm state handler.
+#[macro_export]
+macro_rules! qm_handled {
+    () => {
+        $crate::qmsm::QMsmResult::Handled
+    };
+}
+
+/// The event was intentionally ignored.
+///
+/// Returns `QMsmResult::Ignored` from a QMsm state handler.
+#[macro_export]
+macro_rules! qm_ignored {
+    () => {
+        $crate::qmsm::QMsmResult::Ignored
+    };
+}
+
+/// Transition to the history of composite state `$parent`.
+///
+/// Returns `QMsmResult::TranHist($parent)` from a QMsm state handler.
+#[macro_export]
+macro_rules! qm_tran_hist {
+    ($parent:expr) => {
+        $crate::qmsm::QMsmResult::TranHist($parent)
     };
 }
 

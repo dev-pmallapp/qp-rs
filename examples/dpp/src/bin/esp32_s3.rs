@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use esp_idf_sys as _;
 
-use qf::active::{new_active_object, ActiveContext, ActiveObjectId, SignalHandler};
+use qf::active::{new_active_object, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event, Signal};
 use qf::time::{TimeEvent, TimeEventConfig};
+use qf::{qm_tran, qm_super, qm_handled, qm_ignored, QMsm, QMState, QMsmResult};
 use qf_port_esp32_s3::{Esp32S3Port, Esp32S3QkRuntime, PortConfig};
 use qk::{QkKernel, QkKernelBuilder};
 
@@ -63,8 +64,10 @@ struct ApplicationResources {
 
 fn build_application() -> ApplicationResources {
     let mut builder = QkKernel::builder();
+
+    let table_sm = QMsm::new(Table::new(), &TABLE_ACTIVE);
     builder = builder
-        .register(new_active_object(TABLE_ID, 6, Table::new()))
+        .register(new_active_object(TABLE_ID, 6, table_sm))
         .expect("table registration should succeed");
 
     let mut timers = Vec::with_capacity(N_PHILO);
@@ -75,10 +78,12 @@ fn build_application() -> ApplicationResources {
         timers.push(Arc::clone(&timer));
 
         let priority = 3 + index as u8;
+        let philo_data = Philosopher::new(index, philo_id, Arc::clone(&timer));
+        let philo_sm = QMsm::new(philo_data, &PHILO_ACTIVE);
         let philo = new_active_object(
             philo_id,
             priority,
-            Philosopher::new(index, philo_id, Arc::clone(&timer)),
+            philo_sm,
         );
         builder = builder
             .register(philo)
@@ -88,17 +93,9 @@ fn build_application() -> ApplicationResources {
     ApplicationResources { builder, timers }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhiloState {
-    Thinking,
-    Hungry,
-    Eating,
-}
-
 struct Philosopher {
     index: usize,
     id: ActiveObjectId,
-    state: PhiloState,
     timer: Arc<TimeEvent>,
 }
 
@@ -107,7 +104,6 @@ impl Philosopher {
         Self {
             index,
             id,
-            state: PhiloState::Thinking,
             timer,
         }
     }
@@ -129,50 +125,77 @@ impl Philosopher {
             let _ = kernel.post(TABLE_ID, evt);
         }
     }
+}
 
-    fn transition(&mut self, ctx: &mut ActiveContext, signal: Signal, target: PhiloState) {
-        match (self.state, target) {
-            (PhiloState::Thinking, PhiloState::Hungry) => {
-                self.timer.disarm();
-                self.post_table(HUNGRY_SIG);
-                println!("Philosopher {} is hungry", self.index);
-            }
-            (PhiloState::Hungry, PhiloState::Eating) => {
-                self.schedule_eat();
-                println!("Philosopher {} starts eating", self.index);
-            }
-            (PhiloState::Eating, PhiloState::Thinking) => {
-                self.timer.disarm();
-                self.post_table(DONE_SIG);
-                self.schedule_think();
-                println!("Philosopher {} returns to thinking", self.index);
-            }
-            _ => {}
-        }
+static PHILO_ACTIVE: QMState<Philosopher> = QMState {
+    superstate: None,
+    state_handler: philo_active,
+    entry_action: None,
+    exit_action: None,
+    init_action: Some(|_sm| Some(&PHILO_THINKING)),
+};
 
-        self.state = target;
+static PHILO_THINKING: QMState<Philosopher> = QMState {
+    superstate: Some(&PHILO_ACTIVE),
+    state_handler: philo_thinking,
+    entry_action: Some(|sm| {
+        sm.schedule_think();
+        println!("Philosopher {} starts thinking", sm.index);
+    }),
+    exit_action: Some(|sm| {
+        sm.timer.disarm();
+    }),
+    init_action: None,
+};
+
+static PHILO_HUNGRY: QMState<Philosopher> = QMState {
+    superstate: Some(&PHILO_ACTIVE),
+    state_handler: philo_hungry,
+    entry_action: Some(|sm| {
+        sm.post_table(HUNGRY_SIG);
+        println!("Philosopher {} is hungry", sm.index);
+    }),
+    exit_action: None,
+    init_action: None,
+};
+
+static PHILO_EATING: QMState<Philosopher> = QMState {
+    superstate: Some(&PHILO_ACTIVE),
+    state_handler: philo_eating,
+    entry_action: Some(|sm| {
+        sm.schedule_eat();
+        println!("Philosopher {} starts eating", sm.index);
+    }),
+    exit_action: Some(|sm| {
+        sm.timer.disarm();
+        sm.post_table(DONE_SIG);
+        println!("Philosopher {} returns to thinking", sm.index);
+    }),
+    init_action: None,
+};
+
+fn philo_active(_sm: &mut Philosopher, _e: &DynEvent) -> QMsmResult<Philosopher> {
+    qm_ignored!()
+}
+
+fn philo_thinking(sm: &mut Philosopher, e: &DynEvent) -> QMsmResult<Philosopher> {
+    match e.signal() {
+        TIMEOUT_SIG => qm_tran!(&PHILO_HUNGRY),
+        _ => qm_super!(&PHILO_ACTIVE),
     }
 }
 
-impl SignalHandler for Philosopher {
-    fn on_start(&mut self, _ctx: &mut ActiveContext) {
-        self.schedule_think();
-        println!("Philosopher {} starts thinking", self.index);
+fn philo_hungry(sm: &mut Philosopher, e: &DynEvent) -> QMsmResult<Philosopher> {
+    match e.signal() {
+        EAT_SIG => qm_tran!(&PHILO_EATING),
+        _ => qm_super!(&PHILO_ACTIVE),
     }
+}
 
-    fn handle_signal(&mut self, signal: Signal, ctx: &mut ActiveContext) {
-        match (self.state, signal) {
-            (PhiloState::Thinking, TIMEOUT_SIG) => {
-                self.transition(ctx, signal, PhiloState::Hungry);
-            }
-            (PhiloState::Hungry, EAT_SIG) => {
-                self.transition(ctx, signal, PhiloState::Eating);
-            }
-            (PhiloState::Eating, TIMEOUT_SIG) => {
-                self.transition(ctx, signal, PhiloState::Thinking);
-            }
-            _ => {}
-        }
+fn philo_eating(sm: &mut Philosopher, e: &DynEvent) -> QMsmResult<Philosopher> {
+    match e.signal() {
+        TIMEOUT_SIG => qm_tran!(&PHILO_THINKING),
+        _ => qm_super!(&PHILO_ACTIVE),
     }
 }
 
@@ -217,39 +240,57 @@ impl Table {
     }
 }
 
-impl SignalHandler for Table {
-    fn on_start(&mut self, _ctx: &mut ActiveContext) {
+static TABLE_ACTIVE: QMState<Table> = QMState {
+    superstate: None,
+    state_handler: table_active,
+    entry_action: None,
+    exit_action: None,
+    init_action: Some(|_sm| Some(&TABLE_SERVING)),
+};
+
+static TABLE_SERVING: QMState<Table> = QMState {
+    superstate: Some(&TABLE_ACTIVE),
+    state_handler: table_serving,
+    entry_action: Some(|_sm| {
         println!("Table active object initialised");
-    }
+    }),
+    exit_action: None,
+    init_action: None,
+};
 
-    fn handle_signal(&mut self, signal: Signal, event: DynEvent, _ctx: &mut ActiveContext) {
-        match signal {
-            HUNGRY_SIG => {
-                let payload = event.payload.clone();
-                let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
-                let index = msg.index;
-                println!("Table: philosopher {} requests forks", index);
-                if !self.try_grant(index) {
-                    self.waiting.push_back(index);
-                }
-            }
-            DONE_SIG => {
-                let payload = event.payload.clone();
-                let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
-                let index = msg.index;
-                println!("Table: philosopher {} releases forks", index);
-                self.release_forks(index);
+fn table_active(_sm: &mut Table, _e: &DynEvent) -> QMsmResult<Table> {
+    qm_ignored!()
+}
 
-                let mut still_waiting = VecDeque::new();
-                while let Some(waiting_index) = self.waiting.pop_front() {
-                    if !self.try_grant(waiting_index) {
-                        still_waiting.push_back(waiting_index);
-                    }
-                }
-                self.waiting = still_waiting;
+fn table_serving(sm: &mut Table, e: &DynEvent) -> QMsmResult<Table> {
+    match e.signal() {
+        HUNGRY_SIG => {
+            let payload = e.payload.clone();
+            let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
+            let index = msg.index;
+            println!("Table: philosopher {} requests forks", index);
+            if !sm.try_grant(index) {
+                sm.waiting.push_back(index);
             }
-            _ => {}
+            qm_handled!()
         }
+        DONE_SIG => {
+            let payload = e.payload.clone();
+            let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
+            let index = msg.index;
+            println!("Table: philosopher {} releases forks", index);
+            sm.release_forks(index);
+
+            let mut still_waiting = VecDeque::new();
+            while let Some(waiting_index) = sm.waiting.pop_front() {
+                if !sm.try_grant(waiting_index) {
+                    still_waiting.push_back(waiting_index);
+                }
+            }
+            sm.waiting = still_waiting;
+            qm_handled!()
+        }
+        _ => qm_super!(&TABLE_ACTIVE),
     }
 }
 

@@ -224,3 +224,10 @@ impl<T: SignalHandler> ActiveBehavior for T {
         SignalHandler::handle_signal(self, event.signal(), ctx);
     }
 }
+
+/// Type alias matching QP/C++'s QActive.
+pub type QActive<B> = ActiveObject<B>;
+
+/// Convenient short alias for QActive.
+pub type Q<B> = ActiveObject<B>;
+
