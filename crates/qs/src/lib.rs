@@ -55,7 +55,9 @@ const DEFAULT_MAX_RECORD_LEN: usize = 64;
 /// Configuration for the tracer.
 #[derive(Debug, Clone)]
 pub struct QsConfig {
+    /// Maximum payload length per record (excluding header/checksum).
     pub max_record_len: usize,
+    /// Whether to include a timestamp in records that request one.
     pub include_timestamp: bool,
 }
 
@@ -71,18 +73,25 @@ impl Default for QsConfig {
 /// A single QS record.
 #[derive(Debug, Clone)]
 pub struct QsRecord {
+    /// Sequence number (wraps at `u8::MAX`).
     pub seq: u8,
+    /// QS record type id.
     pub record_type: u8,
+    /// Optional timestamp captured when the record was emitted.
     pub timestamp: Option<Duration>,
+    /// Record payload bytes.
     pub payload: Vec<u8>,
 }
 
 /// Errors that can occur while emitting QS data.
 #[derive(Debug)]
 pub enum TraceError {
+    /// The payload exceeded the configured maximum record length.
     PayloadTooLarge(usize),
+    /// The backend failed to write the frame.
     #[cfg(feature = "std")]
     Backend(io::Error),
+    /// The backend failed to write the frame.
     #[cfg(not(feature = "std"))]
     Backend,
 }
@@ -118,6 +127,7 @@ impl From<io::Error> for TraceError {
 
 /// Backend trait that consumes HDLC framed bytes.
 pub trait TraceBackend: Send + Sync {
+    /// Writes one complete HDLC-framed record to the transport.
     fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError>;
 }
 
@@ -129,6 +139,7 @@ pub struct WriterBackend<W: Write + Send + Sync + 'static> {
 
 #[cfg(feature = "std")]
 impl<W: Write + Send + Sync + 'static> WriterBackend<W> {
+    /// Wraps any [`Write`] implementation as a trace backend.
     pub fn new(writer: W) -> Self {
         Self {
             writer: Arc::new(Mutex::new(writer)),
@@ -155,12 +166,14 @@ pub struct Tracer<B: TraceBackend> {
     filter: GlbFilter,
 }
 
+/// Cheaply clonable, thread-safe handle to a shared [`Tracer`].
 #[derive(Clone)]
 pub struct TracerHandle<B: TraceBackend> {
     inner: Arc<Mutex<Tracer<B>>>,
 }
 
 impl<B: TraceBackend> Tracer<B> {
+    /// Creates a tracer writing to `backend` with the given configuration.
     pub fn new(cfg: QsConfig, backend: B) -> Self {
         Self {
             backend,
@@ -182,12 +195,15 @@ impl<B: TraceBackend> Tracer<B> {
         &self.filter
     }
 
+    /// Wraps the tracer in a shareable [`TracerHandle`].
     pub fn into_handle(self) -> TracerHandle<B> {
         TracerHandle {
             inner: Arc::new(Mutex::new(self)),
         }
     }
 
+    /// Encodes and writes one record, returning the encoded [`QsRecord`].
+    /// Records suppressed by the global filter are returned without being sent.
     pub fn record(
         &mut self,
         record_type: u8,
@@ -290,10 +306,12 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         self.inner.lock().set_filter(filter);
     }
 
+    /// Emits a record without a timestamp.
     pub fn emit(&self, record_type: u8, payload: &[u8]) -> Result<QsRecord, TraceError> {
         self.emit_internal(record_type, payload, false)
     }
 
+    /// Emits a record including a timestamp.
     pub fn emit_with_timestamp(
         &self,
         record_type: u8,
@@ -302,6 +320,8 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         self.emit_internal(record_type, payload, true)
     }
 
+    /// Emits a record, choosing whether to include a timestamp, discarding the
+    /// returned [`QsRecord`].
     pub fn emit_with_flag(
         &self,
         record_type: u8,
@@ -325,6 +345,8 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         guard.record(record_type, payload, with_timestamp)
     }
 
+    /// Returns a [`TraceHook`] closure that emits through this handle, suitable
+    /// for installing on a kernel or active object.
     pub fn hook(&self) -> TraceHook {
         let inner = Arc::clone(&self.inner);
         Arc::new(move |record_type, payload, with_timestamp| {
@@ -339,6 +361,8 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
     }
 }
 
+/// Shared callback used across the framework to emit a QS record
+/// `(record_type, payload, with_timestamp)`.
 pub type TraceHook = Arc<dyn Fn(u8, &[u8], bool) -> Result<(), TraceError> + Send + Sync>;
 
 /// 128-bit per-record-type filter.

@@ -24,17 +24,60 @@ pub enum RxCmd {
     /// Query target info (triggers `TARGET_INFO` response).
     Info,
     /// Execute a user-defined command; `id` selects the function, `p1`–`p3` are params.
-    Command { id: u8, p1: u32, p2: u32, p3: u32 },
+    Command {
+        /// User command id selecting the target function.
+        id: u8,
+        /// First parameter.
+        p1: u32,
+        /// Second parameter.
+        p2: u32,
+        /// Third parameter.
+        p3: u32,
+    },
     /// Soft-reset request.
     Reset,
     /// Advance the tick clock for the given tick rate.
-    Tick { rate: u8 },
+    Tick {
+        /// Tick-rate domain to advance.
+        rate: u8,
+    },
     /// Read memory from the target.
-    Peek { addr: u64, offset: u16, size: u8, num: u8 },
+    Peek {
+        /// Base address to read from.
+        addr: u64,
+        /// Byte offset added to `addr`.
+        offset: u16,
+        /// Size of each element in bytes.
+        size: u8,
+        /// Number of elements to read.
+        num: u8,
+    },
     /// Write bytes into target memory.
-    Poke { addr: u64, offset: u16, size: u8, num: u8, data: Vec<u8> },
+    Poke {
+        /// Base address to write to.
+        addr: u64,
+        /// Byte offset added to `addr`.
+        offset: u16,
+        /// Size of each element in bytes.
+        size: u8,
+        /// Number of elements to write.
+        num: u8,
+        /// Bytes to write (`size * num` long).
+        data: Vec<u8>,
+    },
     /// Fill a region of target memory with a repeated pattern.
-    Fill { addr: u64, offset: u16, size: u8, num: u8, data: Vec<u8> },
+    Fill {
+        /// Base address to fill from.
+        addr: u64,
+        /// Byte offset added to `addr`.
+        offset: u16,
+        /// Size of the fill pattern in bytes.
+        size: u8,
+        /// Number of times to repeat the pattern.
+        num: u8,
+        /// The fill pattern (`size` bytes).
+        data: Vec<u8>,
+    },
     /// Start a new QUTest test (clears all registered probes).
     TestSetup,
     /// End the current QUTest test (clears all registered probes).
@@ -43,42 +86,95 @@ pub enum RxCmd {
     TestContinue,
     /// Register a test probe: when production code calls `take_test_probe(fn_ptr)`
     /// it will receive `data` (once).
-    TestProbe { fn_ptr: u64, data: u32 },
+    TestProbe {
+        /// Address of the production function the probe is keyed to.
+        fn_ptr: u64,
+        /// Value delivered to the probe (once).
+        data: u32,
+    },
     /// Apply a global filter bitmask (128 bits = 16 bytes, little-endian).
-    GlbFilter { bits: [u8; 16] },
+    GlbFilter {
+        /// 128-bit record-type filter bitmask.
+        bits: [u8; 16],
+    },
     /// Apply a local (per-object) filter.
-    LocFilter { kind: u8, obj_ptr: u64 },
+    LocFilter {
+        /// Object-kind selector.
+        kind: u8,
+        /// Address of the object to filter.
+        obj_ptr: u64,
+    },
     /// Apply an AO filter (allow/block records for one AO by priority).
-    AoFilter { prio: u8 },
+    AoFilter {
+        /// Priority of the active object to filter.
+        prio: u8,
+    },
     /// Set the "current object" (kind + pointer) for query/filter operations.
-    CurrObj { kind: u8, obj_ptr: u64 },
+    CurrObj {
+        /// Object-kind selector.
+        kind: u8,
+        /// Address of the object to make current.
+        obj_ptr: u64,
+    },
     /// Query the current object's state; `kind` selects the object type.
-    QueryCurr { kind: u8 },
+    QueryCurr {
+        /// Object-kind selector.
+        kind: u8,
+    },
     /// Inject an event directly into an active object identified by `prio`.
-    Event { prio: u8, signal: u16, payload: Vec<u8> },
+    Event {
+        /// Priority of the destination active object.
+        prio: u8,
+        /// Signal of the injected event.
+        signal: u16,
+        /// Raw event payload bytes.
+        payload: Vec<u8>,
+    },
     /// Unrecognised command; raw bytes preserved for forward compatibility.
-    Unknown { cmd: u8, payload: Vec<u8> },
+    Unknown {
+        /// The unrecognised command type byte.
+        cmd: u8,
+        /// Raw payload bytes following the command type.
+        payload: Vec<u8>,
+    },
 }
 
 /// QS-RX command type constants — match `QS_RX*` in QP/C++ and
 /// `tools/qspy/src/commands.rs`.
 pub mod cmd {
+    /// Query target info.
     pub const INFO:          u8 = 0;
+    /// Execute a user-defined command.
     pub const COMMAND:       u8 = 1;
+    /// Soft-reset the target.
     pub const RESET:         u8 = 2;
+    /// Advance the tick clock.
     pub const TICK:          u8 = 3;
+    /// Read target memory.
     pub const PEEK:          u8 = 4;
+    /// Write target memory.
     pub const POKE:          u8 = 5;
+    /// Fill target memory with a pattern.
     pub const FILL:          u8 = 6;
+    /// Begin a QUTest test.
     pub const TEST_SETUP:    u8 = 7;
+    /// End a QUTest test.
     pub const TEST_TEARDOWN: u8 = 8;
+    /// Register a QUTest probe.
     pub const TEST_PROBE:    u8 = 9;
+    /// Set the global record filter.
     pub const GLB_FILTER:    u8 = 10;
+    /// Set a local (per-object) filter.
     pub const LOC_FILTER:    u8 = 11;
+    /// Set an active-object filter.
     pub const AO_FILTER:     u8 = 12;
+    /// Set the current object.
     pub const CURR_OBJ:      u8 = 13;
+    /// Resume a paused QUTest test.
     pub const TEST_CONTINUE: u8 = 14;
+    /// Query the current object.
     pub const QUERY_CURR:    u8 = 15;
+    /// Inject an event into an active object.
     pub const EVENT:         u8 = 16;
 }
 
@@ -104,6 +200,7 @@ const ESC:     u8 = 0x7D;
 const ESC_XOR: u8 = 0x20;
 
 impl RxParser {
+    /// Creates a parser in the idle state, ready to receive frames.
     pub fn new() -> Self {
         Self {
             state:    RxState::Idle,

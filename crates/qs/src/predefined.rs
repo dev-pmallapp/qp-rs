@@ -28,22 +28,38 @@ pub const TARGET_INFO: u8 = 64;
 /// Helper describing the payload of the `QS_TARGET_INFO` record.
 #[derive(Debug, Clone)]
 pub struct TargetInfo {
+    /// `0xFF` for a reset (power-up) info record, `0x00` otherwise.
     pub is_reset: u8,
+    /// QP framework version (e.g. `740`).
     pub version: u16,
+    /// Byte width of a signal on the target.
     pub signal_size: u8,
+    /// Byte width of an event size field.
     pub event_size: u8,
+    /// Byte width of an event-queue counter.
     pub equeue_ctr_size: u8,
+    /// Byte width of a time-event counter.
     pub time_evt_ctr_size: u8,
+    /// Byte width of a memory-pool block-size field.
     pub mpool_size_size: u8,
+    /// Byte width of a memory-pool counter.
     pub mpool_ctr_size: u8,
+    /// Byte width of an object pointer on the target.
     pub obj_ptr_size: u8,
+    /// Byte width of a function pointer on the target.
     pub fun_ptr_size: u8,
+    /// Byte width of a QS timestamp.
     pub time_size: u8,
+    /// Maximum number of active objects.
     pub max_active: u8,
+    /// Maximum number of event pools.
     pub max_event_pools: u8,
+    /// Maximum number of tick-rate domains.
     pub max_tick_rate: u8,
-    pub build_time: (u8, u8, u8), // (hour, minute, second)
-    pub build_date: (u8, u8, u8), // (day, month, year % 100)
+    /// Build time as `(hour, minute, second)`.
+    pub build_time: (u8, u8, u8),
+    /// Build date as `(day, month, year % 100)`.
+    pub build_date: (u8, u8, u8),
 }
 
 impl Default for TargetInfo {
