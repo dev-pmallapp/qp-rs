@@ -5,9 +5,9 @@
 
 use hal::error::{HalError, HalResult};
 use hal::gpio::{GpioPin, Level, PinMode};
-use hal::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver, SpreadingFactor};
+use hal::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver};
 use hal::spi::SpiMaster;
-use crate::gpio::EspGpioPin;
+use crate::esp32s3::Esp32S3Pin;
 
 // Register map
 const REG_FIFO:           u8 = 0x00;
@@ -37,14 +37,14 @@ const EXPECTED_VERSION:   u8 = 0x12;
 /// SX1276 radio driver.
 ///
 /// Generic over any [`SpiMaster`] implementation so it can run on real
-/// hardware (ESP-IDF) and under simulation (Renode) without modification.
+/// hardware and under simulation (Renode) without modification.
 pub struct Sx1276<SPI> {
     spi:   SPI,
-    reset: EspGpioPin,
+    reset: Esp32S3Pin,
 }
 
 impl<SPI: SpiMaster> Sx1276<SPI> {
-    pub fn new(spi: SPI, reset: EspGpioPin) -> Self {
+    pub fn new(spi: SPI, reset: Esp32S3Pin) -> Self {
         Self { spi, reset }
     }
 

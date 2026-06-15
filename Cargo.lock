@@ -652,6 +652,13 @@ name = "hal"
 version = "0.1.0"
 
 [[package]]
+name = "hal-rvsis"
+version = "0.1.0"
+dependencies = [
+ "hal",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,6 +825,7 @@ dependencies = [
  "embuild",
  "esp-idf-sys",
  "hal",
+ "hal-rvsis",
  "qf",
  "qf-port-esp32-c6",
  "qf-port-posix",

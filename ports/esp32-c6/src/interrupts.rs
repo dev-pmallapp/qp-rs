@@ -16,9 +16,17 @@ impl InterruptController {
         }
     }
 
-    /// Configures interrupt priorities to align with the QK scheduler.
+    /// Configures interrupt priorities via the PLIC to align with the QK scheduler.
     pub fn configure_priorities(&mut self) {
-        // TODO: configure RISC-V interrupt priorities once HAL is available.
+        #[cfg(feature = "rt")]
+        {
+            use hal_rvsis::plic::{PlicController, PLIC_BASE_DEFAULT};
+            use hal::interrupt::InterruptPriority;
+            // Safety: called once during port init with exclusive peripheral access.
+            let mut plic = unsafe { PlicController::new(PLIC_BASE_DEFAULT, 0) };
+            // Enable the RISC-V machine-timer interrupt (source 7 on ESP32-C6).
+            let _ = plic.set_priority(7, InterruptPriority::Priority1);
+        }
     }
 
     /// Locks the scheduler and returns a guard that releases on drop.

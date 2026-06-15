@@ -16,9 +16,17 @@ impl InterruptController {
         }
     }
 
-    /// Configures interrupt priorities to align with the QK scheduler.
+    /// Configures interrupt priorities via INTENABLE to align with the QK scheduler.
     pub fn configure_priorities(&mut self) {
-        // TODO: configure Xtensa interrupt matrix priorities.
+        #[cfg(feature = "rt")]
+        {
+            use hal_lxsis::intenable::IntenableController;
+            use hal::interrupt::InterruptController as HalIntCtrl;
+            // Safety: called once during port init with exclusive access to INTENABLE.
+            let mut ctrl = unsafe { IntenableController::new() };
+            // Enable the CCOMPARE0 interrupt (source 6 on Xtensa LX7).
+            let _ = ctrl.enable_interrupt(6);
+        }
     }
 
     /// Locks the scheduler and returns a guard that releases on drop.

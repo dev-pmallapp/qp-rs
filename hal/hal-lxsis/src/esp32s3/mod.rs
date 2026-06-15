@@ -4,6 +4,7 @@ pub mod regs;
 pub mod gpio;
 pub mod spi;
 pub mod uart;
+pub mod radio;
 
 pub use regs::GpioRegs;
 pub use gpio::Esp32S3Pin;

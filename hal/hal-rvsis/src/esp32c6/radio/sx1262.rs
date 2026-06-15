@@ -6,9 +6,9 @@
 
 use hal::error::{HalError, HalResult};
 use hal::gpio::{GpioPin, Level, PinMode};
-use hal::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver, SpreadingFactor};
+use hal::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver};
 use hal::spi::SpiMaster;
-use crate::gpio::EspGpioPin;
+use crate::esp32c6::Esp32C6Pin;
 
 // SX1262 opcode commands
 const CMD_SET_SLEEP:            u8 = 0x84;
@@ -39,18 +39,18 @@ const CR_48:     u8 = 0x04;
 /// always low (Renode peripheral responds immediately).
 pub struct Sx1262<SPI> {
     spi:   SPI,
-    reset: EspGpioPin,
-    busy:  Option<EspGpioPin>,
+    reset: Esp32C6Pin,
+    busy:  Option<Esp32C6Pin>,
 }
 
 impl<SPI: SpiMaster> Sx1262<SPI> {
     /// Create a driver without a BUSY pin (suitable for simulation).
-    pub fn new(spi: SPI, reset: EspGpioPin) -> Self {
+    pub fn new(spi: SPI, reset: Esp32C6Pin) -> Self {
         Self { spi, reset, busy: None }
     }
 
     /// Create a driver with a BUSY pin (required on real hardware).
-    pub fn with_busy(spi: SPI, reset: EspGpioPin, busy: EspGpioPin) -> Self {
+    pub fn with_busy(spi: SPI, reset: Esp32C6Pin, busy: Esp32C6Pin) -> Self {
         Self { spi, reset, busy: Some(busy) }
     }
 
@@ -114,7 +114,7 @@ impl<SPI: SpiMaster> RfDriver for Sx1262<SPI> {
         self.hard_reset()?;
         // Verify chip is responsive by reading status (0xC0 returns chip mode)
         self.wait_busy()?;
-        let mut status_buf = [CMD_GET_STATUS, 0x00];
+        let status_buf = [CMD_GET_STATUS, 0x00];
         let mut rx = [0u8; 2];
         self.spi.transfer(&status_buf, &mut rx)?;
         let chip_mode = (rx[1] >> 4) & 0x07;

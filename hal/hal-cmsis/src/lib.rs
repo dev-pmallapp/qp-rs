@@ -16,7 +16,10 @@ pub mod stm32f4;
 #[cfg(feature = "nrf52840")]
 pub mod nrf52;
 
-// Placeholder modules for other chip features
+#[cfg(feature = "lpc1768")]
+pub mod lpc17;
+
+// Placeholder modules for not-yet-implemented chip variants
 #[cfg(feature = "cc26xx")]
 pub mod cc26xx {}
 

@@ -19,7 +19,8 @@ use std::time::Duration;
 
 use esp_idf_sys as _;
 
-use hal_esp::{EspGpioPin, EspSpiMaster, Sx1262};
+use hal::spi::SpiMaster;
+use hal_rvsis::esp32c6::{Esp32C6Pin, Esp32C6Spi, radio::Sx1262};
 
 use qf::active::{new_active_object, ActiveBehavior, ActiveContext, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event, Signal};
@@ -30,7 +31,6 @@ use qk::QkKernel;
 use comms::{
     lora::LoRaRf,
     mac::CommsAO,
-    records::LORA_TX_PKT,
     session::LoRaSession,
     events::{RfTxReqPayload, RF_TX_REQ_SIG},
 };
@@ -82,15 +82,17 @@ impl ActiveBehavior for LoRaSenderAO {
 
 // ── Wiring ────────────────────────────────────────────────────────────────────
 
-fn build_sx1262() -> Sx1262<EspSpiMaster> {
-    // SPI2 bus — MOSI=7, MISO=2, SCLK=6, CS=10, 1 MHz
-    let spi = EspSpiMaster::new(2, 7, 2, 6, 10, 1_000_000)
-        .expect("SPI init failed");
+fn build_sx1262() -> Sx1262<Esp32C6Spi> {
+    use hal::spi::SpiConfig;
+    use hal_rvsis::esp32c6::regs::{SPI2_BASE, SpiRegs};
 
-    let reset = EspGpioPin::output(4).expect("reset pin init failed");
-    let busy  = EspGpioPin::input(5).expect("busy pin init failed");
+    let mut spi = unsafe { Esp32C6Spi::new(SPI2_BASE as *const SpiRegs) };
+    spi.configure(&SpiConfig::default()).expect("SPI config failed");
 
-    Sx1262::new(spi, reset, Some(busy))
+    let reset = unsafe { Esp32C6Pin::new(4) };
+    let busy  = unsafe { Esp32C6Pin::new(5) };
+
+    Sx1262::with_busy(spi, reset, busy)
 }
 
 fn main() -> ! {
