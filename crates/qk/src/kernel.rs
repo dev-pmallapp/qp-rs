@@ -5,6 +5,8 @@ use core::fmt;
 
 use qf::active::{ActiveObjectId, ActiveObjectRef};
 use qf::event::{DynEvent, Signal};
+use qf::pubsub::PubSubTable;
+use qf::priospec::QPrioSpec;
 use qf::TraceHook;
 
 use crate::scheduler::{QkScheduler, SchedStatus, ScheduleDecision};
@@ -31,6 +33,7 @@ struct ActiveSlot {
 pub struct QkKernelBuilder {
     registrations: Vec<Registration>,
     trace: Option<TraceHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl QkKernelBuilder {
@@ -39,7 +42,14 @@ impl QkKernelBuilder {
         Self {
             registrations: Vec::new(),
             trace: None,
+            pubsub: None,
         }
+    }
+
+    /// Initializes publish-subscribe with subscriber bitmap table up to `max_signal`.
+    pub fn ps_init(mut self, max_signal: u16) -> Self {
+        self.pubsub = Some(PubSubTable::new(max_signal));
+        self
     }
 
     /// Registers an active object using its own priority as its preemption
@@ -76,6 +86,15 @@ impl QkKernelBuilder {
             object,
         });
         Ok(self)
+    }
+
+    /// Registers an active object with a priority and threshold encoded in `QPrioSpec`.
+    pub fn register_prio(
+        self,
+        object: ActiveObjectRef,
+        spec: QPrioSpec,
+    ) -> Result<Self, QkKernelError> {
+        self.register_with_threshold(object, spec.threshold())
     }
 
     fn validate_priority(&self, priority: u8) -> Result<(), QkKernelError> {
@@ -118,7 +137,7 @@ impl QkKernelBuilder {
 
     /// Validates the registrations and constructs the [`QkKernel`].
     pub fn build(self) -> Result<QkKernel, QkKernelError> {
-        QkKernel::new(self.registrations, self.trace)
+        QkKernel::new(self.registrations, self.trace, self.pubsub)
     }
 }
 
@@ -176,6 +195,7 @@ pub struct QkKernel {
     slots: Vec<Option<ActiveSlot>>,
     id_to_prio: BTreeMap<ActiveObjectId, u8>,
     trace: Option<TraceHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl QkKernel {
@@ -187,6 +207,7 @@ impl QkKernel {
     fn new(
         registrations: Vec<Registration>,
         trace: Option<TraceHook>,
+        pubsub: Option<PubSubTable>,
     ) -> Result<Self, QkKernelError> {
         let mut slots: Vec<Option<ActiveSlot>> = vec![None; MAX_PRIORITY + 1];
         let mut id_to_prio = BTreeMap::new();
@@ -211,6 +232,7 @@ impl QkKernel {
             slots,
             id_to_prio,
             trace,
+            pubsub,
         })
     }
 
@@ -222,6 +244,50 @@ impl QkKernel {
     /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
+    }
+
+    /// Subscribe the active object at `priority` to the given `signal`.
+    pub fn subscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.subscribe(signal, priority);
+            self.emit_subscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from the given `signal`.
+    pub fn unsubscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe(signal, priority);
+            self.emit_unsubscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from all signals.
+    pub fn unsubscribe_all(&self, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe_all(priority);
+        }
+    }
+
+    fn emit_subscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_publish(&self, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
+        }
     }
 
     /// Locks the scheduler at `ceiling`, preventing preemption by tasks at or
@@ -286,17 +352,35 @@ impl QkKernel {
         Ok(())
     }
 
-    /// Broadcasts an event (with `signal`) to every registered active object,
-    /// marking each as ready. Does not itself run the scheduler.
+    /// Broadcasts or multicasts an event (with `signal`) to registered active objects,
+    /// marking each recipient as ready. Does not itself run the scheduler.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
-        for (prio, slot_opt) in self.slots.iter().enumerate() {
-            if let Some(slot) = slot_opt {
-                let was_empty = !slot.object.has_events();
-                let mut cloned = event.clone();
-                cloned.header.signal = signal;
-                slot.object.post(cloned);
-                if was_empty {
-                    self.scheduler.mark_ready(prio as u8);
+        if let Some(ref pubsub) = self.pubsub {
+            self.emit_publish(signal);
+            let subscribers = pubsub.subscribers(signal);
+            for (prio, slot_opt) in self.slots.iter().enumerate() {
+                if let Some(slot) = slot_opt {
+                    if (subscribers & (1u64 << prio)) != 0 {
+                        let was_empty = !slot.object.has_events();
+                        let mut cloned = event.clone();
+                        cloned.header.signal = signal;
+                        slot.object.post(cloned);
+                        if was_empty {
+                            self.scheduler.mark_ready(prio as u8);
+                        }
+                    }
+                }
+            }
+        } else {
+            for (prio, slot_opt) in self.slots.iter().enumerate() {
+                if let Some(slot) = slot_opt {
+                    let was_empty = !slot.object.has_events();
+                    let mut cloned = event.clone();
+                    cloned.header.signal = signal;
+                    slot.object.post(cloned);
+                    if was_empty {
+                        self.scheduler.mark_ready(prio as u8);
+                    }
                 }
             }
         }
@@ -583,6 +667,69 @@ mod tests {
 
         kernel.run_until_idle();
         assert!(!kernel.has_pending_work());
+        Ok(())
+    }
+
+    #[test]
+    fn register_prio_sets_threshold() -> Result<(), QkKernelError> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let id = ActiveObjectId::new(10);
+        let ao = new_active_object(id, 4, Recorder::new(id, Arc::clone(&log)));
+
+        // Create priority spec with priority 4 and threshold 6
+        let spec = QPrioSpec::new(4, 6);
+
+        let kernel = QkKernel::builder()
+            .register_prio(ao, spec)?
+            .build()
+            .expect("kernel should build");
+
+        kernel.start();
+
+        // Verify that priority is 4 and slot threshold is 6
+        assert_eq!(kernel.id_to_prio.get(&id), Some(&4));
+        assert_eq!(kernel.slots[4].as_ref().unwrap().threshold, 6);
+        Ok(())
+    }
+
+    #[test]
+    fn publish_filters_based_on_subscribers() -> Result<(), QkKernelError> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let low_id = ActiveObjectId::new(11);
+        let high_id = ActiveObjectId::new(12);
+
+        let low = new_active_object(low_id, 2, Recorder::new(low_id, Arc::clone(&log)));
+        let high = new_active_object(high_id, 5, Recorder::new(high_id, Arc::clone(&log)));
+
+        let kernel = QkKernel::builder()
+            .ps_init(100)
+            .register(low)?
+            .register(high)?
+            .build()
+            .expect("kernel should build");
+
+        kernel.start();
+
+        // Subscribe low to Signal(20), high to Signal(30)
+        kernel.subscribe(Signal(20), 2);
+        kernel.subscribe(Signal(30), 5);
+
+        // Publish Signal(20)
+        kernel.publish_and_run(Signal(20), DynEvent::empty_dyn(Signal(0)));
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(entries.as_slice(), &[(low_id, Signal(20))]);
+        }
+
+        // Publish Signal(30)
+        kernel.publish_and_run(Signal(30), DynEvent::empty_dyn(Signal(0)));
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(
+                entries.as_slice(),
+                &[(low_id, Signal(20)), (high_id, Signal(30))]
+            );
+        }
         Ok(())
     }
 }

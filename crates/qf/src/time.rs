@@ -30,20 +30,29 @@ pub struct TimeEventConfig {
     pub signal: Signal,
     /// Re-arm interval in ticks for periodic events; `None` for one-shot.
     pub interval_ticks: Option<u64>,
+    /// Tick-rate domain this time event belongs to.
+    pub tick_rate: u8,
 }
 
 impl TimeEventConfig {
-    /// Creates a one-shot configuration that posts `signal` on expiry.
+    /// Creates a one-shot configuration that posts `signal` on expiry (default tick rate 0).
     pub fn new(signal: Signal) -> Self {
         Self {
             signal,
             interval_ticks: None,
+            tick_rate: 0,
         }
     }
 
     /// Makes the configuration periodic, re-arming every `interval` ticks.
     pub fn with_period(mut self, interval: u64) -> Self {
         self.interval_ticks = Some(interval);
+        self
+    }
+
+    /// Configures the tick-rate domain for this event.
+    pub fn with_tick_rate(mut self, tick_rate: u8) -> Self {
+        self.tick_rate = tick_rate;
         self
     }
 }
@@ -183,6 +192,11 @@ impl TimeEvent {
         self.inner.lock().armed
     }
 
+    /// Returns the tick-rate domain this time event is registered with.
+    pub fn tick_rate(&self) -> u8 {
+        self.inner.lock().cfg.tick_rate
+    }
+
     /// Installs (or clears) the QS trace hook used for this event's records.
     pub fn set_trace(&self, hook: Option<TraceHook>) {
         *self.trace.lock() = hook;
@@ -231,7 +245,7 @@ impl TimeEvent {
 /// Cooperative timer wheel that calls into the kernel every tick.
 pub struct TimerWheel {
     kernel: Arc<Kernel>,
-    events: Vec<Arc<TimeEvent>>,
+    events: Vec<Vec<Arc<TimeEvent>>>,
     trace: Option<TraceHook>,
 }
 
@@ -239,9 +253,14 @@ impl TimerWheel {
     /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
     pub fn new(kernel: Arc<Kernel>) -> Self {
         let trace = kernel.trace_hook();
+        let max_rate = kernel.config().max_tick_rate as usize;
+        let mut events = Vec::with_capacity(max_rate);
+        for _ in 0..max_rate.max(1) {
+            events.push(Vec::new());
+        }
         Self {
             kernel,
-            events: Vec::new(),
+            events,
             trace,
         }
     }
@@ -249,20 +268,45 @@ impl TimerWheel {
     /// Registers a time event with the wheel, wiring up the wheel's trace hook.
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
-        self.events.push(event);
+        let rate = event.tick_rate() as usize;
+        if rate < self.events.len() {
+            self.events[rate].push(event);
+        } else {
+            while self.events.len() <= rate {
+                self.events.push(Vec::new());
+            }
+            self.events[rate].push(event);
+        }
     }
 
-    /// Advances the wheel by one tick, posting any events that have expired.
-    pub fn tick(&self) -> Result<(), TimeEventError> {
-        for event in &self.events {
-            if let Some((target, evt)) = event.poll() {
-                self.kernel.post(target, evt.clone())?;
+    /// Advances the wheel for the specified `tick_rate` domain by one tick, posting any events that have expired.
+    pub fn tick_rate(&self, tick_rate: u8) -> Result<(), TimeEventError> {
+        let rate = tick_rate as usize;
+        if rate < self.events.len() {
+            for event in &self.events[rate] {
+                if let Some((target, evt)) = event.poll() {
+                    self.kernel.post(target, evt)?;
+                }
             }
         }
         Ok(())
     }
 
-    /// Advance the timer wheel from an ISR context.
+    /// Advances the default (tick_rate 0) wheel by one tick.
+    pub fn tick(&self) -> Result<(), TimeEventError> {
+        self.tick_rate(0)
+    }
+
+    /// Advance the timer wheel for the specified `tick_rate` domain from an ISR context.
+    pub fn tick_rate_from_isr(&self, tick_rate: u8) -> Result<(), TimeEventError> {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "tick_rate_from_isr called outside ISR context"
+        );
+        self.tick_rate(tick_rate)
+    }
+
+    /// Advance the default timer wheel from an ISR context.
     ///
     /// Semantically identical to `tick()` but signals intent that the caller
     /// is inside an interrupt service routine (`qk_isr_entry!()` was called).
@@ -273,14 +317,28 @@ impl TimerWheel {
             crate::isr::in_isr(),
             "tick_from_isr called outside ISR context"
         );
-        self.tick()
+        self.tick_rate(0)
+    }
+
+    /// Returns `true` if there are no armed time events in the specified `tick_rate` domain.
+    pub fn no_active(&self, tick_rate: u8) -> bool {
+        let rate = tick_rate as usize;
+        if rate < self.events.len() {
+            for event in &self.events[rate] {
+                if event.is_armed() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
 impl TimeEvent {
     fn obtain_trace(&self) -> Option<(TraceHook, TimeEventTraceInfo)> {
         let trace = self.trace.lock().clone()?;
-        let meta = self.meta.lock().clone()?;
+        let mut meta = self.meta.lock().clone()?;
+        meta.tick_rate = self.inner.lock().cfg.tick_rate;
         Some((trace, meta))
     }
 

@@ -11,7 +11,7 @@ use crate::sync::Arc;
 /// their target active objects through the [`QkKernel`].
 pub struct QkTimerWheel {
     kernel: Arc<QkKernel>,
-    events: Vec<Arc<TimeEvent>>,
+    events: Vec<Vec<Arc<TimeEvent>>>,
     trace: Option<TraceHook>,
 }
 
@@ -19,9 +19,14 @@ impl QkTimerWheel {
     /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
     pub fn new(kernel: Arc<QkKernel>) -> Self {
         let trace = kernel.trace_hook();
+        // Fallback size to 1 if no registered tick rates, or use standard count
+        let mut events = Vec::with_capacity(4);
+        for _ in 0..4 {
+            events.push(Vec::new());
+        }
         Self {
             kernel,
-            events: Vec::new(),
+            events,
             trace,
         }
     }
@@ -29,20 +34,48 @@ impl QkTimerWheel {
     /// Registers a time event with the wheel, wiring up the wheel's trace hook.
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
-        self.events.push(event);
+        let rate = event.tick_rate() as usize;
+        if rate < self.events.len() {
+            self.events[rate].push(event);
+        } else {
+            while self.events.len() <= rate {
+                self.events.push(Vec::new());
+            }
+            self.events[rate].push(event);
+        }
     }
 
-    /// Advances the wheel by one tick, posting any events that have expired.
-    pub fn tick(&self) -> Result<(), QkTimeEventError> {
-        for event in &self.events {
-            if let Some((target, evt)) = event.poll() {
-                self.kernel.post_and_run(target, evt)?;
+    /// Advances the wheel for the specified `tick_rate` domain by one tick, posting any events that have expired.
+    pub fn tick_rate(&self, tick_rate: u8) -> Result<(), QkTimeEventError> {
+        let rate = tick_rate as usize;
+        if rate < self.events.len() {
+            for event in &self.events[rate] {
+                if let Some((target, evt)) = event.poll() {
+                    self.kernel.post_and_run(target, evt)?;
+                }
             }
         }
         Ok(())
     }
 
-    /// Advance the timer wheel from an ISR context.
+    /// Advances the default (tick_rate 0) wheel by one tick.
+    pub fn tick(&self) -> Result<(), QkTimeEventError> {
+        self.tick_rate(0)
+    }
+
+    /// Advance the timer wheel for the specified `tick_rate` domain from an ISR context.
+    ///
+    /// Caller must have called `qf::qk_isr_entry!()` before this.
+    /// Corresponds to `QTimeEvt::tickFromISR_()` in QP/C++.
+    pub fn tick_rate_from_isr(&self, tick_rate: u8) -> Result<(), QkTimeEventError> {
+        debug_assert!(
+            qf::isr::in_isr(),
+            "tick_rate_from_isr called outside ISR context"
+        );
+        self.tick_rate(tick_rate)
+    }
+
+    /// Advance the default timer wheel from an ISR context.
     ///
     /// Caller must have called `qf::qk_isr_entry!()` before this.
     /// Corresponds to `QTimeEvt::tickFromISR_()` in QP/C++.
@@ -51,7 +84,20 @@ impl QkTimerWheel {
             qf::isr::in_isr(),
             "tick_from_isr called outside ISR context"
         );
-        self.tick()
+        self.tick_rate(0)
+    }
+
+    /// Returns `true` if there are no armed time events in the specified `tick_rate` domain.
+    pub fn no_active(&self, tick_rate: u8) -> bool {
+        let rate = tick_rate as usize;
+        if rate < self.events.len() {
+            for event in &self.events[rate] {
+                if event.is_armed() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -170,5 +216,49 @@ mod tests {
         assert!(entries
             .iter()
             .all(|(id, sig)| *id == ao_id && *sig == Signal(22)));
+    }
+
+    #[test]
+    fn multi_tick_rate_domains() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let ao_id = ActiveObjectId::new(12);
+        let ao = new_active_object(ao_id, 6, Recorder::new(ao_id, Arc::clone(&log)));
+        let kernel = build_kernel(ao);
+        kernel.start();
+
+        // Rate 0 event
+        let event0 = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(25)).with_tick_rate(0)));
+        event0.arm(1, None);
+
+        // Rate 1 event
+        let event1 = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(26)).with_tick_rate(1)));
+        event1.arm(1, None);
+
+        let mut wheel = QkTimerWheel::new(Arc::clone(&kernel));
+        wheel.register(Arc::clone(&event0));
+        wheel.register(Arc::clone(&event1));
+
+        assert!(!wheel.no_active(0));
+        assert!(!wheel.no_active(1));
+        assert!(wheel.no_active(2));
+
+        // Tick rate 0
+        wheel.tick_rate(0).expect("tick 0 should succeed");
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal(25))]);
+        }
+
+        assert!(wheel.no_active(0));
+        assert!(!wheel.no_active(1));
+
+        // Tick rate 1
+        wheel.tick_rate(1).expect("tick 1 should succeed");
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal(25)), (ao_id, Signal(26))]);
+        }
+
+        assert!(wheel.no_active(1));
     }
 }

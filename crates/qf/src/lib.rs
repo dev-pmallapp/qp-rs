@@ -22,6 +22,8 @@ pub mod hsm;
 pub mod isr;
 pub mod kernel;
 pub mod pool;
+pub mod pubsub;
+pub mod priospec;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef};
@@ -32,6 +34,8 @@ pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH};
 pub use isr::{in_isr, isr_nesting};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig};
 pub use pool::QMPool;
+pub use pubsub::PubSubTable;
+pub use priospec::{QPrioSpec, q_prio};
 #[cfg(feature = "qs")]
 pub use qs::{QsConfig, QsRecord, TraceBackend, Tracer, TracerHandle};
 pub use time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo, TimerWheel};

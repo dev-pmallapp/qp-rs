@@ -12,6 +12,7 @@ use crate::trace::{TraceError, TraceHook};
 
 use crate::active::{ActiveObjectId, ActiveObjectRef};
 use crate::event::{DynEvent, Signal};
+use crate::pubsub::PubSubTable;
 
 const QS_SCHED_LOCK: u8 = 50;
 const QS_SCHED_UNLOCK: u8 = 51;
@@ -178,6 +179,7 @@ pub struct KernelBuilder {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
     trace: Option<TraceHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl KernelBuilder {
@@ -187,7 +189,14 @@ impl KernelBuilder {
             config,
             objects: Vec::new(),
             trace: None,
+            pubsub: None,
         }
+    }
+
+    /// Initializes publish-subscribe with subscriber bitmap table up to `max_signal`.
+    pub fn ps_init(mut self, max_signal: u16) -> Self {
+        self.pubsub = Some(PubSubTable::new(max_signal));
+        self
     }
 
     /// Registers an active object with the kernel.
@@ -205,7 +214,7 @@ impl KernelBuilder {
     /// Sorts the registered objects by priority and constructs the [`Kernel`].
     pub fn build(mut self) -> Kernel {
         self.objects.sort_by_key(|ao| ao.priority());
-        Kernel::new(self.config, self.objects, self.trace)
+        Kernel::new(self.config, self.objects, self.trace, self.pubsub)
     }
 }
 
@@ -246,6 +255,7 @@ pub struct Kernel {
     scheduler: Mutex<SchedulerState>,
     /// Set by `stop()` to break out of a `run()` loop.
     stop_flag: AtomicBool,
+    pubsub: Option<PubSubTable>,
 }
 
 impl Kernel {
@@ -269,13 +279,26 @@ impl Kernel {
         }
     }
 
-    /// Broadcasts an event (with `signal`) to every registered active object.
+    /// Broadcasts or multicasts an event (with `signal`) to registered active objects.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
-        for ao in &self.objects {
-            // Basic publish duplicates the event header, but payload is shared via Arc.
-            let mut cloned = event.clone();
-            cloned.header.signal = signal;
-            ao.post(cloned);
+        if let Some(ref pubsub) = self.pubsub {
+            self.emit_publish(signal);
+            let subscribers = pubsub.subscribers(signal);
+            for ao in &self.objects {
+                let priority = ao.priority();
+                if (subscribers & (1u64 << priority)) != 0 {
+                    let mut cloned = event.clone();
+                    cloned.header.signal = signal;
+                    ao.post(cloned);
+                }
+            }
+        } else {
+            for ao in &self.objects {
+                // Basic publish duplicates the event header, but payload is shared via Arc.
+                let mut cloned = event.clone();
+                cloned.header.signal = signal;
+                ao.post(cloned);
+            }
         }
     }
 
@@ -423,7 +446,7 @@ impl Kernel {
 }
 
 impl Kernel {
-    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>) -> Self {
+    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
         let mut by_id = BTreeMap::new();
         for ao in &objects {
             by_id.insert(ao.id(), Arc::clone(ao));
@@ -435,12 +458,57 @@ impl Kernel {
             trace,
             scheduler: Mutex::new(SchedulerState::default()),
             stop_flag: AtomicBool::new(false),
+            pubsub,
+        }
+    }
+
+    /// Subscribe the active object at `priority` to the given `signal`.
+    pub fn subscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.subscribe(signal, priority);
+            self.emit_subscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from the given `signal`.
+    pub fn unsubscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe(signal, priority);
+            self.emit_unsubscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from all signals.
+    pub fn unsubscribe_all(&self, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe_all(priority);
         }
     }
 
     fn emit_scheduler_record(&self, record_type: u8, payload: Vec<u8>) {
         if let Some(trace) = &self.trace {
             let _ = trace(record_type, &payload, true);
+        }
+    }
+
+    fn emit_subscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_publish(&self, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
         }
     }
 }

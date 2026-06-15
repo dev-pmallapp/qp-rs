@@ -180,7 +180,7 @@ impl ExtendedThread {
         self.state == ThreadState::Terminated
     }
 
-    /// Sets the thread state.
+    #[cfg(test)]
     pub(crate) fn set_state(&mut self, state: ThreadState) {
         self.state = state;
     }
