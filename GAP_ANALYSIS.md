@@ -1,6 +1,6 @@
 # QP-RS vs QP/C++ Gap Analysis
 
-**Date**: 2026-06-10  
+**Date**: 2026-06-15 (refreshed; originally 2026-06-10)  
 **QP/C++ reference version**: v8.1.4 (April 2024)  
 **Goal**: Make qp-rs a drop-in replacement / straightforward port target for QP/C++ applications
 
@@ -8,9 +8,49 @@
 
 ## Executive Summary
 
-qp-rs has a solid foundation covering the kernel layer (QF cooperative, QK preemptive, QXK extended) and the QS binary tracing protocol. The largest gaps are at the **state machine framework layer** (no QHsm/QMsm equivalent), **memory management** (no event pools — uses Arc instead), and **API surface completeness** (defer/recall, pub-sub subscriptions, multi-tick-rate, QS records). True hardware-level context switching for QXK extended threads is also absent, replaced by a polling cooperative model.
+qp-rs covers the kernel layer (QF cooperative, QK preemptive, QXK extended), the QS
+binary tracing protocol, **and most of the framework layer that the original analysis
+flagged as missing**. Since the first revision, the hierarchical state machine framework
+(`QHsm`), static event pools (`QMPool` + `q_new`/`gc`), the raw event queue and
+defer/recall, ISR-safe posting, `QF::run()`/`stop()`, time-event `rearm()`/`wasDisarmed()`,
+the QS semaphore/mutex records, the **QS-RX host→target command parser**, and **QUTest
+test probes** have all landed. The Cortex-M port now performs real PendSV/SVC context
+switching.
 
-The Rust type system eliminates the need for several QP/C++ safety features (DIS integrity checks, MISRA constraints) but requires deliberate API mapping to enable a smooth porting experience.
+The remaining true gaps are **selective publish-subscribe** (publish still broadcasts to
+all AOs), **multi-tick-rate** (single tick domain), and **true context switching for the
+hosted QXK** (still a polling model; only the Cortex-M port switches contexts for real).
+
+The Rust type system eliminates the need for several QP/C++ safety features (DIS integrity
+checks, MISRA constraints) but requires deliberate API mapping to enable a smooth porting
+experience.
+
+> **⚠️ Status note:** Sections 1–14 below were written against the original 2026-06-10
+> snapshot and describe gaps *as they were then*. See **[Implementation Status](#implementation-status-2026-06-15)**
+> immediately below for what has since been resolved; treat that table as authoritative
+> where it conflicts with the per-section "Gap" / "Impact" prose.
+
+---
+
+## Implementation Status (2026-06-15)
+
+| # | Gap (original section) | Status | Where |
+|---|------------------------|--------|-------|
+| 1 | QHsm hierarchical state machine | ✅ Implemented | `crates/qf/src/hsm.rs` (`QHsm`, `QHsmResult`, `dispatch`/`init`) |
+| 2 | Event pools (QMPool / q_new / gc) | ✅ Implemented | `crates/qf/src/pool.rs`, `event_pool.rs` (`QMPool`, `PoolRegistry`, `q_new`, `q_new_x`, `gc`, `EventBox`) |
+| 4 | Defer / recall | ✅ Implemented | `crates/qf/src/equeue.rs` (`defer`, `recall`, `flush_deferred`) |
+| 5 | `QF::run()` / `stop()` lifecycle | ✅ Implemented | `crates/qf/src/kernel.rs` (`run`, `stop`) |
+| 6 | QEQueue raw event queue | ✅ Implemented | `crates/qf/src/equeue.rs` (`QEQueue`) |
+| 7 | `rearm()` / `wasDisarmed()` | ✅ Implemented | `crates/qf/src/time.rs` |
+| 8 | QS sem/mutex records (71–80) | ✅ Implemented | `crates/qs/src/records.rs` (`qxk` module) |
+| 9 | QS-RX command handling | ✅ Implemented | `crates/qs/src/rx.rs` (`RxParser`, `RxCmd`) |
+| 11 | ISR-safe API variants | ✅ Implemented | `crates/qf/src/isr.rs`, `kernel.rs` (`post_from_isr`, `publish_from_isr`), `time.rs` (`tick_from_isr`) |
+| 12 | Pool/queue watermark diagnostics | ✅ Implemented | `get_free`/`get_use`/`get_min` on `QMPool` / `PoolRegistry` |
+| 14 | QUTest test probes | ✅ Partial | `crates/qs/src/qutest.rs` (`set/take/clear_test_probe`, `qs_test_probe!`) + `examples/dpp/tests/qutest_dpp.rs` |
+| 6 (QXK) | QXK true context switch | ✅ Partial | `ports/cortex-m` PendSV/SVC; hosted QXK still polling |
+| 3 | Publish-subscribe (subscribe/unsubscribe) | ❌ Still missing | `publish()` broadcasts to all AOs |
+| 7 | Multi-tick-rate (tick domains) | ❌ Still missing | single `TimerWheel`; `tick_rate` only in trace metadata |
+| 13 | `QPrioSpec` / `Q_PRIO()` | ❌ Still missing | priority + threshold passed separately |
 
 ---
 
@@ -602,4 +642,4 @@ For porting QP/C++ applications to qp-rs, use this mapping table:
 
 ---
 
-*Generated 2026-06-10. Based on QP/C++ v8.1.4 and qp-rs git HEAD (commits through b6d6276).*
+*Originally generated 2026-06-10; refreshed 2026-06-15 (see [Implementation Status](#implementation-status-2026-06-15)). Based on QP/C++ v8.1.4 and qp-rs git HEAD.*
