@@ -22,13 +22,18 @@ const QS_QF_TIMEEVT_REARM: u8 = 36;
 /// QS record: Time event posted to target active object.
 const QS_QF_TIMEEVT_POST: u8 = 37;
 
+/// Configuration for a [`TimeEvent`]: the signal it posts and an optional
+/// periodic interval.
 #[derive(Debug, Clone)]
 pub struct TimeEventConfig {
+    /// Signal posted to the target active object on expiry.
     pub signal: Signal,
+    /// Re-arm interval in ticks for periodic events; `None` for one-shot.
     pub interval_ticks: Option<u64>,
 }
 
 impl TimeEventConfig {
+    /// Creates a one-shot configuration that posts `signal` on expiry.
     pub fn new(signal: Signal) -> Self {
         Self {
             signal,
@@ -36,14 +41,17 @@ impl TimeEventConfig {
         }
     }
 
+    /// Makes the configuration periodic, re-arming every `interval` ticks.
     pub fn with_period(mut self, interval: u64) -> Self {
         self.interval_ticks = Some(interval);
         self
     }
 }
 
+/// Errors that can occur while ticking the QF timer wheel.
 #[derive(Debug)]
 pub enum TimeEventError {
+    /// The kernel rejected the posting of an expired time event.
     Kernel(KernelError),
 }
 
@@ -81,14 +89,19 @@ pub struct TimeEvent {
     meta: Mutex<Option<TimeEventTraceInfo>>,
 }
 
+/// Identifying addresses and tick rate emitted with a time event's QS records.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeEventTraceInfo {
+    /// Synthetic address identifying the time event in traces.
     pub time_event_addr: u64,
+    /// Synthetic address identifying the target active object in traces.
     pub target_addr: u64,
+    /// Tick-rate domain this time event belongs to.
     pub tick_rate: u8,
 }
 
 impl TimeEvent {
+    /// Creates a (disarmed) time event targeting `target`, returned in an [`Arc`].
     pub fn new(target: ActiveObjectId, config: TimeEventConfig) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(TimeEventInner {
@@ -103,6 +116,8 @@ impl TimeEvent {
         })
     }
 
+    /// Arms the event to fire after `timeout_ticks`, optionally re-arming every
+    /// `interval_ticks` thereafter (periodic).
     pub fn arm(&self, timeout_ticks: u64, interval_ticks: Option<u64>) {
         let mut inner = self.inner.lock();
         inner.remaining = timeout_ticks;
@@ -113,6 +128,7 @@ impl TimeEvent {
         self.emit_arm(timeout_ticks, interval_ticks.unwrap_or(0));
     }
 
+    /// Cancels the time event if armed, setting the sticky "was disarmed" flag.
     pub fn disarm(&self) {
         let mut inner = self.inner.lock();
         if inner.armed {
@@ -162,18 +178,23 @@ impl TimeEvent {
         flag
     }
 
+    /// Returns `true` if the time event is currently armed.
     pub fn is_armed(&self) -> bool {
         self.inner.lock().armed
     }
 
+    /// Installs (or clears) the QS trace hook used for this event's records.
     pub fn set_trace(&self, hook: Option<TraceHook>) {
         *self.trace.lock() = hook;
     }
 
+    /// Sets the trace metadata (addresses and tick rate) for this event.
     pub fn set_trace_meta(&self, info: TimeEventTraceInfo) {
         *self.meta.lock() = Some(info);
     }
 
+    /// Advances this event by one tick; returns the target and event to post if
+    /// it expired this tick. One-shot events auto-disarm; periodic events re-arm.
     pub fn poll(&self) -> Option<(ActiveObjectId, DynEvent)> {
         let mut inner = self.inner.lock();
         if !inner.armed {
@@ -215,6 +236,7 @@ pub struct TimerWheel {
 }
 
 impl TimerWheel {
+    /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
     pub fn new(kernel: Arc<Kernel>) -> Self {
         let trace = kernel.trace_hook();
         Self {
@@ -224,11 +246,13 @@ impl TimerWheel {
         }
     }
 
+    /// Registers a time event with the wheel, wiring up the wheel's trace hook.
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
         self.events.push(event);
     }
 
+    /// Advances the wheel by one tick, posting any events that have expired.
     pub fn tick(&self) -> Result<(), TimeEventError> {
         for event in &self.events {
             if let Some((target, evt)) = event.poll() {

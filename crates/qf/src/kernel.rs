@@ -30,14 +30,23 @@ struct SchedulerState {
 /// configuration options like idle callbacks.
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
+    /// Application name reported in the QS `TARGET_INFO` record.
     pub name: &'static str,
+    /// Maximum number of active objects the system is sized for.
     pub max_active: u8,
+    /// Maximum number of event pools.
     pub max_event_pools: u8,
+    /// Maximum number of tick-rate domains.
     pub max_tick_rate: u8,
+    /// Byte width of event-queue counters (for QS encoding).
     pub event_queue_ctr_size: u8,
+    /// Byte width of time-event counters (for QS encoding).
     pub time_event_ctr_size: u8,
+    /// Optional callback invoked when the kernel goes idle.
     pub idle_callback: Option<fn()>,
+    /// Framework version reported to QS (e.g. `740`).
     pub version: u16,
+    /// Optional free-form build information string for QS.
     pub build_info: Option<&'static str>,
 }
 
@@ -163,6 +172,8 @@ impl KernelConfigBuilder {
     }
 }
 
+/// Builder for the cooperative [`Kernel`]: register active objects, attach a
+/// trace hook, then [`build`](Self::build).
 pub struct KernelBuilder {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
@@ -170,6 +181,7 @@ pub struct KernelBuilder {
 }
 
 impl KernelBuilder {
+    /// Creates a builder seeded with the given configuration.
     pub fn new(config: KernelConfig) -> Self {
         Self {
             config,
@@ -178,25 +190,31 @@ impl KernelBuilder {
         }
     }
 
+    /// Registers an active object with the kernel.
     pub fn register(mut self, object: ActiveObjectRef) -> Self {
         self.objects.push(object);
         self
     }
 
+    /// Attaches a QS trace hook to the kernel.
     pub fn with_trace_hook(mut self, hook: TraceHook) -> Self {
         self.trace = Some(hook);
         self
     }
 
+    /// Sorts the registered objects by priority and constructs the [`Kernel`].
     pub fn build(mut self) -> Kernel {
         self.objects.sort_by_key(|ao| ao.priority());
         Kernel::new(self.config, self.objects, self.trace)
     }
 }
 
+/// Errors returned by cooperative-kernel operations.
 #[derive(Debug)]
 pub enum KernelError {
+    /// No active object is registered for the given id.
     NotFound(ActiveObjectId),
+    /// Emitting a QS trace record failed.
     Trace(TraceError),
 }
 
@@ -218,6 +236,8 @@ impl From<TraceError> for KernelError {
     }
 }
 
+/// Cooperative, priority-based QF kernel: dispatches registered active objects
+/// run-to-completion, highest priority first, with scheduler-ceiling locking.
 pub struct Kernel {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
@@ -229,14 +249,17 @@ pub struct Kernel {
 }
 
 impl Kernel {
+    /// Returns a builder using the default [`KernelConfig`].
     pub fn builder() -> KernelBuilder {
         KernelBuilder::new(KernelConfig::default())
     }
 
+    /// Returns a builder seeded with the given [`KernelConfig`].
     pub fn with_config(config: KernelConfig) -> KernelBuilder {
         KernelBuilder::new(config)
     }
 
+    /// Posts an event to the target active object's queue.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), KernelError> {
         if let Some(ao) = self.by_id.get(&target) {
             ao.post(event);
@@ -246,6 +269,7 @@ impl Kernel {
         }
     }
 
+    /// Broadcasts an event (with `signal`) to every registered active object.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
         for ao in &self.objects {
             // Basic publish duplicates the event header, but payload is shared via Arc.
@@ -255,12 +279,15 @@ impl Kernel {
         }
     }
 
+    /// Starts every registered active object, installing the trace hook.
     pub fn start(&self) {
         for ao in &self.objects {
             ao.start(self.trace.clone());
         }
     }
 
+    /// Dispatches ready active objects until none remain, then runs the
+    /// configured idle callback (if any).
     pub fn run_until_idle(&self) {
         while self.dispatch_once() {}
         // Call idle callback if configured
@@ -328,6 +355,8 @@ impl Kernel {
         &self.config
     }
 
+    /// Dispatches one event to the highest-priority ready active object that the
+    /// scheduler ceiling permits; returns `true` if an event was handled.
     pub fn dispatch_once(&self) -> bool {
         let candidate = self
             .objects
@@ -387,6 +416,7 @@ impl Kernel {
         }
     }
 
+    /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
     }
@@ -416,6 +446,8 @@ impl Kernel {
 }
 
 impl Kernel {
+    /// Raises the scheduler ceiling to `ceiling`, suppressing dispatch of active
+    /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
     pub fn lock_scheduler(&self, ceiling: u8) {
         let mut note = None;
         {
@@ -432,6 +464,7 @@ impl Kernel {
         }
     }
 
+    /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
     pub fn unlock_scheduler(&self) {
         let mut note = None;
         {

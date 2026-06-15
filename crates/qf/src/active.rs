@@ -19,6 +19,7 @@ use crate::event::{DynEvent, Signal};
 pub struct ActiveObjectId(pub u8);
 
 impl ActiveObjectId {
+    /// Creates an active-object id from a raw `u8`.
     pub const fn new(id: u8) -> Self {
         Self(id)
     }
@@ -31,18 +32,22 @@ pub struct ActiveContext {
 }
 
 impl ActiveContext {
+    /// Creates a dispatch context for the given active object and trace hook.
     pub fn new(id: ActiveObjectId, trace: Option<TraceHook>) -> Self {
         Self { id, trace }
     }
 
+    /// Returns the id of the active object this context belongs to.
     pub fn id(&self) -> ActiveObjectId {
         self.id
     }
 
+    /// Emits a QS trace record (with timestamp) via the context's trace hook.
     pub fn emit_trace(&self, record_type: u8, payload: &[u8]) -> Result<(), TraceError> {
         self.emit_trace_with_timestamp(record_type, payload, true)
     }
 
+    /// Emits a QS trace record, choosing whether to include a timestamp.
     pub fn emit_trace_with_timestamp(
         &self,
         record_type: u8,
@@ -56,6 +61,7 @@ impl ActiveContext {
         }
     }
 
+    /// Returns a clone of the context's trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
     }
@@ -63,21 +69,29 @@ impl ActiveContext {
 
 /// Trait implemented by application state machines.
 pub trait ActiveBehavior: Send + 'static {
+    /// Called once when the active object starts (top-most initial transition).
     fn on_start(&mut self, ctx: &mut ActiveContext);
+    /// Called for each event dispatched to the active object.
     fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent);
 }
 
 /// Object-safe interface used by the kernel.
 pub trait ActiveRunnable: Send + Sync {
+    /// Returns this active object's id.
     fn id(&self) -> ActiveObjectId;
+    /// Returns this active object's priority.
     fn priority(&self) -> u8;
+    /// Starts the active object, installing the given trace hook.
     fn start(&self, trace: Option<TraceHook>);
+    /// Dispatches at most one queued event; returns `true` if one was handled.
     fn dispatch_one(&self) -> bool;
+    /// Posts an event to the back of this active object's queue (FIFO).
     fn post(&self, event: DynEvent);
     /// Post an event LIFO (to the front of this AO's queue).
     ///
     /// Used by `recall()` to give a recalled event priority over pending events.
     fn post_lifo(&self, event: DynEvent);
+    /// Returns `true` if this active object has queued events.
     fn has_events(&self) -> bool;
 }
 
@@ -91,6 +105,8 @@ pub struct ActiveObject<B: ActiveBehavior> {
 }
 
 impl<B: ActiveBehavior> ActiveObject<B> {
+    /// Creates an active object with the given id, priority, and behavior,
+    /// returning it wrapped in an [`Arc`] ready for kernel registration.
     pub fn new(id: ActiveObjectId, priority: u8, behavior: B) -> Arc<Self> {
         Arc::new(Self {
             id,
@@ -179,6 +195,7 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 }
 
+/// Type-erased, shareable handle to an active object used by the kernel registry.
 pub type ActiveObjectRef = Arc<dyn ActiveRunnable>;
 
 /// Helper builder for typed active objects.
@@ -192,7 +209,9 @@ pub fn new_active_object<B: ActiveBehavior>(
 
 /// Convenience behavior for static state machines that only react to signals.
 pub trait SignalHandler: Send + 'static {
+    /// Optional start hook; defaults to doing nothing.
     fn on_start(&mut self, _ctx: &mut ActiveContext) {}
+    /// Handles a single incoming signal.
     fn handle_signal(&mut self, signal: Signal, ctx: &mut ActiveContext);
 }
 

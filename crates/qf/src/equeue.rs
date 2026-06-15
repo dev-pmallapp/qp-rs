@@ -109,6 +109,7 @@ impl QEQueue {
         !self.inner.lock().buffer.is_empty()
     }
 
+    /// `true` if the queue currently holds no events.
     pub fn is_empty(&self) -> bool {
         self.inner.lock().buffer.is_empty()
     }

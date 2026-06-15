@@ -1,6 +1,7 @@
 #[cfg(feature = "qs")]
 pub use qs::{TraceError, TraceHook};
 
+/// Result of emitting a trace record.
 #[cfg(feature = "qs")]
 pub type TraceResult = Result<(), TraceError>;
 
