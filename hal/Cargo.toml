@@ -1,13 +1,11 @@
 [workspace]
 members = [
-    "hal-esp",
-    "hal-ti",
+    # "hal-esp",
     "hal-cmsis",
-    "hal-ht32",
     "hal-lxsis",
     "hal-rvsis",
-    "examples/gpio-blink",
-    "examples/uart-echo",
+    # "examples/gpio-blink",
+    # "examples/uart-echo",
 ]
 resolver = "2"
 
