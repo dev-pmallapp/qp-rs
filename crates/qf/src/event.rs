@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// Signals are globally unique numeric identifiers. The SRS recommends a
 /// 16-bit range for portable deployments; we follow the same convention here.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Signal(pub u16);
 
 impl From<u16> for Signal {
