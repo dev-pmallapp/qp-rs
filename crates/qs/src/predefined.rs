@@ -113,8 +113,9 @@ pub fn target_info_payload(info: &TargetInfo) -> Vec<u8> {
 
 /// Builds the payload for `QS_OBJ_DICT` records.
 pub fn obj_dict_payload(address: u64, name: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(8 + name.len() + 1);
-    bytes.extend_from_slice(&address.to_le_bytes());
+    let ptr_size = core::mem::size_of::<usize>();
+    let mut bytes = Vec::with_capacity(ptr_size + name.len() + 1);
+    bytes.extend_from_slice(&address.to_le_bytes()[..ptr_size]);
     push_c_string(&mut bytes, name);
     bytes
 }
@@ -134,9 +135,10 @@ pub fn usr_dict_payload(record_id: u8, name: &str) -> Vec<u8> {
 
 /// Builds the payload for `QS_SIG_DICT` records.
 pub fn sig_dict_payload(signal: u16, object: u64, name: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(2 + 8 + name.len() + 1);
+    let ptr_size = core::mem::size_of::<usize>();
+    let mut bytes = Vec::with_capacity(2 + ptr_size + name.len() + 1);
     bytes.extend_from_slice(&signal.to_le_bytes());
-    bytes.extend_from_slice(&object.to_le_bytes());
+    bytes.extend_from_slice(&object.to_le_bytes()[..ptr_size]);
     push_c_string(&mut bytes, name);
     bytes
 }

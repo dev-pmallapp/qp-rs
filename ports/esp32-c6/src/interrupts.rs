@@ -20,10 +20,11 @@ impl InterruptController {
     pub fn configure_priorities(&mut self) {
         #[cfg(feature = "rt")]
         {
-            use hal_rvsis::plic::{PlicController, PLIC_BASE_DEFAULT};
+            use hal_rvsis::plic::PlicController;
             use hal::interrupt::InterruptController;
+            // ESP32-C6 PLIC base is 0x2040_0000 in Renode
             // Safety: called once during port init with exclusive peripheral access.
-            let mut plic = unsafe { PlicController::new(PLIC_BASE_DEFAULT, 0) };
+            let mut plic = unsafe { PlicController::new(0x2040_0000, 0) };
             // Enable the RISC-V machine-timer interrupt (source 7 on ESP32-C6).
             let _ = plic.set_priority(7, 1);
         }

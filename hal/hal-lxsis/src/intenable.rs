@@ -1,6 +1,5 @@
 //! INTENABLE interrupt controller implementation for Xtensa LX
 
-use core::arch::asm;
 use hal::error::{HalError, HalResult};
 use hal::interrupt::{InterruptController, InterruptPriority};
 

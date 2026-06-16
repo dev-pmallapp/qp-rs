@@ -17,6 +17,7 @@ machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
 # Expose USB Serial JTAG over TCP for qspy
 emulation CreateServerSocketTerminal 7777 "qspy_term" false
 connector Connect usb_serial_jtag qspy_term
+usb_serial_jtag CreateFileBackend @/home/pmallapp/Devel/Embedded/qp-rs.git/jtag_uart_raw.log true
 
 # ── RISC-V CSR stubs ─────────────────────────────────────────────
 # Debug trigger CSRs — signal no hardware watchpoints/triggers

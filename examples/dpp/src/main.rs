@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
-use qf::active::{new_active_object, ActiveContext, ActiveObjectId};
+use qf::active::{new_active_object, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event};
 use qf::hsm::reserved::*;
 use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo};
-use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult, Signal, TraceError, Q};
+use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult, Signal, TraceError};
 use qf_port_posix::{PosixPort, PosixQkRuntime};
 use qk::{QkKernel, QkKernelError};
 use qs::qutest::make_probe_record;
@@ -53,7 +53,6 @@ const PHILO_INITIAL_NAME: &str = "Philo::initial";
 const PHILO_THINKING_NAME: &str = "Philo::thinking";
 const PHILO_HUNGRY_NAME: &str = "Philo::hungry";
 const PHILO_EATING_NAME: &str = "Philo::eating";
-const TABLE_ACTIVE_NAME: &str = "Table::active";
 const TABLE_SERVING_NAME: &str = "Table::serving";
 const TABLE_PAUSED_NAME: &str = "Table::paused";
 
@@ -314,7 +313,7 @@ fn table_initial(_sm: &mut TableData, _e: &DynEvent) -> QHsmResult<TableData> {
     q_tran!(serving)
 }
 
-fn active(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
+fn active(_sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
     match e.signal().0 {
         Q_INIT_SIG_VAL => {
             q_tran!(serving)

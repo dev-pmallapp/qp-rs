@@ -11,7 +11,6 @@ use hal::spi::SpiMaster;
 use crate::esp32c6::Esp32C6Pin;
 
 // SX1262 opcode commands
-const CMD_SET_SLEEP:            u8 = 0x84;
 const CMD_SET_STANDBY:          u8 = 0x80;
 const CMD_SET_RF_FREQUENCY:     u8 = 0x86;
 const CMD_SET_TX_PARAMS:        u8 = 0x8E;
@@ -23,7 +22,6 @@ const CMD_SET_TX:               u8 = 0x83;
 const CMD_GET_STATUS:           u8 = 0xC0;
 
 // Modulation parameter encodings
-const SF_OFFSET: u8 = 0; // SF7 = 0x07, SF8 = 0x08, ..., SF12 = 0x0C
 const BW_125K:   u8 = 0x04;
 const BW_250K:   u8 = 0x05;
 const BW_500K:   u8 = 0x06;

@@ -19,12 +19,11 @@ impl SystemTimer {
         self.tick_hz.store(tick_hz, Ordering::Release);
         #[cfg(feature = "rt")]
         {
-            use hal_rvsis::clint::{ClintTimer, CLINT_BASE_DEFAULT};
+            use hal_rvsis::clint::ClintTimer;
             use hal::timer::{Timer, TimerMode};
-            // ESP32-C6 XTAL clock is 40 MHz; LP_CLKRST_LP_TIMER_XTAL_CTRL selects it
-            // for the CLINT mtime counter.  Use 40 MHz as hz.
+            // ESP32-C6 XTAL clock is 40 MHz; CLINT base is 0x2000_0000 in Renode
             let period_us = 1_000_000u64 / tick_hz as u64;
-            let mut clint = ClintTimer::new(CLINT_BASE_DEFAULT, 40_000_000);
+            let mut clint = ClintTimer::new(0x2000_0000, 40_000_000);
             let _ = clint.start(period_us, TimerMode::Periodic);
         }
     }

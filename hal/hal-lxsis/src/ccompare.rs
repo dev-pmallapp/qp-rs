@@ -1,6 +1,5 @@
 //! Ccompare Timer driver for Xtensa LX
 
-use core::arch::asm;
 use hal::error::{HalError, HalResult};
 use hal::timer::{Timer, TimerMode};
 

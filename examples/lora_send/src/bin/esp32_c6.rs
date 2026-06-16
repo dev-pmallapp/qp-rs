@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use esp_idf_sys as _;
 
-use hal::spi::SpiMaster;
 use hal_rvsis::esp32c6::{Esp32C6Pin, Esp32C6Spi, radio::Sx1262};
 
 use qf::active::{new_active_object, ActiveObjectId};
@@ -128,7 +127,10 @@ fn main() -> ! {
     #[cfg(feature = "qs")]
     let builder = {
         let tracer = qs::Tracer::new(qs::QsConfig::default(), qs::stdout_backend()).into_handle();
-        let payload = qs::predefined::target_info_payload(&qs::TargetInfo::default());
+        let mut target_info = qs::TargetInfo::default();
+        target_info.obj_ptr_size = core::mem::size_of::<usize>() as u8;
+        target_info.fun_ptr_size = core::mem::size_of::<usize>() as u8;
+        let payload = qs::predefined::target_info_payload(&target_info);
         let _ = tracer.emit(qs::predefined::TARGET_INFO, &payload);
 
         let _ = tracer.emit(qs::predefined::SIG_DICT, &qs::predefined::sig_dict_payload(TIMEOUT_SIG.0, 0, "TIMEOUT"));
