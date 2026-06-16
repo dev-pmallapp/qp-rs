@@ -14,7 +14,7 @@ path = "src/lib.rs"
 default = ["std"]
 std = ["qf/std", "qk/std", "qxk/std"]
 # Enable when building for a real Cortex-M target.
-hw = []
+hw = ["dep:comms"]
 
 [dependencies]
 qf  = { path = "../../crates/qf",  default-features = false }
@@ -22,3 +22,4 @@ qk  = { path = "../../crates/qk",  default-features = false }
 qxk = { path = "../../crates/qxk", default-features = false }
 spin = "0.9"
 hal-cmsis = { path = "../../hal/hal-cmsis", default-features = false }
+comms = { path = "../../crates/comms", optional = true }

@@ -396,6 +396,7 @@ dependencies = [
  "aes",
  "cmac",
  "hal",
+ "heapless 0.8.0",
  "qf",
  "qs",
 ]
@@ -1692,6 +1693,7 @@ dependencies = [
 name = "qf-port-cortex-m"
 version = "8.1.1"
 dependencies = [
+ "comms",
  "hal-cmsis",
  "qf",
  "qk",
@@ -1703,6 +1705,7 @@ dependencies = [
 name = "qf-port-esp32-c6"
 version = "8.1.1"
 dependencies = [
+ "comms",
  "critical-section",
  "hal",
  "hal-rvsis",

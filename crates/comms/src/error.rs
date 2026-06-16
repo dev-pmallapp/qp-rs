@@ -16,6 +16,8 @@ pub enum CommsError {
     Hardware(HalError),
     /// FOTA-specific error.
     Fota(FotaError),
+    /// Port binding table is full.
+    TableFull,
 }
 
 /// Errors specific to firmware-over-the-air (FOTA) transfers.
@@ -41,6 +43,7 @@ impl fmt::Display for CommsError {
             Self::MacError         => write!(f, "MAC layer error"),
             Self::Hardware(e)      => write!(f, "hardware error: {e}"),
             Self::Fota(e)          => write!(f, "FOTA error: {e:?}"),
+            Self::TableFull        => write!(f, "port binding table full"),
         }
     }
 }

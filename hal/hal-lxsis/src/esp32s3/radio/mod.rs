@@ -2,6 +2,4 @@
 //!
 //! Provides drivers for external radio transceivers.
 
-pub mod sx1276;
-
-pub use sx1276::Sx1276;
+pub type Sx1276<SPI> = hal::drivers::radio::Sx1276<SPI, crate::esp32s3::Esp32S3Pin>;

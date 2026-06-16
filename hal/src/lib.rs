@@ -19,6 +19,8 @@ pub mod adc;
 pub mod dac;
 pub mod interrupt;
 pub mod lora;
+pub mod rf;
+pub mod drivers;
 
 #[cfg(feature = "qp-integration")]
 pub mod integration;

@@ -51,6 +51,9 @@ extern crate alloc;
 pub mod context;
 pub mod nvic_cfg;
 
+#[cfg(feature = "hw")]
+pub mod rf_isr;
+
 pub use context::{ContextFrame, ThreadStack};
 pub use nvic_cfg::{qk_lock, qk_unlock, QK_BASEPRI};
 

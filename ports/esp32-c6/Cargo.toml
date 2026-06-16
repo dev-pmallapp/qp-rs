@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-rt = ["critical-section", "dep:hal", "dep:hal-rvsis", "hal-rvsis/esp32c6"]
+rt = ["critical-section", "dep:hal", "dep:hal-rvsis", "hal-rvsis/esp32c6", "dep:comms"]
 
 [dependencies]
 qf = { path = "../../crates/qf", default-features = false }
@@ -20,6 +20,7 @@ qs = { path = "../../crates/qs", default-features = false }
 hal       = { path = "../../hal",           optional = true }
 hal-rvsis = { path = "../../hal/hal-rvsis", optional = true }
 critical-section = { version = "1", optional = true }
+comms     = { path = "../../crates/comms", optional = true }
 
 [dev-dependencies]
 critical-section = "1"

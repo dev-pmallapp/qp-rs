@@ -1,10 +1,11 @@
 //! Null RF driver for POSIX host testing.
 //!
-//! `NullRf` implements both [`hal::lora::RfDriver`] (chip level) and [`Rf`]
-//! (protocol level) without real hardware.  It prints each transmission to
+//! `NullRf` implements both [`hal::lora::RfDriver`] (chip level) and [`RfPhy`] / [`Rf`]
+//! (protocol level) without real hardware. It prints each transmission to
 //! stdout so the full app→comms→HAL pipeline can be exercised on the host.
 
 use hal::lora::{LoRaTxConfig, RfDriver};
+use hal::rf::{RfPhy, RadioMode, RfTxConfig, RfRxConfig, RxMetadata, PhyEvent};
 use hal::HalError;
 
 use crate::error::CommsError;
@@ -30,11 +31,29 @@ impl RfDriver for NullRf {
     }
 }
 
+impl RfPhy for NullRf {
+    fn init(&mut self) -> Result<(), HalError> { Ok(()) }
+    fn set_mode(&mut self, _mode: RadioMode) -> Result<(), HalError> { Ok(()) }
+    fn configure_tx(&mut self, _cfg: &RfTxConfig) -> Result<(), HalError> { Ok(()) }
+    fn configure_rx(&mut self, _cfg: &RfRxConfig) -> Result<(), HalError> { Ok(()) }
+    fn transmit(&mut self, payload: &[u8]) -> Result<(), HalError> {
+        print!("NullRf TX: ");
+        for b in payload { print!("{b:02x} "); }
+        println!();
+        Ok(())
+    }
+    fn read_rx(&mut self, _buf: &mut [u8], _meta: &RxMetadata) -> Result<(), HalError> { Ok(()) }
+    fn poll_irq(&mut self) -> Result<Option<PhyEvent>, HalError> { Ok(None) }
+    fn clear_irq(&mut self) -> Result<(), HalError> { Ok(()) }
+    fn rssi(&mut self) -> Result<i16, HalError> { Ok(-50) }
+    fn chip_name(&self) -> &'static str { "NullRf" }
+}
+
 impl Rf for NullRf {
     fn chip_name(&self) -> &'static str { "NullRf" }
 
     fn send(&mut self, payload: &[u8]) -> Result<(), CommsError> {
-        self.transmit(&hal::lora::LoRaTxConfig::eu868_default(), payload)
+        RfDriver::transmit(self, &hal::lora::LoRaTxConfig::eu868_default(), payload)
             .map_err(CommsError::from)
     }
 
@@ -42,3 +61,4 @@ impl Rf for NullRf {
         Err(CommsError::NothingReceived)
     }
 }
+
