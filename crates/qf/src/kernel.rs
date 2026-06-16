@@ -211,10 +211,10 @@ impl KernelBuilder {
         self
     }
 
-    /// Sorts the registered objects by priority and constructs the [`Kernel`].
-    pub fn build(mut self) -> Kernel {
+    /// Sorts the registered objects by priority and constructs the [`QvKernel`].
+    pub fn build(mut self) -> QvKernel {
         self.objects.sort_by_key(|ao| ao.priority());
-        Kernel::new(self.config, self.objects, self.trace, self.pubsub)
+        QvKernel::new(self.config, self.objects, self.trace, self.pubsub)
     }
 }
 
@@ -247,7 +247,10 @@ impl From<TraceError> for KernelError {
 
 /// Cooperative, priority-based QF kernel: dispatches registered active objects
 /// run-to-completion, highest priority first, with scheduler-ceiling locking.
-pub struct Kernel {
+///
+/// This is the QP/C++ **QV** kernel equivalent (cooperative, non-preemptive,
+/// single-stack). [`Kernel`] is kept as a backwards-compatible alias.
+pub struct QvKernel {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
     by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
@@ -258,7 +261,11 @@ pub struct Kernel {
     pubsub: Option<PubSubTable>,
 }
 
-impl Kernel {
+/// Backwards-compatible alias for [`QvKernel`], the QP/C++ **QV**-equivalent
+/// cooperative kernel. Prefer `QvKernel` in new code.
+pub type Kernel = QvKernel;
+
+impl QvKernel {
     /// Returns a builder using the default [`KernelConfig`].
     pub fn builder() -> KernelBuilder {
         KernelBuilder::new(KernelConfig::default())
@@ -445,7 +452,7 @@ impl Kernel {
     }
 }
 
-impl Kernel {
+impl QvKernel {
     fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
         let mut by_id = BTreeMap::new();
         for ao in &objects {
@@ -513,7 +520,7 @@ impl Kernel {
     }
 }
 
-impl Kernel {
+impl QvKernel {
     /// Raises the scheduler ceiling to `ceiling`, suppressing dispatch of active
     /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
     pub fn lock_scheduler(&self, ceiling: u8) {

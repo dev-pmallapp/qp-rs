@@ -12,4 +12,5 @@
 - [Pure Rust LXSIS Port (Xtensa LX)](./lxsis.md)
 - [Pure Rust RVSIS Port (RISC-V)](./rvsis.md)
 - [Examples](./examples.md)
+- [Vendoring qp-rs](./vendoring.md)
 - [Porting from QP/C++](./porting.md)

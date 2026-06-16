@@ -34,7 +34,7 @@ pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, 
 pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH, QAsm};
 pub use qmsm::{QMsm, QMState, QMsmResult, QMStateHandler, same_qmstate};
 pub use isr::{in_isr, isr_nesting};
-pub use kernel::{Kernel, KernelBuilder, KernelConfig};
+pub use kernel::{Kernel, KernelBuilder, KernelConfig, QvKernel};
 pub use pool::QMPool;
 pub use pubsub::PubSubTable;
 pub use priospec::{QPrioSpec, q_prio};

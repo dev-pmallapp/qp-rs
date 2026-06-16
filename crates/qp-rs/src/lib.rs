@@ -56,7 +56,8 @@ pub mod prelude {
         QMsm,
         same_state,
         same_qmstate,
-        // Cooperative kernel
+        // Cooperative kernel (QP/C++ QV equivalent; `Kernel` is a back-compat alias)
+        QvKernel,
         Kernel,
         KernelConfig,
         // Time events
