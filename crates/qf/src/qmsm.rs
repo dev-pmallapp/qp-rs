@@ -98,6 +98,15 @@ impl<S: Send + 'static> QMsm<S> {
         self.state
     }
 
+    /// Returns the current state's handler function.
+    ///
+    /// qp-rs equivalent of QP/C++ `QAsm::getStateHandler()`, kept symmetric with
+    /// [`QHsm::state_handler`](crate::QHsm::state_handler). Always available,
+    /// not gated behind the `qs` feature.
+    pub fn state_handler(&self) -> QMStateHandler<S> {
+        self.state.state_handler
+    }
+
     /// Check if the state machine is currently in `state` (or any sub-state).
     pub fn is_in(&self, state: &'static QMState<S>) -> bool {
         let mut cur = Some(self.state);

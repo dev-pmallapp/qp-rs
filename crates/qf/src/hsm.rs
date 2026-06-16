@@ -216,6 +216,16 @@ impl<S: Send + 'static> QHsm<S> {
 
     // ── Accessors ─────────────────────────────────────────────────────────────
 
+    /// Returns the current (stable leaf) state handler.
+    ///
+    /// This is the qp-rs equivalent of QP/C++ `QAsm::getStateHandler()`. It is
+    /// **always available**, not gated behind the `qs` feature (mirroring QP/C++
+    /// 8.1.1, which made `getStateHandler()` unconditionally virtual). Compare
+    /// results with [`same_state`] rather than `==`.
+    pub fn state_handler(&self) -> StateHandler<S> {
+        self.state
+    }
+
     /// Returns a shared reference to the user state machine data.
     pub fn sm(&self) -> &S {
         &self.sm

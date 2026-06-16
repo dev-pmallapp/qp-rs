@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::active::{ActiveObjectId};
 use crate::event::{DynEvent, Signal};
-use crate::hsm::{QHsm, QHsmResult};
+use crate::hsm::{same_state, QHsm, QHsmResult};
 use crate::hsm::reserved::*;
 use crate::kernel::Kernel;
 use crate::{q_handled, q_ignored, q_super, q_tran, q_tran_hist};
@@ -139,6 +139,16 @@ fn dispatch(hsm: &mut QHsm<TestSm>, sig: u16) {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn state_handler_reports_current_leaf() {
+    let mut hsm = make_hsm();
+    // Before init the machine is not yet in the leaf state s21.
+    assert!(!same_state(hsm.state_handler(), s21));
+    hsm.init();
+    // After init the active leaf is s21 (initial → s2 → s2-INIT → s21).
+    assert!(same_state(hsm.state_handler(), s21));
+}
 
 #[test]
 fn init_enters_hierarchy_top_down() {
