@@ -68,6 +68,8 @@ pub mod prelude {
         q_prio,
         // Tracing hook (always available; backend is feature-gated)
         TraceHook,
+        // Context-switch hook (QP/C++ QF_onContextSw equivalent)
+        ContextSwitchHook,
     };
 
     #[cfg(feature = "qk")]

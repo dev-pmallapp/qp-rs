@@ -1,5 +1,5 @@
 use crate::sync::Mutex;
-use qf::TraceHook;
+use qf::{ContextSwitchHook, TraceHook};
 
 #[cfg(feature = "qs")]
 use qs::records::sched;
@@ -122,6 +122,7 @@ pub struct ScheduleDecision {
 pub struct QkScheduler {
     state: Mutex<State>,
     trace: Mutex<Option<TraceHook>>,
+    context_sw: Mutex<Option<ContextSwitchHook>>,
 }
 
 impl QkScheduler {
@@ -130,12 +131,19 @@ impl QkScheduler {
         Self {
             state: Mutex::new(State::default()),
             trace: Mutex::new(trace),
+            context_sw: Mutex::new(None),
         }
     }
 
     /// Installs (or clears) the QS trace hook.
     pub fn set_trace_hook(&self, trace: Option<TraceHook>) {
         *self.trace.lock() = trace;
+    }
+
+    /// Installs (or clears) the context-switch hook, invoked on every change of
+    /// the running priority — see [`ContextSwitchHook`] (QP/C++ `QF_onContextSw`).
+    pub fn set_context_switch_hook(&self, hook: Option<ContextSwitchHook>) {
+        *self.context_sw.lock() = hook;
     }
 
     /// Locks the scheduler at the given priority ceiling.
@@ -267,6 +275,7 @@ impl QkScheduler {
 
         if decision.next_prio != previous {
             self.emit_record(sched::NEXT, &[decision.next_prio, previous], true);
+            self.emit_context_sw(previous, decision.next_prio);
         }
     }
 
@@ -283,9 +292,11 @@ impl QkScheduler {
         if prio == 0 {
             if previous != 0 {
                 self.emit_record(sched::IDLE, &[previous], true);
+                self.emit_context_sw(previous, 0);
             }
         } else if prio != previous {
             self.emit_record(sched::NEXT, &[prio, previous], true);
+            self.emit_context_sw(previous, prio);
         }
     }
 
@@ -309,6 +320,14 @@ impl QkScheduler {
 
         if let Some(trace) = trace {
             let _ = trace(record, payload, timestamp);
+        }
+    }
+
+    fn emit_context_sw(&self, prev: u8, next: u8) {
+        let hook = self.context_sw.lock().clone();
+
+        if let Some(hook) = hook {
+            hook(prev, next);
         }
     }
 }
@@ -403,6 +422,46 @@ mod tests {
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0], (sched::NEXT, vec![4, 0], true));
         assert_eq!(recorded[1], (sched::IDLE, vec![4], true));
+    }
+
+    #[test]
+    fn context_switch_hook_fires_on_commit_and_restore() {
+        let switches = Arc::new(Mutex::new(Vec::new()));
+        let hook_switches = Arc::clone(&switches);
+        let hook: qf::ContextSwitchHook = Arc::new(move |prev, next| {
+            hook_switches.lock().push((prev, next));
+        });
+
+        let scheduler = QkScheduler::new(None);
+        scheduler.set_context_switch_hook(Some(hook));
+        scheduler.configure_active(0, 0);
+        scheduler.mark_ready(4);
+
+        let decision = scheduler
+            .plan_activation()
+            .expect("priority 4 should be scheduled");
+        scheduler.commit_activation(&decision, 2); // 0 -> 4
+        scheduler.restore_active(0, 0); // 4 -> idle (0)
+
+        let recorded = switches.lock();
+        assert_eq!(recorded.as_slice(), &[(0, 4), (4, 0)]);
+    }
+
+    #[test]
+    fn context_switch_hook_silent_when_priority_unchanged() {
+        let switches = Arc::new(Mutex::new(Vec::new()));
+        let hook_switches = Arc::clone(&switches);
+        let hook: qf::ContextSwitchHook = Arc::new(move |prev, next| {
+            hook_switches.lock().push((prev, next));
+        });
+
+        let scheduler = QkScheduler::new(None);
+        scheduler.set_context_switch_hook(Some(hook));
+        scheduler.configure_active(3, 3);
+        // Restoring to the same active priority is not a context switch.
+        scheduler.restore_active(3, 3);
+
+        assert!(switches.lock().is_empty());
     }
 
     #[test]

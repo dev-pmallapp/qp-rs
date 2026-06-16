@@ -7,7 +7,7 @@ use qf::active::{ActiveObjectId, ActiveObjectRef};
 use qf::event::{DynEvent, Signal};
 use qf::pubsub::PubSubTable;
 use qf::priospec::QPrioSpec;
-use qf::TraceHook;
+use qf::{ContextSwitchHook, TraceHook};
 
 use crate::scheduler::{QkScheduler, SchedStatus, ScheduleDecision};
 use crate::sync::Arc;
@@ -33,6 +33,7 @@ struct ActiveSlot {
 pub struct QkKernelBuilder {
     registrations: Vec<Registration>,
     trace: Option<TraceHook>,
+    context_sw: Option<ContextSwitchHook>,
     pubsub: Option<PubSubTable>,
 }
 
@@ -42,6 +43,7 @@ impl QkKernelBuilder {
         Self {
             registrations: Vec::new(),
             trace: None,
+            context_sw: None,
             pubsub: None,
         }
     }
@@ -135,9 +137,17 @@ impl QkKernelBuilder {
         self
     }
 
+    /// Attaches a context-switch hook, invoked with `(prev_prio, next_prio)`
+    /// whenever the running priority changes (preemption, return, or idle).
+    /// Equivalent to QP/C++ `QF_onContextSw()`.
+    pub fn with_context_switch_hook(mut self, hook: ContextSwitchHook) -> Self {
+        self.context_sw = Some(hook);
+        self
+    }
+
     /// Validates the registrations and constructs the [`QkKernel`].
     pub fn build(self) -> Result<QkKernel, QkKernelError> {
-        QkKernel::new(self.registrations, self.trace, self.pubsub)
+        QkKernel::new(self.registrations, self.trace, self.context_sw, self.pubsub)
     }
 }
 
@@ -207,6 +217,7 @@ impl QkKernel {
     fn new(
         registrations: Vec<Registration>,
         trace: Option<TraceHook>,
+        context_sw: Option<ContextSwitchHook>,
         pubsub: Option<PubSubTable>,
     ) -> Result<Self, QkKernelError> {
         let mut slots: Vec<Option<ActiveSlot>> = vec![None; MAX_PRIORITY + 1];
@@ -226,6 +237,7 @@ impl QkKernel {
 
         let scheduler = Arc::new(QkScheduler::new(trace.clone()));
         scheduler.configure_active(0, 0);
+        scheduler.set_context_switch_hook(context_sw);
 
         Ok(Self {
             scheduler,

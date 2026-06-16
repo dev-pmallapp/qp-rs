@@ -41,7 +41,7 @@ pub use priospec::{QPrioSpec, q_prio};
 #[cfg(feature = "qs")]
 pub use qs::{QsConfig, QsRecord, TraceBackend, Tracer, TracerHandle};
 pub use time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo, TimerWheel};
-pub use trace::{TraceError, TraceHook, TraceResult};
+pub use trace::{ContextSwitchHook, TraceError, TraceHook, TraceResult};
 #[cfg(test)]
 mod tests;
 mod trace;
