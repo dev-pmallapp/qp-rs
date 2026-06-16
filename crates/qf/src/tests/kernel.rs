@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::active::{new_active_object, ActiveContext, SignalHandler};
+use crate::active::{new_active_object, ActiveContext, ActiveObject, ActiveRunnable, SignalHandler};
 use crate::event::{DynEvent, Signal};
 use crate::kernel::Kernel;
 use crate::ActiveObjectId;
@@ -16,6 +16,23 @@ impl SignalHandler for Collector {
     fn handle_signal(&mut self, signal: Signal, _ctx: &mut ActiveContext) {
         self.events.lock().unwrap().push(signal);
     }
+}
+
+#[test]
+fn queue_high_watermark_is_sticky() {
+    let ao = ActiveObject::new(ActiveObjectId::new(9), 1, Collector::default());
+    assert_eq!(ao.queue_len(), 0);
+    assert_eq!(ao.queue_high_watermark(), 0);
+
+    ActiveRunnable::post(&*ao, DynEvent::empty_dyn(Signal(1)));
+    ActiveRunnable::post(&*ao, DynEvent::empty_dyn(Signal(2)));
+    assert_eq!(ao.queue_len(), 2);
+    assert_eq!(ao.queue_high_watermark(), 2);
+
+    // Draining the queue must not lower the high-water mark.
+    assert!(ActiveRunnable::dispatch_one(&*ao));
+    assert_eq!(ao.queue_len(), 1);
+    assert_eq!(ao.queue_high_watermark(), 2);
 }
 
 #[test]

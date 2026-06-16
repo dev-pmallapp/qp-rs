@@ -95,11 +95,38 @@ pub trait ActiveRunnable: Send + Sync {
     fn has_events(&self) -> bool;
 }
 
+/// Event queue with an occupancy high-water mark.
+///
+/// The active-object queue is unbounded, so QP/C++'s `QActive::getQueueMin()`
+/// (minimum free slots) has no fixed-capacity analog. Instead we track the
+/// maximum number of events ever queued simultaneously, which is the meaningful
+/// portable metric for sizing a bounded queue on a constrained target.
+struct EventQueue {
+    buf: VecDeque<DynEvent>,
+    high_watermark: usize,
+}
+
+impl EventQueue {
+    fn new() -> Self {
+        Self {
+            buf: VecDeque::new(),
+            high_watermark: 0,
+        }
+    }
+
+    /// Records the current length as the new high-water mark if it is larger.
+    fn touch_watermark(&mut self) {
+        if self.buf.len() > self.high_watermark {
+            self.high_watermark = self.buf.len();
+        }
+    }
+}
+
 /// Concrete active object implementation for a specific behavior.
 pub struct ActiveObject<B: ActiveBehavior> {
     id: ActiveObjectId,
     priority: u8,
-    queue: Mutex<VecDeque<DynEvent>>,
+    queue: Mutex<EventQueue>,
     behavior: Mutex<B>,
     trace_hook: Mutex<Option<TraceHook>>,
 }
@@ -111,7 +138,7 @@ impl<B: ActiveBehavior> ActiveObject<B> {
         Arc::new(Self {
             id,
             priority,
-            queue: Mutex::new(VecDeque::new()),
+            queue: Mutex::new(EventQueue::new()),
             behavior: Mutex::new(behavior),
             trace_hook: Mutex::new(None),
         })
@@ -134,7 +161,21 @@ impl<B: ActiveBehavior> ActiveObject<B> {
 
     fn pop_event(&self) -> Option<DynEvent> {
         let mut queue = self.queue.lock();
-        queue.pop_front()
+        queue.buf.pop_front()
+    }
+
+    /// Number of events currently waiting in this active object's queue.
+    pub fn queue_len(&self) -> usize {
+        self.queue.lock().buf.len()
+    }
+
+    /// Maximum number of events ever queued simultaneously (occupancy
+    /// high-water mark). Sticky once observed; never decreases.
+    ///
+    /// This is the unbounded-queue analog of QP/C++ `QActive::getQueueMin()`:
+    /// use it to size a bounded queue when porting to a constrained target.
+    pub fn queue_high_watermark(&self) -> usize {
+        self.queue.lock().high_watermark
     }
 
     fn build_context(&self) -> ActiveContext {
@@ -182,16 +223,18 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
 
     fn post(&self, event: DynEvent) {
         let mut queue = self.queue.lock();
-        queue.push_back(event);
+        queue.buf.push_back(event);
+        queue.touch_watermark();
     }
 
     fn post_lifo(&self, event: DynEvent) {
         let mut queue = self.queue.lock();
-        queue.push_front(event);
+        queue.buf.push_front(event);
+        queue.touch_watermark();
     }
 
     fn has_events(&self) -> bool {
-        !self.queue.lock().is_empty()
+        !self.queue.lock().buf.is_empty()
     }
 }
 
