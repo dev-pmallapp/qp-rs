@@ -1,0 +1,50 @@
+[package]
+name = "qp-rs"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "Quantum Platform RTOS framework — unified facade crate"
+license = "MIT OR Apache-2.0"
+keywords = ["embedded", "rtos", "active-object", "state-machine", "no-std"]
+categories = ["embedded", "no-std"]
+
+# ── Feature flags ─────────────────────────────────────────────────────────────
+#
+# Kernel selection  (pick exactly one, or none for qf-only cooperative use):
+#   qk   – preemptive single-stack kernel (includes qf)
+#   qxk  – dual-mode kernel with blocking threads (includes qf + qk)
+#
+# Cross-cutting:
+#   std  – enable std support across all selected crates
+#   qs   – enable QS tracing (propagates to each selected kernel via weak deps)
+#
+[features]
+default = ["std", "qk", "qs"]
+
+std = [
+    "qf/std",
+    "qk?/std",
+    "qxk?/std",
+    "qs?/std",
+]
+
+qs = [
+    "dep:qs",
+    "qf/qs",
+    "qk?/qs",   # only propagates when qk is also selected
+]
+
+# Preemptive kernel.
+qk = ["dep:qk"]
+
+# Dual-mode kernel (blocking threads + active objects). Implies qk.
+qxk = ["dep:qxk", "dep:qk"]
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+
+[dependencies]
+# qf is always present – it is the foundation for all kernel variants.
+qf  = { path = "../qf",  default-features = false }
+qk  = { path = "../qk",  default-features = false, optional = true }
+qxk = { path = "../qxk", default-features = false, optional = true }
+qs  = { path = "../qs",  default-features = false, optional = true }
