@@ -14,9 +14,9 @@ default = []
 rt = ["critical-section", "dep:hal", "dep:hal-lxsis", "hal-lxsis/esp32s3"]
 
 [dependencies]
-qf = { path = "../../crates/qf" }
-qk = { path = "../../crates/qk" }
-qs = { path = "../../crates/qs" }
+qf = { path = "../../crates/qf", default-features = false }
+qk = { path = "../../crates/qk", default-features = false }
+qs = { path = "../../crates/qs", default-features = false }
 hal       = { path = "../../hal",           optional = true }
 hal-lxsis = { path = "../../hal/hal-lxsis", optional = true }
 critical-section = { version = "1", optional = true }

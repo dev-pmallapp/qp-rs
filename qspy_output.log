@@ -1,0 +1,3 @@
+qspy connecting to tcp://127.0.0.1:7777
+command listener on tcp://127.0.0.1:6601
+Error: Os { code: 111, kind: ConnectionRefused, message: "Connection refused" }

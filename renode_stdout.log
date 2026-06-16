@@ -1,0 +1,35 @@
+09:00:39.7006 [INFO] Loaded monitor commands from: /opt/renode/scripts/monitor.py
+09:00:39.7376 [INFO] Monitor available in telnet mode on port 1234
+09:00:40.0395 [INFO] Including script(s): /home/pmallapp/Devel/Embedded/qp-rs.git/configs/renode/scripts/esp32c6_dpp.resc
+09:00:40.1022 [INFO] System bus created.
+09:00:40.1301 [INFO] Old file /home/pmallapp/Devel/Embedded/qp-rs.git/renode.log moved to /home/pmallapp/Devel/Embedded/qp-rs.git/renode.log.3
+09:00:43.2943 [INFO] Including script(s): /home/pmallapp/Devel/Embedded/qp-rs.git/configs/renode/scripts/esp32c6_dpp.resc
+09:00:45.3933 [INFO] sysbus: Loading block of 270742 bytes length at 0x40000000.
+09:00:45.4133 [INFO] sysbus: Loading block of 0 bytes length at 0x40042196.
+09:00:45.4136 [INFO] sysbus: Loading block of 0 bytes length at 0x40042196.
+09:00:45.4136 [INFO] sysbus: Loading block of 0 bytes length at 0x400421B6.
+09:00:45.4137 [INFO] sysbus: Loading block of 0 bytes length at 0x400421BA.
+09:00:45.4137 [INFO] sysbus: Loading block of 0 bytes length at 0x400421BA.
+09:00:45.4137 [INFO] sysbus: Loading block of 0 bytes length at 0x400421BE.
+09:00:45.4138 [INFO] sysbus: Loading block of 0 bytes length at 0x400421BE.
+09:00:45.4138 [INFO] sysbus: Loading block of 0 bytes length at 0x400421CE.
+09:00:45.4138 [INFO] sysbus: Loading block of 0 bytes length at 0x400421D6.
+09:00:45.4139 [INFO] sysbus: Loading block of 0 bytes length at 0x400421DC.
+09:00:45.4139 [INFO] sysbus: Loading block of 0 bytes length at 0x400421E0.
+09:00:45.4139 [INFO] sysbus: Loading block of 0 bytes length at 0x400421E4.
+09:00:45.4140 [INFO] sysbus: Loading block of 0 bytes length at 0x40042484.
+09:00:45.4140 [INFO] sysbus: Loading block of 0 bytes length at 0x40042590.
+09:00:45.4140 [INFO] sysbus: Loading block of 0 bytes length at 0x40042598.
+09:00:45.4141 [INFO] sysbus: Loading block of 0 bytes length at 0x4004259C.
+09:00:45.4141 [INFO] sysbus: Loading block of 24488 bytes length at 0x40048400.
+09:00:45.4141 [INFO] sysbus: Loading block of 0 bytes length at 0x4004FD40.
+09:00:45.4142 [INFO] sysbus: Loading block of 85412 bytes length at 0x4086AD08.
+09:00:45.4142 [INFO] sysbus: Loading block of 61564 bytes length at 0x42000000.
+09:00:45.4737 [INFO] cpu0: Setting PC value to 0x40000000.
+09:00:45.5580 [INFO] sysbus: Loading block of 2468 bytes length at 0x40800000.
+09:00:45.5583 [INFO] sysbus: Loading block of 75200 bytes length at 0x408009A4.
+09:00:45.5583 [INFO] sysbus: Loading block of 65536 bytes length at 0x42000020.
+09:00:45.5583 [INFO] sysbus: Loading block of 291420 bytes length at 0x42010020.
+09:00:45.5585 [INFO] sysbus: Loading block of 374444 bytes length at 0x40812F64.
+09:00:51.7989 [INFO] cpu0: Setting PC value to 0x42010072.
+09:00:51.8549 [INFO] esp32c6-dpp: Machine started.

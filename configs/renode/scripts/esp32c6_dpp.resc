@@ -1,17 +1,13 @@
 # Renode simulation script — ESP32-C6 DPP demo.
-#
-# Prerequisites:
-#   1. Build the firmware:
-#      cargo build --bin dpp-esp32-c6 --features esp32c6,qs --no-default-features --target riscv32imac-esp-espidf
-#   2. Start qspy listening:
-#      qspy -t -p 7777
-#   3. Run this script from the workspace root:
-#      renode configs/renode/scripts/esp32c6_dpp.resc
 
 $name ?= "esp32c6-dpp"
 mach create $name
+logFile @/home/pmallapp/Devel/Embedded/qp-rs.git/renode.log true
 
-# Compile and register custom console and lora peripherals
+# Set the process's current working directory to the workspace root
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom JTAG and LoRa peripherals
 i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
 i @configs/renode/shared/peripherals/lora/lora.cs
 
@@ -22,13 +18,27 @@ machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
 emulation CreateServerSocketTerminal 7777 "qspy_term" false
 connector Connect usb_serial_jtag qspy_term
 
+# ── RISC-V CSR stubs ─────────────────────────────────────────────
+# Debug trigger CSRs — signal no hardware watchpoints/triggers
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# PULP performance counter CSRs (0x800=PCER, 0x801=PCMR, 0x802=PCCR0)
+# Used by the ESP32-C6 ROM startup; unimplemented in Renode → illegal instruction
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
 # Load ROM and firmware ELFs
 sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
-sysbus LoadELF @target/riscv32imac-esp-espidf/debug/dpp-esp32-c6
+sysbus LoadELF @target/riscv32imac-unknown-none-elf/debug/dpp-esp32-c6
 
 # Pre-set transaction done in analog I2C master so target PLL calibration completes
 sysbus WriteDoubleWord 0x600AF818 0x01000000
 
-showAnalyzer usb_serial_jtag
+# Abort / panic hooks
+cpu0 AddSymbolHook "_default_abort" "pause"
 
 start

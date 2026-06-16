@@ -7,7 +7,8 @@
       "WebFetch(domain:www.state-machine.com)",
       "Bash(cargo test *)",
       "Bash(cargo check *)",
-      "Bash(cargo build *)"
+      "Bash(cargo build *)",
+      "WebFetch(domain:www.quantumleaps.com)"
     ]
   }
 }

@@ -1,12 +1,15 @@
-#![cfg(feature = "esp32c6")]
+#![no_std]
+#![no_main]
 
-use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock};
-use std::thread;
-use std::time::Duration;
-use std::vec::Vec;
+extern crate alloc;
 
-use esp_idf_sys as _;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+use esp_backtrace as _;
+use esp_hal::clock::CpuClock;
+use esp_hal::main;
 
 use qf::active::{new_active_object, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event, Signal};
@@ -18,7 +21,7 @@ use qk::{QkKernel, QkKernelBuilder};
 #[cfg(feature = "qs")]
 use qs;
 
-static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
+static KERNEL: spin::Once<Arc<QkKernel>> = spin::Once::new();
 
 const N_PHILO: usize = 5;
 const TABLE_ID: ActiveObjectId = ActiveObjectId::new(1);
@@ -29,18 +32,38 @@ const DONE_SIG: Signal = Signal(5);
 const TIMEOUT_SIG: Signal = Signal(10);
 const HUNGRY_SIG: Signal = Signal(11);
 
+macro_rules! dpp_println {
+    ($($arg:tt)*) => {
+        #[cfg(not(feature = "qs"))]
+        esp_println::println!($($arg)*);
+    };
+}
+
+#[cfg(feature = "qs")]
+struct EspPrintlnBackend;
+
+#[cfg(feature = "qs")]
+impl qs::TraceBackend for EspPrintlnBackend {
+    fn write_frame(&self, frame: &[u8]) -> Result<(), qs::TraceError> {
+        esp_println::Printer::write_bytes(frame);
+        Ok(())
+    }
+}
+
+#[main]
 fn main() -> ! {
-    esp_idf_sys::link_patches();
-    println!("DPP starting on ESP32-C6");
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let _peripherals = esp_hal::init(config);
+    esp_alloc::heap_allocator!(size: 72 * 1024);
+
+    dpp_println!("DPP starting on ESP32-C6 (bare-metal)");
 
     let resources = build_application();
 
     let kernel = Arc::new(resources.builder.build().expect("kernel should build"));
     kernel.start();
 
-    KERNEL
-        .set(Arc::clone(&kernel))
-        .expect("kernel already initialised");
+    KERNEL.call_once(|| Arc::clone(&kernel));
 
     let mut config = PortConfig::new();
     config.tick_hz = 100;
@@ -52,12 +75,14 @@ fn main() -> ! {
         runtime.register_time_event(Arc::clone(event));
     }
 
+    let delay = esp_hal::delay::Delay::new();
+
     loop {
         runtime
             .tick()
             .expect("timer wheel should tick successfully");
         runtime.run_until_idle();
-        thread::sleep(Duration::from_millis(10));
+        delay.delay_millis(10);
     }
 }
 
@@ -71,7 +96,7 @@ fn build_application() -> ApplicationResources {
 
     #[cfg(feature = "qs")]
     let mut builder = {
-        let tracer = qs::Tracer::new(qs::QsConfig::default(), qs::stdout_backend()).into_handle();
+        let tracer = qs::Tracer::new(qs::QsConfig::default(), EspPrintlnBackend).into_handle();
         let payload = qs::predefined::target_info_payload(&qs::TargetInfo::default());
         let _ = tracer.emit(qs::predefined::TARGET_INFO, &payload);
 
@@ -92,7 +117,7 @@ fn build_application() -> ApplicationResources {
 
     for index in 0..N_PHILO {
         let philo_id = ActiveObjectId::new(PHILO_BASE_ID + index as u8);
-        let timer = Arc::new(TimeEvent::new(philo_id, TimeEventConfig::new(TIMEOUT_SIG)));
+        let timer = TimeEvent::new(philo_id, TimeEventConfig::new(TIMEOUT_SIG));
         timers.push(Arc::clone(&timer));
 
         let priority = 3 + index as u8;
@@ -158,7 +183,7 @@ static PHILO_THINKING: QMState<Philosopher> = QMState {
     state_handler: philo_thinking,
     entry_action: Some(|sm| {
         sm.schedule_think();
-        println!("Philosopher {} starts thinking", sm.index);
+        dpp_println!("Philosopher {} starts thinking", sm.index);
     }),
     exit_action: Some(|sm| {
         sm.timer.disarm();
@@ -171,7 +196,7 @@ static PHILO_HUNGRY: QMState<Philosopher> = QMState {
     state_handler: philo_hungry,
     entry_action: Some(|sm| {
         sm.post_table(HUNGRY_SIG);
-        println!("Philosopher {} is hungry", sm.index);
+        dpp_println!("Philosopher {} is hungry", sm.index);
     }),
     exit_action: None,
     init_action: None,
@@ -182,12 +207,12 @@ static PHILO_EATING: QMState<Philosopher> = QMState {
     state_handler: philo_eating,
     entry_action: Some(|sm| {
         sm.schedule_eat();
-        println!("Philosopher {} starts eating", sm.index);
+        dpp_println!("Philosopher {} starts eating", sm.index);
     }),
     exit_action: Some(|sm| {
         sm.timer.disarm();
         sm.post_table(DONE_SIG);
-        println!("Philosopher {} returns to thinking", sm.index);
+        dpp_println!("Philosopher {} returns to thinking", sm.index);
     }),
     init_action: None,
 };
@@ -270,7 +295,7 @@ static TABLE_SERVING: QMState<Table> = QMState {
     superstate: Some(&TABLE_ACTIVE),
     state_handler: table_serving,
     entry_action: Some(|_sm| {
-        println!("Table active object initialised");
+        dpp_println!("Table active object initialised");
     }),
     exit_action: None,
     init_action: None,
@@ -286,7 +311,7 @@ fn table_serving(sm: &mut Table, e: &DynEvent) -> QMsmResult<Table> {
             let payload = e.payload.clone();
             let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
             let index = msg.index;
-            println!("Table: philosopher {} requests forks", index);
+            dpp_println!("Table: philosopher {} requests forks", index);
             if !sm.try_grant(index) {
                 sm.waiting.push_back(index);
             }
@@ -296,7 +321,7 @@ fn table_serving(sm: &mut Table, e: &DynEvent) -> QMsmResult<Table> {
             let payload = e.payload.clone();
             let msg = Arc::downcast::<TableMsg>(payload).expect("table message downcast");
             let index = msg.index;
-            println!("Table: philosopher {} releases forks", index);
+            dpp_println!("Table: philosopher {} releases forks", index);
             sm.release_forks(index);
 
             let mut still_waiting = VecDeque::new();

@@ -1,0 +1,9 @@
+qspy connecting to tcp://127.0.0.1:7777
+command listener on tcp://127.0.0.1:6601
+qspy connected to 127.0.0.1:7777
+########## Trg-RST  QP-Ver=740,Build=181025_111321
+           Cfg Sig/Evt=0x22 Eq/Te=0x22 Mp=0x22 Ptr=0x88 Time=0x04 Active=16 Pools/Ticks=0x43
+           Sig-Dict 0x00000004,Obj=0x0000000000000000->EAT
+           Sig-Dict 0x00000005,Obj=0x0000000000000000->DONE
+           Sig-Dict 0x0000000A,Obj=0x0000000000000000->TIMEOUT
+           Sig-Dict 0x0000000B,Obj=0x0000000000000000->HUNGRY

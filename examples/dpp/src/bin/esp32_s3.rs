@@ -91,7 +91,7 @@ fn build_application() -> ApplicationResources {
 
     for index in 0..N_PHILO {
         let philo_id = ActiveObjectId::new(PHILO_BASE_ID + index as u8);
-        let timer = Arc::new(TimeEvent::new(philo_id, TimeEventConfig::new(TIMEOUT_SIG)));
+        let timer = TimeEvent::new(philo_id, TimeEventConfig::new(TIMEOUT_SIG));
         timers.push(Arc::clone(&timer));
 
         let priority = 3 + index as u8;
