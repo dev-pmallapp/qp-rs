@@ -1,0 +1,19 @@
+[package]
+name        = "hal-esp-idf"
+version.workspace = true
+edition.workspace = true
+description = "ESP-IDF C SDK wrapper implementing HAL traits — for WiFi/BLE/OTA use cases"
+
+[dependencies]
+hal        = { path = ".." }
+esp-idf-sys = { version = "0.35", features = ["binstart"], optional = true }
+
+[build-dependencies]
+embuild = { version = "0.32", optional = true }
+
+[features]
+default = []
+esp32   = ["dep:esp-idf-sys", "dep:embuild"]
+esp32s3 = ["dep:esp-idf-sys", "dep:embuild"]
+esp32c6 = ["dep:esp-idf-sys", "dep:embuild"]
+qp-integration = ["hal/qp-integration"]

@@ -14,24 +14,18 @@ impl SystemTimer {
         }
     }
 
-    /// Configures the periodic tick frequency expected by the kernel.
-    ///
-    /// # HAL Integration Plan
-    ///
-    /// When porting to real hardware, this method will:
-    /// - Select a GPTimer instance using ESP-IDF HAL APIs
-    /// - Configure the timer for periodic interrupts at `tick_hz`
-    /// - Register an ISR that calls into the QK kernel's `tick()`
-    /// - Ensure safe sharing of timer resources with other subsystems
-    ///
-    /// For now, only the tick frequency is tracked.
+    /// Configures the periodic tick frequency via the Xtensa CCOMPARE0 timer.
     pub fn configure_periodic(&self, tick_hz: u32) {
-        // HAL TODO: Replace with ESP-IDF GPTimer setup
-        // Example (pseudo-code):
-        // let gptimer = esp_idf_hal::gptimer::Gptimer::new(...);
-        // gptimer.set_periodic(tick_hz);
-        // gptimer.register_isr(|| QkKernel::tick());
         self.tick_hz.store(tick_hz, Ordering::Release);
+        #[cfg(feature = "rt")]
+        {
+            use hal_lxsis::ccompare::CcompareTimer;
+            use hal::timer::{Timer, TimerMode};
+            // ESP32-S3 runs at 240 MHz by default; adjust core_mhz as needed.
+            let period_us = 1_000_000u64 / tick_hz as u64;
+            let mut cmp = CcompareTimer::new(240);
+            let _ = cmp.start(period_us, TimerMode::Periodic);
+        }
     }
 
     /// Returns the currently configured tick frequency in hertz.

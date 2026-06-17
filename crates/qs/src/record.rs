@@ -5,6 +5,12 @@
 //! order. The [`UserRecordBuilder`] mirrors this layout so that payloads emitted
 //! by the Rust port remain interoperable with the QSPY tooling.
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 /// Format identifier for `QS_I8_ENUM_FMT` records.
 pub const FMT_I8_ENUM: u8 = 0x0;
 /// Format identifier for `QS_U8_FMT` records.

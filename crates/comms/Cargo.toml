@@ -16,3 +16,4 @@ qf               = { path = "../qf", default-features = false }
 qs               = { path = "../qs", optional = true }
 aes  = { version = "0.8", default-features = false, features = ["zeroize"] }
 cmac = { version = "0.7", default-features = false }
+heapless = { version = "0.8", default-features = false }

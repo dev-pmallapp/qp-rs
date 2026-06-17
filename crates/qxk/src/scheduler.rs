@@ -33,9 +33,17 @@ const THREAD_NEXT: u8 = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleMode {
     /// An active object should run (priority-based preemption).
-    ActiveObject { priority: u8 },
+    ActiveObject {
+        /// Priority of the active object selected to run.
+        priority: u8,
+    },
     /// An extended thread should run (blocking allowed).
-    ExtendedThread { id: ThreadId, priority: ThreadPriority },
+    ExtendedThread {
+        /// Identifier of the thread selected to run.
+        id: ThreadId,
+        /// Priority of the thread selected to run.
+        priority: ThreadPriority,
+    },
     /// No work is available, enter idle.
     Idle,
 }
@@ -43,11 +51,14 @@ pub enum ScheduleMode {
 /// Scheduler lock status for nested locking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedStatus {
+    /// The scheduler is not locked; normal preemption applies.
     Unlocked,
+    /// The scheduler is locked to the given priority ceiling.
     Locked(u8),
 }
 
 impl SchedStatus {
+    /// Returns `true` if the scheduler is currently locked.
     pub fn is_locked(self) -> bool {
         matches!(self, Self::Locked(_))
     }

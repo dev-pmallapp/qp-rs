@@ -1,0 +1,10 @@
+[book]
+title = "qp-rs — The Quantum Platform in Rust"
+authors = ["Prem Mallappa"]
+description = "User manual for qp-rs: active objects, kernels (QF/QK/QXK), QS tracing, ports, and porting from QP/C++."
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+git-repository-url = "https://github.com/"

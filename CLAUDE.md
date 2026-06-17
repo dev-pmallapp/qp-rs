@@ -40,11 +40,26 @@ cargo run --bin dpp
 cargo run --example sync_primitives
 cargo run --example producer_consumer
 
+# Run LoRa send example on host
+cargo run --bin lora_send
+
 # Build for ESP32-S3
 cargo build --bin dpp-esp32-s3 --features esp32s3 --no-default-features
 
 # Build for ESP32-C6
 cargo build --bin dpp-esp32-c6 --features esp32c6 --no-default-features
+cargo build --bin lora_send_c6 --features esp32c6 --no-default-features
+```
+
+### HAL Sub-workspace
+
+The `hal/` directory is a **separate workspace** excluded from the root workspace. Build it independently:
+
+```bash
+cd hal
+cargo build           # builds all HAL crates
+cargo build -p hal-esp
+cargo build -p hal-cmsis
 ```
 
 ### Working with QSpy Tracing
@@ -76,6 +91,13 @@ The project is organized into three core crates with a layered architecture:
 - O(1) ready set using 64-bit bitmap
 - Nested preemption with priority ceiling
 - Builds on QF's active objects and events
+
+**comms** - Communication middleware layer:
+- LoRa/LoRaWAN RF transport over an `RfDriver` HAL trait
+- FOTA (firmware-over-the-air) support
+- AES-CMAC message authentication (no_std)
+- Integrates with QF active objects for async event-driven RF workflows
+- Uses `hal` crate's trait abstractions for hardware independence
 
 **qxk (Quantum eXtended Kernel)** - Dual-mode kernel with blocking threads:
 - Combines event-driven active objects with extended blocking threads
@@ -245,6 +267,7 @@ let producer = ThreadConfig::new(ThreadId(1), ThreadPriority(5), Box::new(|ctx| 
 **Ports** (`/ports/`): Platform-specific runtime glue
 - `posix`: POSIX implementation with `PosixQkRuntime`
 - `esp32-s3`, `esp32-c6`: Embedded ESP32 targets
+- `cortex-m`: Cortex-M bare-metal port; enable the `hw` feature when building for real hardware (default `std` feature is for hosted tests/emulation)
 
 **Examples** (`/examples/dpp/`): Dining Philosophers Problem
 - Demonstrates multiple active objects (Table + 5 Philosophers)
@@ -252,9 +275,44 @@ let producer = ThreadConfig::new(ThreadId(1), ThreadPriority(5), Box::new(|ctx| 
 - Emits QEP state machine records and custom user records
 - Multi-platform: host (POSIX), ESP32-S3, ESP32-C6
 
+**LoRa Send Example** (`/examples/lora_send/`): App → Comms → HAL → Radio chain
+- Exercises the `comms` crate's LoRa stack end-to-end
+- Host target simulates the radio; ESP32-C6 target uses real hardware
+- Shows how QF active objects drive the RF middleware layer
+
 **QXK Examples** (`/crates/qxk/examples/`):
 - `sync_primitives.rs`: Demonstrates semaphores, mutexes, message queues, condition variables
 - `producer_consumer.rs`: Shows thread coordination with blocking primitives
+
+## Layering and Dependency Rules
+
+The codebase has a strict dependency direction that must not be inverted:
+
+```
+comms / examples          (protocol middleware, application)
+       ↓ uses
+qf / qk / qxk / qs       (framework — active objects, events, tracing)
+       ↓ uses
+hal                       (hardware abstraction traits — framework-agnostic)
+       ↓ uses
+hal-esp / hal-cmsis / …   (chip-specific implementations)
+```
+
+**`hal/` must stay framework-agnostic.** It only knows about peripheral traits (timer/tick source, UART byte-write, SPI, interrupt control). It must never depend on `qf`, `qk`, or any other framework crate.
+
+**`comms` belongs in the main workspace, not in `hal/`.** `comms` depends on `qf` (it drives LoRa workflows via QF active objects and events). Moving it into the `hal/` workspace would make the hardware layer depend on the framework layer — an inversion.
+
+Mental model:
+- `hal/` = *what hardware can do* (peripheral traits, critical sections)
+- `comms` = *what the application does with hardware* (protocol behavior wired into QF)
+
+**QP-specific HAL contract**: the only things QP actually needs from hardware are:
+1. **Tick source** — fires at the configured tick rate to call `tick()`
+2. **Trace output** — byte-stream write path for QS frames (UART, TCP, SWO)
+3. **Critical section / interrupt control** — `lock()`/`unlock()` for the scheduler
+4. **Context switch** — PendSV/SVC on Cortex-M (handled in `ports/cortex-m`)
+
+For peripheral traits (SPI, UART, I2C) use the [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) crate rather than rolling new ones in `hal/`.
 
 ## Important Implementation Details
 
@@ -302,17 +360,34 @@ let producer = ThreadConfig::new(ThreadId(1), ThreadPriority(5), Box::new(|ctx| 
 - `esp32c6`: ESP32-C6 embedded target
 - `qs`: Enable QS tracing (included in host)
 
+### comms crate
+- `std` (default): Standard library support
+- `qs`: Enable QS tracing integration
+
+### lora_send example
+- `host` (default): POSIX with simulated radio + full tracing
+- `esp32c6`: ESP32-C6 with real SX1276/SX1262 hardware
+
+### cortex-m port
+- `std` (default): Hosted / emulation mode (tests pass on desktop)
+- `hw`: Real Cortex-M hardware (no std, bare-metal)
+
 ## Workspace Structure
 
 ```
 /crates/qf/       - Core active object framework
 /crates/qk/       - Preemptive kernel primitives
+/crates/qxk/      - Extended kernel with blocking threads
 /crates/qs/       - QS tracing protocol implementation
+/crates/comms/    - LoRa/LoRaWAN and FOTA middleware
 /ports/posix/     - POSIX platform runtime
 /ports/esp32-s3/  - ESP32-S3 platform runtime
 /ports/esp32-c6/  - ESP32-C6 platform runtime
+/ports/cortex-m/  - Cortex-M bare-metal port
 /examples/dpp/    - Dining Philosophers example
+/examples/lora_send/ - LoRa RF send example
 /tools/qspy/      - QSpy host tool (optional)
+/hal/             - Separate HAL sub-workspace (excluded from root; build inside hal/)
 /scratch/         - Reference QP/C implementation (not part of build)
 ```
 

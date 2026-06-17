@@ -1,0 +1,212 @@
+// ESP32-C6 DevKit-M1 Platform Description
+// Renode Platform File (.repl)
+//
+// Based on the Zephyr Dashboard reference:
+//   zephyr-dashboard.renode.io — esp32c6_devkitc_esp32c6_hpcore
+//
+// ESP32-C6 SoC:
+//   - RISC-V RV32IMAC HP CPU @ up to 160 MHz
+//   - 512 KB HP SRAM (internal)
+//   - 16 KB LP SRAM
+//   - 320 KB ROM
+//   - External Flash (4-8 MB via SPI) mapped at 0x42000000 (text) / 0x3C000000 (data)
+//
+// Memory Map Reference: ESP32-C6 Technical Reference Manual v1.2
+// ------------------------------------------------------------------
+
+sysbus:
+    init:
+        Tag <0x0 0x10000> "boot_partition"
+        Tag <0x10000 0x10000> "sys_partition"
+        Tag <0x20000 0x1c0000> "slot0_partition"
+        Tag <0x1e0000 0x1c0000> "slot1_partition"
+        Tag <0x3a0000 0x8000> "slot0_lpcore_partition"
+        Tag <0x3a8000 0x8000> "slot1_lpcore_partition"
+        Tag <0x3b0000 0x30000> "storage_partition"
+        Tag <0x3e0000 0x1f000> "scratch_partition"
+        Tag <0x3ff000 0x1000> "coredump_partition"
+
+// -----------------------------------------------
+// Flash — 8 MB (covers both instruction and data mappings)
+// -----------------------------------------------
+flash0: Memory.MappedMemory @ sysbus 0x0
+    size: 0x800000
+
+// -----------------------------------------------
+// SoC ROM — 320 KB
+// -----------------------------------------------
+socrom: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x50000
+
+// -----------------------------------------------
+// HP SRAM — 512 KB
+// -----------------------------------------------
+sramhp: Memory.MappedMemory @ sysbus 0x40800000
+    size: 0x80000
+
+// -----------------------------------------------
+// HP SRAM Data bus mapping — 512 KB
+// Firmware uses 0x3FC80000 for .data / .bss
+// -----------------------------------------------
+dram: Memory.MappedMemory @ sysbus 0x3FC80000
+    size: 0x80000
+
+// -----------------------------------------------
+// Instruction flash (XIP) — 16 MB
+// Firmware .text is linked here
+// -----------------------------------------------
+iflash: Memory.MappedMemory @ sysbus 0x42000000
+    size: 0x1000000
+
+// -----------------------------------------------
+// Data flash (DROM) — 16 MB
+// Firmware .rodata is linked here
+// -----------------------------------------------
+dflash: Memory.MappedMemory @ sysbus 0x3C000000
+    size: 0x1000000
+
+// -----------------------------------------------
+// LP SRAM — 16 KB (LP RAM / ULP / RTC retain)
+// -----------------------------------------------
+sramlp: Memory.MappedMemory @ sysbus 0x50000000
+    size: 0x4000
+
+// -----------------------------------------------
+// CLINT — register space stub
+// -----------------------------------------------
+clint: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x10000
+
+// -----------------------------------------------
+// PLIC — register space stub
+// -----------------------------------------------
+plic: Memory.MappedMemory @ sysbus 0x20400000
+    size: 0x10000
+
+// -----------------------------------------------
+// HP (High-Performance) CPU — RISC-V RV32IMAC
+// -----------------------------------------------
+cpu0: CPU.RiscV32 @ sysbus
+    cpuType: "rv32imac_zicsr_zifencei"
+    timeProvider: empty
+    hartId: 0
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+
+// -----------------------------------------------
+// UART0 — Primary debug/console UART stub
+// Base: 0x60000000
+//
+// ESP32-C6 CONF0 (0x20) has RXFIFO_RST at bit 22, TXFIFO_RST at bit 23.
+// UART.ESP32_UART models the original Xtensa layout (RXFIFO_RST at bit 17)
+// and never auto-clears the reset bits, causing rxfifo_reset() to spin.
+// This Python stub always returns 0 so reset bits never appear set.
+// -----------------------------------------------
+uart0: Python.PythonPeripheral @ sysbus 0x60000000
+    size: 0x1000
+    initable: false
+    script: "request.Value = 0"
+
+// -----------------------------------------------
+// USB-Serial-JTAG — firmware QS trace console
+// Base: 0x6000F000
+// Custom model: returns EP1_WR_RDY=1 so esp-hal's blocking driver doesn't spin,
+// and forwards EP1 byte-writes as UART characters for showAnalyzer / TCP.
+// -----------------------------------------------
+usb_serial_jtag: UART.ESP32C6_UsbSerialJtag @ sysbus 0x6000F000
+
+// -----------------------------------------------
+// LP I2C / Analog peripheral registers — 4 KB
+// Accessed by esp-hal request_pll_clk for PLL config
+// -----------------------------------------------
+lp_i2c_ana: Memory.MappedMemory @ sysbus 0x600AF000
+    size: 0x1000
+
+// -----------------------------------------------
+// Unmodelled peripheral stubs
+// MappedMemory silently absorbs accesses; Tags warn.
+// -----------------------------------------------
+// UART1 — same RXFIFO_RST/TXFIFO_RST auto-clear problem as UART0.
+uart1_stub: Python.PythonPeripheral @ sysbus 0x60001000
+    size: 0x1000
+    initable: false
+    script: "request.Value = 0"
+spi_flash_stub: Memory.MappedMemory @ sysbus 0x60002000
+    size: 0x1000
+// SPI2 placeholder at old (wrong) address kept for toolchain compat; real model lives at 0x60081000.
+spi2_old_stub: Memory.MappedMemory @ sysbus 0x60003000
+    size: 0x1000
+spi2: SPI.ESP32C6_LoraSpi @ sysbus 0x60081000
+i2c_stub:      Memory.MappedMemory @ sysbus 0x60004000
+    size: 0x2000
+ledc_stub:     Memory.MappedMemory @ sysbus 0x60007000
+    size: 0x1000
+// TIMG0 + TIMG1 (0x60008000-0x60009FFF).
+// Modelled as a Python peripheral so calibration registers always return fixed
+// values regardless of firmware writes.  ESP32-C6 layout (differs from C3):
+//   +0x68 RTCCALICFG  bit 15 = RTC_CALI_RDY (DONE) → always 1
+//   +0x6C RTCCALICFG1 bits[31:7] = calibration result → 0x02000000 ≈ 156 kHz
+//   +0x80 RTCCALICFG2 bit 0 = RTC_CALI_TIMEOUT → 0 (no timeout)
+timg_stub: Python.PythonPeripheral @ sysbus 0x60008000
+    size: 0x2000
+    initable: false
+    filename: "configs/renode/shared/peripherals/timer/timg_stub.py"
+// SYSTIMER — ESP32-C6 base 0x6000A000.
+// Timers.ESP32C3_SysTimer is absent from this Renode build; use an inline Python stub.
+// esp-hal Instant::now() sequence: write UNIT0_OP (+0x04) to trigger a snapshot, poll
+// value_valid (bit 29), then read VALUE_HI (+0x40) and VALUE_LO (+0x44).
+// Each snapshot-write advances the virtual 16 MHz counter by 1 600 ticks (100 µs) so
+// any delay_us() call exits on the very first elapsed() check.
+systimer: Python.PythonPeripheral @ sysbus 0x6000A000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/timer/systimer_stub.py"
+twai0_stub:    Memory.MappedMemory @ sysbus 0x6000B000
+    size: 0x1000
+i2s_stub:      Memory.MappedMemory @ sysbus 0x6000C000
+    size: 0x2000
+// -----------------------------------------------
+// APB_SARADC — 12-bit ADC block
+// Base: 0x6000E000  Size: 0x1000
+//
+// Scripted battery/solar simulation (see shared/peripherals/battery/battery_adc_stub.py for the
+// full register protocol and formula documentation).
+// Magic write registers let the Renode monitor script test scenarios:
+//   +0xFF0 write → battery_mv   +0xFF4 write → solar_mv
+//   +0xFF8 write → chg_stat_n   reads mirror the written values
+// -----------------------------------------------
+adc_stub: Python.PythonPeripheral @ sysbus 0x6000E000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/battery/battery_adc_stub.py"
+intmtx_stub:   Memory.MappedMemory @ sysbus 0x60010000
+    size: 0x1000
+pcnt_stub:     Memory.MappedMemory @ sysbus 0x60012000
+    size: 0x1000
+mcpwm_stub:    Memory.MappedMemory @ sysbus 0x60014000
+    size: 0x1000
+dma_stub:      Memory.MappedMemory @ sysbus 0x60080000
+    size: 0x1000
+aes_stub:      Memory.MappedMemory @ sysbus 0x60088000
+    size: 0x2000
+// IO_MUX — pad function-select registers (4 bytes per GPIO, GPIO0–30).
+// esp-hal writes here during SPI2 pin initialisation (GPIO18–23).
+iomux_stub:    Memory.MappedMemory @ sysbus 0x60090000
+    size: 0x1000
+// HC-SR04 ultrasonic sensor GPIO model.
+// GPIO5=power_enable (ignored), GPIO6=trigger (out), GPIO7=echo (in).
+// Implements the ESP32-C6 GPIO_OUT/IN register protocol so
+// EspUltrasonicLevelSensor::measure_echo_us() returns a valid reading.
+// Requires systimer_stub to advance 1600 ticks/snapshot (100 µs) so the
+// 5 ms / 30 ms timeout loops have enough iterations to observe transitions.
+gpio_hcsr04: Python.PythonPeripheral @ sysbus 0x60091000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/sensor/ultrasonic_hcsr04.py"
+pcr_stub:      Memory.MappedMemory @ sysbus 0x60096000
+    size: 0x1000
+lp_uart_stub:  Memory.MappedMemory @ sysbus 0x60099000
+    size: 0x1000
+hp_sys_stub:   Memory.MappedMemory @ sysbus 0x600A9000
+    size: 0x1000
+lp_peri_stub:  Memory.MappedMemory @ sysbus 0x600B0000
+    size: 0x10000

@@ -19,11 +19,14 @@ esp32c6 = [
     "qf-port-esp32-c6/rt",
     "dep:critical-section",
     "dep:esp-idf-sys",
+    "dep:hal-rvsis",
+    "hal-rvsis/esp32c6",
 ]
 
 [dependencies]
 comms          = { path = "../../crates/comms" }
 hal            = { path = "../../hal" }
+hal-rvsis      = { path = "../../hal/hal-rvsis", optional = true }
 qf             = { path = "../../crates/qf",  default-features = false }
 qk             = { path = "../../crates/qk",  default-features = false }
 qs             = { path = "../../crates/qs",  optional = true }

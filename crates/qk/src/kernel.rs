@@ -1,10 +1,13 @@
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
 use qf::active::{ActiveObjectId, ActiveObjectRef};
 use qf::event::{DynEvent, Signal};
-use qf::TraceHook;
+use qf::pubsub::PubSubTable;
+use qf::priospec::QPrioSpec;
+use qf::{ContextSwitchHook, TraceHook};
 
 use crate::scheduler::{QkScheduler, SchedStatus, ScheduleDecision};
 use crate::sync::Arc;
@@ -25,19 +28,34 @@ struct ActiveSlot {
     threshold: u8,
 }
 
+/// Builder for a [`QkKernel`]: register active objects (optionally with a
+/// preemption threshold), attach a trace hook, then [`build`](Self::build).
 pub struct QkKernelBuilder {
     registrations: Vec<Registration>,
     trace: Option<TraceHook>,
+    context_sw: Option<ContextSwitchHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl QkKernelBuilder {
+    /// Creates an empty builder.
     pub fn new() -> Self {
         Self {
             registrations: Vec::new(),
             trace: None,
+            context_sw: None,
+            pubsub: None,
         }
     }
 
+    /// Initializes publish-subscribe with subscriber bitmap table up to `max_signal`.
+    pub fn ps_init(mut self, max_signal: u16) -> Self {
+        self.pubsub = Some(PubSubTable::new(max_signal));
+        self
+    }
+
+    /// Registers an active object using its own priority as its preemption
+    /// threshold (i.e. fully preemptible by any higher priority).
     pub fn register(mut self, object: ActiveObjectRef) -> Result<Self, QkKernelError> {
         let priority = object.priority();
         self.validate_priority(priority)?;
@@ -51,6 +69,9 @@ impl QkKernelBuilder {
         Ok(self)
     }
 
+    /// Registers an active object with an explicit preemption threshold; the
+    /// AO can only be preempted by priorities greater than `threshold`
+    /// (which must be `>=` the AO's own priority).
     pub fn register_with_threshold(
         mut self,
         object: ActiveObjectRef,
@@ -67,6 +88,15 @@ impl QkKernelBuilder {
             object,
         });
         Ok(self)
+    }
+
+    /// Registers an active object with a priority and threshold encoded in `QPrioSpec`.
+    pub fn register_prio(
+        self,
+        object: ActiveObjectRef,
+        spec: QPrioSpec,
+    ) -> Result<Self, QkKernelError> {
+        self.register_with_threshold(object, spec.threshold())
     }
 
     fn validate_priority(&self, priority: u8) -> Result<(), QkKernelError> {
@@ -101,22 +131,47 @@ impl QkKernelBuilder {
         Ok(())
     }
 
+    /// Attaches a QS trace hook to the kernel and its scheduler.
     pub fn with_trace_hook(mut self, hook: TraceHook) -> Self {
         self.trace = Some(hook);
         self
     }
 
+    /// Attaches a context-switch hook, invoked with `(prev_prio, next_prio)`
+    /// whenever the running priority changes (preemption, return, or idle).
+    /// Equivalent to QP/C++ `QF_onContextSw()`.
+    pub fn with_context_switch_hook(mut self, hook: ContextSwitchHook) -> Self {
+        self.context_sw = Some(hook);
+        self
+    }
+
+    /// Validates the registrations and constructs the [`QkKernel`].
     pub fn build(self) -> Result<QkKernel, QkKernelError> {
-        QkKernel::new(self.registrations, self.trace)
+        QkKernel::new(self.registrations, self.trace, self.context_sw, self.pubsub)
     }
 }
 
+/// Errors returned when building or operating the QK kernel.
 #[derive(Debug)]
 pub enum QkKernelError {
+    /// Two active objects were registered at the same priority.
     DuplicatePriority(u8),
+    /// No active object is registered for the given id.
     NotFound(ActiveObjectId),
-    InvalidPriority { priority: u8, reason: &'static str },
-    InvalidThreshold { threshold: u8, priority: u8 },
+    /// A priority was outside the supported `1..=63` range (0 is reserved).
+    InvalidPriority {
+        /// The offending priority value.
+        priority: u8,
+        /// Why the priority was rejected.
+        reason: &'static str,
+    },
+    /// A preemption threshold was smaller than the AO's own priority.
+    InvalidThreshold {
+        /// The offending threshold value.
+        threshold: u8,
+        /// The AO priority the threshold must be `>=`.
+        priority: u8,
+    },
 }
 
 impl fmt::Display for QkKernelError {
@@ -142,14 +197,19 @@ impl fmt::Display for QkKernelError {
 #[cfg(feature = "std")]
 impl std::error::Error for QkKernelError {}
 
+/// Preemptive, priority-based QK kernel: dispatches registered active objects,
+/// allowing higher-priority AOs to preempt lower-priority ones subject to each
+/// AO's preemption threshold and the scheduler lock ceiling.
 pub struct QkKernel {
     scheduler: Arc<QkScheduler>,
     slots: Vec<Option<ActiveSlot>>,
     id_to_prio: BTreeMap<ActiveObjectId, u8>,
     trace: Option<TraceHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl QkKernel {
+    /// Returns a new [`QkKernelBuilder`].
     pub fn builder() -> QkKernelBuilder {
         QkKernelBuilder::new()
     }
@@ -157,6 +217,8 @@ impl QkKernel {
     fn new(
         registrations: Vec<Registration>,
         trace: Option<TraceHook>,
+        context_sw: Option<ContextSwitchHook>,
+        pubsub: Option<PubSubTable>,
     ) -> Result<Self, QkKernelError> {
         let mut slots: Vec<Option<ActiveSlot>> = vec![None; MAX_PRIORITY + 1];
         let mut id_to_prio = BTreeMap::new();
@@ -175,27 +237,81 @@ impl QkKernel {
 
         let scheduler = Arc::new(QkScheduler::new(trace.clone()));
         scheduler.configure_active(0, 0);
+        scheduler.set_context_switch_hook(context_sw);
 
         Ok(Self {
             scheduler,
             slots,
             id_to_prio,
             trace,
+            pubsub,
         })
     }
 
+    /// Returns a shared handle to the underlying scheduler.
     pub fn scheduler(&self) -> Arc<QkScheduler> {
         Arc::clone(&self.scheduler)
     }
 
+    /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
     }
 
+    /// Subscribe the active object at `priority` to the given `signal`.
+    pub fn subscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.subscribe(signal, priority);
+            self.emit_subscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from the given `signal`.
+    pub fn unsubscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe(signal, priority);
+            self.emit_unsubscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from all signals.
+    pub fn unsubscribe_all(&self, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe_all(priority);
+        }
+    }
+
+    fn emit_subscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_publish(&self, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    /// Locks the scheduler at `ceiling`, preventing preemption by tasks at or
+    /// below it. Returns the previous status to pass to [`unlock_scheduler`].
+    ///
+    /// [`unlock_scheduler`]: Self::unlock_scheduler
     pub fn lock_scheduler(&self, ceiling: u8) -> SchedStatus {
         self.scheduler.lock(ceiling)
     }
 
+    /// Restores a previous scheduler-lock status and runs any task that became
+    /// eligible to preempt while the lock was held.
     pub fn unlock_scheduler(&self, status: SchedStatus) {
         let should_activate = matches!(status, SchedStatus::Locked(_));
         self.scheduler.unlock(status);
@@ -207,6 +323,8 @@ impl QkKernel {
         }
     }
 
+    /// Starts every registered active object and marks those with queued events
+    /// as ready. Call once before driving the dispatch loop.
     pub fn start(&self) {
         for slot in self.slots.iter().flatten() {
             slot.object.start(self.trace.clone());
@@ -216,6 +334,8 @@ impl QkKernel {
         }
     }
 
+    /// Posts an event to the target active object's queue and marks it ready.
+    /// Does not itself run the scheduler.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), QkKernelError> {
         let prio = self
             .id_to_prio
@@ -233,6 +353,7 @@ impl QkKernel {
         Ok(())
     }
 
+    /// Posts an event and immediately drives the scheduler until idle.
     pub fn post_and_run(
         &self,
         target: ActiveObjectId,
@@ -243,25 +364,48 @@ impl QkKernel {
         Ok(())
     }
 
+    /// Broadcasts or multicasts an event (with `signal`) to registered active objects,
+    /// marking each recipient as ready. Does not itself run the scheduler.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
-        for (prio, slot_opt) in self.slots.iter().enumerate() {
-            if let Some(slot) = slot_opt {
-                let was_empty = !slot.object.has_events();
-                let mut cloned = event.clone();
-                cloned.header.signal = signal;
-                slot.object.post(cloned);
-                if was_empty {
-                    self.scheduler.mark_ready(prio as u8);
+        if let Some(ref pubsub) = self.pubsub {
+            self.emit_publish(signal);
+            let subscribers = pubsub.subscribers(signal);
+            for (prio, slot_opt) in self.slots.iter().enumerate() {
+                if let Some(slot) = slot_opt {
+                    if (subscribers & (1u64 << prio)) != 0 {
+                        let was_empty = !slot.object.has_events();
+                        let mut cloned = event.clone();
+                        cloned.header.signal = signal;
+                        slot.object.post(cloned);
+                        if was_empty {
+                            self.scheduler.mark_ready(prio as u8);
+                        }
+                    }
+                }
+            }
+        } else {
+            for (prio, slot_opt) in self.slots.iter().enumerate() {
+                if let Some(slot) = slot_opt {
+                    let was_empty = !slot.object.has_events();
+                    let mut cloned = event.clone();
+                    cloned.header.signal = signal;
+                    slot.object.post(cloned);
+                    if was_empty {
+                        self.scheduler.mark_ready(prio as u8);
+                    }
                 }
             }
         }
     }
 
+    /// Broadcasts an event to all active objects and drives the scheduler until idle.
     pub fn publish_and_run(&self, signal: Signal, event: DynEvent) {
         self.publish(signal, event);
         self.run_until_idle();
     }
 
+    /// Runs the single highest-priority ready task (with nested preemption),
+    /// returning `true` if any task ran.
     pub fn dispatch_once(&self) -> bool {
         match self.scheduler.plan_activation() {
             Some(decision) => {
@@ -272,10 +416,12 @@ impl QkKernel {
         }
     }
 
+    /// Repeatedly dispatches ready tasks until none remain.
     pub fn run_until_idle(&self) {
         while self.dispatch_once() {}
     }
 
+    /// Returns `true` if any task is ready to run under current constraints.
     pub fn has_pending_work(&self) -> bool {
         self.scheduler.has_ready_to_run()
     }
@@ -533,6 +679,69 @@ mod tests {
 
         kernel.run_until_idle();
         assert!(!kernel.has_pending_work());
+        Ok(())
+    }
+
+    #[test]
+    fn register_prio_sets_threshold() -> Result<(), QkKernelError> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let id = ActiveObjectId::new(10);
+        let ao = new_active_object(id, 4, Recorder::new(id, Arc::clone(&log)));
+
+        // Create priority spec with priority 4 and threshold 6
+        let spec = QPrioSpec::new(4, 6);
+
+        let kernel = QkKernel::builder()
+            .register_prio(ao, spec)?
+            .build()
+            .expect("kernel should build");
+
+        kernel.start();
+
+        // Verify that priority is 4 and slot threshold is 6
+        assert_eq!(kernel.id_to_prio.get(&id), Some(&4));
+        assert_eq!(kernel.slots[4].as_ref().unwrap().threshold, 6);
+        Ok(())
+    }
+
+    #[test]
+    fn publish_filters_based_on_subscribers() -> Result<(), QkKernelError> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let low_id = ActiveObjectId::new(11);
+        let high_id = ActiveObjectId::new(12);
+
+        let low = new_active_object(low_id, 2, Recorder::new(low_id, Arc::clone(&log)));
+        let high = new_active_object(high_id, 5, Recorder::new(high_id, Arc::clone(&log)));
+
+        let kernel = QkKernel::builder()
+            .ps_init(100)
+            .register(low)?
+            .register(high)?
+            .build()
+            .expect("kernel should build");
+
+        kernel.start();
+
+        // Subscribe low to Signal(20), high to Signal(30)
+        kernel.subscribe(Signal(20), 2);
+        kernel.subscribe(Signal(30), 5);
+
+        // Publish Signal(20)
+        kernel.publish_and_run(Signal(20), DynEvent::empty_dyn(Signal(0)));
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(entries.as_slice(), &[(low_id, Signal(20))]);
+        }
+
+        // Publish Signal(30)
+        kernel.publish_and_run(Signal(30), DynEvent::empty_dyn(Signal(0)));
+        {
+            let entries = log.lock().unwrap();
+            assert_eq!(
+                entries.as_slice(),
+                &[(low_id, Signal(20)), (high_id, Signal(30))]
+            );
+        }
         Ok(())
     }
 }

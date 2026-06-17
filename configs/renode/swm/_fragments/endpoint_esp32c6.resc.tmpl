@@ -1,0 +1,33 @@
+# ══════════════════════════════════════════════════════════════════
+#  Endpoint @@SIDE@@ — ESP32-C6 (RISC-V, external LR1121 on GPSPI2)
+#  Role: @@ROLE@@
+# ══════════════════════════════════════════════════════════════════
+mach create "@@MACHINE@@"
+
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+connector Connect sysbus.spi2 wireless
+
+showAnalyzer usb_serial_jtag
+
+# CSR trigger stubs (ESP32-C6 custom CSRs)
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF @@@FW@@
+
+# Analog I2C master completion stub (LP I2C PLL config).
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+logLevel 1 sysbus.spi2

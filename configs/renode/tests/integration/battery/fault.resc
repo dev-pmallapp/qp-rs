@@ -1,0 +1,61 @@
+####################################################################
+# Battery fault-injection smoke test — standalone Renode script.
+#
+# Loads the LR1121 platform, runs virtual time in three phases:
+#   Phase 1 (3 s)  — normal boot; first TxDone cycle should complete.
+#   Phase 2 (6 s)  — battery fault injected; Fault transitions expected.
+#   Phase 3 (8 s)  — battery restored; recovery cycle expected.
+#
+# Expected qspy output (connect before running):
+#   Phase 1:  BatteryManagerAO Sampling→Idle  [HealthReport]
+#             CommEndpointAO   Transmitting→BoundIdle [TxDone]
+#             AppCoordinatorAO Transmitting→Idle [TxDone]
+#   Phase 2:  BatteryManagerAO Sampling→Fault [HealthReport]   ← injected
+#             AppCoordinatorAO Idle→Fault      [Fault]
+#   Phase 3:  AppCoordinatorAO Fault→Sampling [SampleRequest]  ← recovery
+#             SensorManagerAO  Idle→Sampling   [SampleRequest]
+#             SensorManagerAO  Sampling→Idle   [SampleReady]
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/tests/integration/battery/fault.resc
+#
+# For qspy output (start BEFORE include):
+#   qspy -t -p 7777
+####################################################################
+
+# Load the full LR1121 platform (machine, firmware, peripherals).
+include @configs/renode/platform/riscv/esp32c6_lr1121/esp32c6_lr1121.resc
+
+# Expose USB JTAG over TCP for qspy (start qspy -t -p 7777 before running this).
+runMacro $setup_qspy
+
+echo ""
+echo "═══ Phase 1: Normal boot (3 virtual seconds) ════════════════"
+start
+emulation RunFor "00:00:03"
+pause
+echo " ✓ Phase 1 complete — check qspy for TxDone transition."
+
+echo ""
+echo "═══ Phase 2: Injecting battery fault (1000 mV) ══════════════"
+sysbus WriteDoubleWord 0x6000EFF0 1000
+echo " Fault voltage set.  Running 6 virtual seconds..."
+start
+emulation RunFor "00:00:06"
+pause
+echo " ✓ Phase 2 complete — check qspy for BatteryManagerAO→Fault."
+
+echo ""
+echo "═══ Phase 3: Restoring battery (3700 mV) ════════════════════"
+sysbus WriteDoubleWord 0x6000EFF0 3700
+echo " Healthy voltage restored.  Running 8 virtual seconds..."
+start
+emulation RunFor "00:00:08"
+pause
+echo " ✓ Phase 3 complete — check qspy for recovery cycle."
+
+echo ""
+echo "═══ Test complete ════════════════════════════════════════════"
+echo " Battery fault injection smoke test finished."
+echo " If no _default_abort was hit the firmware survived all phases."
+echo "══════════════════════════════════════════════════════════════"

@@ -1,0 +1,55 @@
+// nRF52840 DK / Dongle
+// ARM Cortex-M4F @ 64 MHz
+// Reference: nRF52840 PS v1.7
+//
+// Renode ships a built-in nRF52840 platform; this extends it.
+
+cpu0: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic:     nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu0@0
+    systickFrequency: 64000000
+
+// 1 MB Flash
+flash: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x100000
+
+// 256 KB SRAM
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x40000
+
+// UART0 (legacy, up to 1 Mbps)
+uart0: UART.NRF52840_UART @ sysbus 0x40002000
+    -> nvic@2
+
+// UARTE1 (EasyDMA UART)
+uarte1: UART.NRF52840_UART @ sysbus 0x40028000
+    -> nvic@40
+
+// GPIO P0 (32 pins)
+gpio0: GPIOPort.NRF52840_GPIO @ sysbus 0x50000000
+
+// GPIO P1 (16 pins)
+gpio1: GPIOPort.NRF52840_GPIO @ sysbus 0x50000300
+
+// TIMER0
+timer0: Timers.NRF52840_Timer @ sysbus 0x40008000
+    -> nvic@8
+
+// TIMER1
+timer1: Timers.NRF52840_Timer @ sysbus 0x40009000
+    -> nvic@9
+
+// TWI0 (I2C master)
+twi0: I2C.NRF52840_I2C @ sysbus 0x40003000
+    -> nvic@3
+
+// SPI0 (master)
+spi0: SPI.NRF52840_SPI @ sysbus 0x40003000
+    -> nvic@3
+
+// CLOCK / POWER
+clock: Miscellaneous.NRF52840_CLOCK @ sysbus 0x40000000
+    -> nvic@0

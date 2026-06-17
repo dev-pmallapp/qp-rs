@@ -16,9 +16,18 @@ impl InterruptController {
         }
     }
 
-    /// Configures interrupt priorities to align with the QK scheduler.
+    /// Configures interrupt priorities via the PLIC to align with the QK scheduler.
     pub fn configure_priorities(&mut self) {
-        // TODO: configure RISC-V interrupt priorities once HAL is available.
+        #[cfg(feature = "rt")]
+        {
+            use hal_rvsis::plic::PlicController;
+            use hal::interrupt::InterruptController;
+            // ESP32-C6 PLIC base is 0x2040_0000 in Renode
+            // Safety: called once during port init with exclusive peripheral access.
+            let mut plic = unsafe { PlicController::new(0x2040_0000, 0) };
+            // Enable the RISC-V machine-timer interrupt (source 7 on ESP32-C6).
+            let _ = plic.set_priority(7, 1);
+        }
     }
 
     /// Locks the scheduler and returns a guard that releases on drop.

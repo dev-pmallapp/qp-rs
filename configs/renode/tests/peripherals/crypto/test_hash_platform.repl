@@ -1,0 +1,15 @@
+// test_hash_platform.repl — STM32U5 HASH isolation platform.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m33"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 160000000
+    IRQ -> cpu@0
+
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+
+hash: Miscellaneous.STM32U5_HASH @ sysbus <0x420C0400, +0x400>

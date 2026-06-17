@@ -12,7 +12,7 @@ use qf::time::TimeEvent;
 use qf::{QsConfig, TraceError, TraceHook, Tracer, TracerHandle};
 use qk::{QkKernel, QkKernelBuilder, QkKernelError, QkTimeEventError, QkTimerWheel};
 use qs::predefined::{self, TargetInfo};
-use qs::{stdout_backend, TcpBackend, UdpBackend, WriterBackend};
+use qs::{stdout_backend, GlbFilter, TcpBackend, UdpBackend, WriterBackend};
 
 enum BackendHandle {
     Stdout(TracerHandle<WriterBackend<std::io::Stdout>>),
@@ -108,6 +108,15 @@ impl PosixPort {
         let payload = predefined::sig_dict_payload(signal, object, name);
         self.emit_dictionary(predefined::SIG_DICT, &payload)
     }
+
+    /// Update the global trace filter.  Records whose bit is 0 are suppressed.
+    pub fn set_filter(&self, filter: GlbFilter) {
+        match &self.backend {
+            BackendHandle::Stdout(handle) => handle.set_filter(filter),
+            BackendHandle::Tcp(handle)    => handle.set_filter(filter),
+            BackendHandle::Udp(handle)    => handle.set_filter(filter),
+        }
+    }
 }
 
 pub struct PosixQkRuntime {
@@ -142,6 +151,13 @@ impl PosixQkRuntime {
 
     pub fn tick(&self) -> Result<(), QkTimeEventError> {
         self.timers.tick()
+    }
+
+    /// Advance the timer wheel from an ISR context.
+    ///
+    /// Caller must have called `qf::qk_isr_entry!()` before this.
+    pub fn tick_from_isr(&self) -> Result<(), QkTimeEventError> {
+        self.timers.tick_from_isr()
     }
 
     pub fn run_until_idle(&self) {

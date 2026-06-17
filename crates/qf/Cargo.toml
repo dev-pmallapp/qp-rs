@@ -9,11 +9,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 spin = { version = "0.9" }
 serde = { version = "1", features = ["derive"], optional = true }
-qs = { path = "../qs", optional = true }
+qs = { path = "../qs", default-features = false, optional = true }
 
 [features]
 default = ["std", "qs"]
-std = []
+std = ["qs?/std"]
 qs = ["dep:qs"]
 serde = ["dep:serde"]
 

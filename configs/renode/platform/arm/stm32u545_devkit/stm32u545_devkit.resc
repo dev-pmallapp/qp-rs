@@ -1,0 +1,87 @@
+####################################################################
+# SWM STM32U545RETxQ Dev-Kit — Renode Simulation Script
+# File: configs/renode/platform/arm/stm32u545_devkit/stm32u545_devkit.resc
+#
+# Default role: Pramukh MC (bin `pramukh` in ports/stm32u545/Cargo.toml).
+# Override with: $bin=@target/thumbv8m.main-none-eabihf/debug/griha
+#
+# Usage (from Renode Monitor):
+#   include @configs/renode/platform/arm/stm32u545_devkit/stm32u545_devkit.resc
+#
+# Phase 6.2.3 of tmp/stm32_renode_parity_plan.md.
+####################################################################
+
+mach create "SWM-U545-Devkit"
+
+# Resolve relative paths via the workspace root (PWD).
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# Compile and register custom peripheral models before loading the
+# platform description so their types are known when the .repl is parsed.
+# Order matters: lr1121_subghz.cs defines the base class that
+# lr1121_radio.cs's LR1121SpiRadio alias derives from.  HASH model is
+# loaded for the hw-hash-stm32u5 firmware feature (Phase 5.3).
+i @configs/renode/shared/peripherals/lora/lr1121_subghz.cs
+i @configs/renode/shared/peripherals/lora/lr1121_radio.cs
+i @configs/renode/shared/peripherals/crypto/stm32u5_hash.cs
+
+# Load the platform.  Wraps the SoC repl; per-peripheral substitutions
+# happen below so the same SoC description serves every role bin.
+machine LoadPlatformDescription @configs/renode/platform/arm/stm32u545_devkit/stm32u545_devkit.repl
+
+# External LR1121 module on SPI1 — same external-module pattern as
+# the STM32G0B1 board (Phase 2.2).
+sysbus Unregister "spi1"
+machine LoadPlatformDescriptionFromString "spi1: SPI.LR1121SpiRadio @ sysbus 0x40013000"
+
+# HASH peripheral model (Phase 5.3) — owns the U5 HASH register block.
+# Produces RustCrypto-identical SHA-256 / SHA-1 results so the
+# `hw-hash-stm32u5` firmware feature can be tested in Renode.
+machine LoadPlatformDescriptionFromString "hash: Miscellaneous.STM32U5_HASH @ sysbus <0x40026400, +0x400>"
+
+# Solar charger model — re-uses the shared stub at the magic
+# STM32-region address 0x60010000.  Bus-agnostic; same address as the
+# WLE5 / G0B1 / ESP32 paths so Robot keywords are portable across SoCs.
+machine LoadPlatformDescriptionFromString "solar_charger: Python.PythonPeripheral @ sysbus <0x60010000, +0x1000> { size: 0x1000; initable: true; filename: \"configs/renode/shared/peripherals/solar_charger/solar_charger_stub.py\" }"
+
+# Relay GPIO stub — owns a magic 0x400-byte block at 0x50000400.
+# PB3/PB4/PB5/PB6 carry RELAY_1, RELAY_2, FDBK_1, FDBK_2 on the SWM
+# actuator boards.  Used by the Dhara/Nalvar shim bins; harmless for
+# the Pramukh and Griha role bins (no relay GPIO touches).
+machine LoadPlatformDescriptionFromString "relay_gpio: Python.PythonPeripheral @ sysbus <0x50000400, +0x400> { size: 0x400; initable: true; filename: \"configs/renode/shared/peripherals/relay/relay_gpio.py\" }"
+
+# Shared macros (reset, log helpers).
+include @configs/renode/shared/macros/common.resc
+include @configs/renode/shared/macros/helpers.resc
+
+# USART1 (PA9/PA10) is the bring-up console on the STM32U545 Nucleo.
+# The firmware uses defmt-rtt, so this analyser remains empty until
+# UART logging is wired in.  Boot-banner smoke tests rely on the
+# Renode log itself (cpu PC range / symbol hooks).
+showAnalyzer sysbus.usart1
+
+# Default firmware path.  Build with:
+#   make arm TARGET=stm32u545 ROLE=pramukh
+# from the workspace root; ELF lands at $CARGO_TARGET_DIR/<triple>/debug/<bin>.
+$bin?=@target/thumbv8m.main-none-eabihf/debug/pramukh
+
+macro reset
+"""
+    sysbus LoadELF $bin
+"""
+
+# Abort / panic hooks — pause the simulation on Cortex-M faults.
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler" "pause"
+cpu AddSymbolHook "_default_abort" "pause"
+
+# GDB on 3334 (RISC-V ports use 3333; avoid the clash).
+machine StartGdbServer 3334
+
+runMacro $reset
+
+echo "──────────────────────────────────────────────────────"
+echo " SWM STM32U545RETxQ dev-kit simulation ready"
+echo " Console: usart1   Radio: LR1121SpiRadio @ SPI1"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────"

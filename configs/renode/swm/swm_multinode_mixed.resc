@@ -1,0 +1,131 @@
+####################################################################
+# SWM Mixed-SoC Multi-Node Simulation
+# File: configs/renode/swm/swm_multinode_mixed.resc
+#
+# Phase 4.3 of the STM32 Renode parity plan.
+#
+# Two machines on a shared IEEE802_15_4 wireless medium, but each
+# machine runs on a different SoC family — validating that the LR1121
+# bus adapters (SUBGHZSPI on STM32WL vs GPSPI2 on ESP32-C6) deliver
+# byte-for-byte equivalent IRadio behaviour.  Either orientation
+# (Gagan-on-WLE5 ↔ Pramukh-on-C6, or reversed) works by overriding the
+# two firmware paths.
+#
+# Usage (from Renode Monitor):
+#   $wle5_fw  ?= @target/thumbv7em-none-eabihf/debug/gagan
+#   $c6_fw    ?= @target/riscv32imac-unknown-none-elf/debug/swm-pramukh-esp32c6
+#   include @configs/renode/swm/swm_multinode_mixed.resc
+#   start
+#
+# Reverse orientation (Pramukh-on-WLE5, Gagan-on-C6):
+#   $wle5_fw=@target/thumbv7em-none-eabihf/debug/pramukh
+#   $c6_fw=@target/riscv32imac-unknown-none-elf/debug/swm-gagan-esp32c6
+#   include @configs/renode/swm/swm_multinode_mixed.resc
+#
+# The Robot suite calls this with two --variable WLE5_FW / C6_FW paths
+# via renode-test's -e flag, parametrised by scripts/renode-test-matrix.sh.
+####################################################################
+
+# Resolve relative paths via the workspace root (PWD).
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# ── Firmware paths (override from CLI: -e '$wle5_fw=...' ) ───────
+$wle5_fw  ?= @target/thumbv7em-none-eabihf/debug/gagan
+$c6_fw    ?= @target/riscv32imac-unknown-none-elf/debug/swm-pramukh-esp32c6
+
+# Machine labels — cosmetic only, the IRadio surface is identical.
+$wle5_machine ?= "SWM-Mixed-Wle5"
+$c6_machine   ?= "SWM-Mixed-C6"
+
+# Shared medium name; the matrix shim can swap to "wireless2" etc. for
+# parallel sims.
+$medium_name  ?= "wireless"
+
+# ── Compile peripheral C# models (once, before creating machines) ─
+# Both LR1121 variants live in the same Antmicro.Renode.Peripherals.SPI
+# namespace.  Compiling lr1121_subghz.cs first satisfies LR1121Radio's
+# external-type references (the GPSPI2 variant doesn't inherit from it
+# but the loader prefers a stable order).
+i $ORIGIN/../shared/peripherals/lora/lr1121_subghz.cs
+i $ORIGIN/../shared/peripherals/lora/lr1121_radio.cs
+i $ORIGIN/../shared/peripherals/console/usb_serial_jtag.cs
+i $ORIGIN/../shared/peripherals/lora/lora.cs
+
+# ── Wireless medium ──────────────────────────────────────────────
+emulation CreateIEEE802_15_4Medium $medium_name
+wireless SetRangeWirelessFunction 200
+
+# ══════════════════════════════════════════════════════════════════
+#  Machine A — STM32WLE5JC (Cortex-M4F, integrated SUBGHZSPI)
+# ══════════════════════════════════════════════════════════════════
+mach create $wle5_machine
+
+machine LoadPlatformDescription @configs/renode/platform/arm/stm32wle5_devkit/stm32wle5_devkit.repl
+
+# Replace the stock SPI controller at SUBGHZSPI with the LR1121 model.
+sysbus Unregister "subghzspi"
+machine LoadPlatformDescriptionFromString "subghzspi: SPI.LR1121SubGhzRadio @ sysbus 0x58010000"
+
+connector Connect sysbus.subghzspi $medium_name
+
+include $ORIGIN/../shared/macros/common.resc
+include $ORIGIN/../shared/macros/helpers.resc
+showAnalyzer sysbus.usart2
+
+sysbus LoadELF $wle5_fw
+
+cpu AddSymbolHook "HardFault_Handler" "pause"
+cpu AddSymbolHook "DefaultHandler"    "pause"
+cpu AddSymbolHook "_default_abort"    "pause"
+
+logLevel 1 sysbus.subghzspi
+
+# ══════════════════════════════════════════════════════════════════
+#  Machine B — ESP32-C6 (RISC-V, external LR1121 on GPSPI2)
+# ══════════════════════════════════════════════════════════════════
+mach create $c6_machine
+
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+connector Connect sysbus.spi2 $medium_name
+
+showAnalyzer usb_serial_jtag
+
+# CSR trigger stubs (ESP32-C6 custom CSRs)
+cpu0 RegisterCSRHandlerFromString 0x7a0 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a1 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a2 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x7a5 "request.Value = 0"
+
+# Performance counter CSR stubs
+cpu0 RegisterCSRHandlerFromString 0x800 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x801 "request.Value = 0"
+cpu0 RegisterCSRHandlerFromString 0x802 "request.Value = 0"
+
+sysbus LoadELF @configs/renode/soc/riscv/roms/esp32c6_rev0_rom.elf
+sysbus LoadELF $c6_fw
+
+# Analog I2C master completion stub (LP I2C PLL config)
+sysbus WriteDoubleWord 0x600AF818 0x01000000
+
+cpu0 AddSymbolHook "_default_abort" "pause"
+
+logLevel 1 sysbus.spi2
+
+# ── Optional traffic capture ─────────────────────────────────────
+# Uncomment to write every IEEE802_15_4 frame to a libpcap file
+# (requires the logs/ directory to exist):
+#   emulation LogIEEE802_15_4Traffic @logs/lora_mixed_traffic.pcap $medium_name
+
+echo "──────────────────────────────────────────────────────────────"
+echo " SWM mixed-SoC multi-node simulation ready"
+echo "  $wle5_machine — STM32WLE5JC  (LR1121SubGhzRadio @ SUBGHZSPI)"
+echo "    fw: $wle5_fw"
+echo "  $c6_machine   — ESP32-C6     (LR1121Radio @ GPSPI2)"
+echo "    fw: $c6_fw"
+echo "  Medium: $medium_name"
+echo " Type 'start' to begin execution"
+echo "──────────────────────────────────────────────────────────────"

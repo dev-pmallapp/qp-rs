@@ -1,0 +1,25 @@
+####################################################################
+# ARM Cortex-M Platform Launch Script Template
+# Copy to platform/arm/<platform>/<platform>_platform.resc and fill TODOs.
+####################################################################
+
+# TODO: rename
+mach create "ARM-CORTEX-M-PLATFORM"
+
+# Set the process's current working directory to the workspace root (from the PWD env variable)
+# so standard .NET file APIs resolve relative paths correctly
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+# TODO: point to correct .repl
+machine LoadPlatformDescription @configs/renode/soc/arm/PLATFORM_NAME/PLATFORM_NAME.repl
+
+showAnalyzer sysbus.usart1
+
+# TODO: update ELF path
+# sysbus LoadELF @firmware/arm-cortex-m/<platform>/app.elf
+
+# Cortex-M GDB typically on port 3334 to avoid clash with RISC-V on 3333
+machine StartGdbServer 3334
+
+echo "Platform ready — type 'start' to run"
+# start

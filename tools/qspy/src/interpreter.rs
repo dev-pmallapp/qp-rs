@@ -6,17 +6,27 @@ use crate::cursor::Cursor;
 use crate::sizes::TargetSizes;
 use crate::QsFrame;
 use qs::predefined;
-use qs::records::{infra, qep, qf, qf::time_evt, sched};
+use qs::records::{infra, qep, qf, qf::time_evt, qxk, sched};
 use qs::{
     FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64, FMT_I8_ENUM, FMT_MEM,
     FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
 };
 
+/// Pretty-printer for a user record, registered by a downstream crate.
+///
+/// Receives the record's resolved dictionary name and its decoded field
+/// values (as strings, in payload order) and returns the formatted line
+/// body, or `None` to defer to the next formatter / the generic renderer.
+/// qspy itself ships no formatters — project-specific record knowledge
+/// lives in the consuming crate (see [`FrameInterpreter::add_user_formatter`]).
+pub type UserRecordFormatter = Box<dyn Fn(&str, &[String]) -> Option<String>>;
+
 /// Translates QS frames into human-readable messages while tracking runtime dictionaries.
 pub struct FrameInterpreter {
-    dict:       Dictionaries,
-    sizes:      TargetSizes,
-    qs_version: u16,
+    dict:            Dictionaries,
+    sizes:           TargetSizes,
+    qs_version:      u16,
+    user_formatters: Vec<UserRecordFormatter>,
 }
 
 impl Default for FrameInterpreter {
@@ -25,16 +35,36 @@ impl Default for FrameInterpreter {
 
 impl FrameInterpreter {
     pub fn new() -> Self {
-        Self { dict: Dictionaries::default(), sizes: TargetSizes::default(), qs_version: 700 }
+        Self {
+            dict: Dictionaries::default(),
+            sizes: TargetSizes::default(),
+            qs_version: 700,
+            user_formatters: Vec::new(),
+        }
     }
 
     pub fn with_sizes(sizes: TargetSizes) -> Self {
-        Self { dict: Dictionaries::default(), sizes, qs_version: 700 }
+        Self {
+            dict: Dictionaries::default(),
+            sizes,
+            qs_version: 700,
+            user_formatters: Vec::new(),
+        }
     }
 
     pub fn sizes(&self) -> &TargetSizes { &self.sizes }
     pub fn set_sizes(&mut self, s: TargetSizes) { self.sizes = s; }
     pub fn set_qs_version(&mut self, v: u16) { self.qs_version = v; }
+
+    /// Register a project-specific user-record pretty-printer.
+    ///
+    /// Formatters are tried in registration order for every user record;
+    /// the first to return `Some` wins, otherwise the generic
+    /// `NAME field0 field1 …` rendering is used. This is how a consuming
+    /// crate teaches qspy its own records without qspy depending on them.
+    pub fn add_user_formatter(&mut self, formatter: UserRecordFormatter) {
+        self.user_formatters.push(formatter);
+    }
 
     pub fn interpret(&mut self, frame: &QsFrame) -> Vec<String> {
         let mut lines = Vec::new();
@@ -75,7 +105,6 @@ impl FrameInterpreter {
             qf::EQUEUE_POST          => self.handle_equeue_post(&frame.payload, "EQ-Post ", &mut lines),
             qf::EQUEUE_POST_LIFO     => self.handle_equeue_post(&frame.payload, "EQ-PostL", &mut lines),
             qf::EQUEUE_GET           => self.handle_equeue_get(&frame.payload, "EQ-Get  ", &mut lines),
-            qf::EQUEUE_GET_LAST      => self.handle_equeue_get(&frame.payload, "EQ-GetL ", &mut lines),
             qf::EQUEUE_POST_ATTEMPT  => self.handle_equeue_post(&frame.payload, "EQ-PostA", &mut lines),
 
             // ── QF: memory pool ───────────────────────────────────────────
@@ -113,6 +142,20 @@ impl FrameInterpreter {
             sched::NEXT   => self.handle_sched_next(&frame.payload, &mut lines),
             sched::IDLE   => self.handle_sched_idle(&frame.payload, &mut lines),
 
+            // ── QXK: semaphore ────────────────────────────────────────────
+            qxk::SEM_TAKE          => self.handle_sem(&frame.payload, "Sem-Take ", &mut lines),
+            qxk::SEM_BLOCK         => self.handle_sem(&frame.payload, "Sem-Blk  ", &mut lines),
+            qxk::SEM_SIGNAL        => self.handle_sem(&frame.payload, "Sem-Sig  ", &mut lines),
+            qxk::SEM_BLOCK_ATTEMPT => self.handle_sem(&frame.payload, "Sem-BlkA ", &mut lines),
+
+            // ── QXK: mutex ────────────────────────────────────────────────
+            qxk::MTX_LOCK           => self.handle_mtx(&frame.payload, "Mtx-Lock ", &mut lines),
+            qxk::MTX_BLOCK          => self.handle_mtx(&frame.payload, "Mtx-Blk  ", &mut lines),
+            qxk::MTX_UNLOCK         => self.handle_mtx(&frame.payload, "Mtx-Unlk ", &mut lines),
+            qxk::MTX_LOCK_ATTEMPT   => self.handle_mtx(&frame.payload, "Mtx-LockA", &mut lines),
+            qxk::MTX_BLOCK_ATTEMPT  => self.handle_mtx(&frame.payload, "Mtx-BlkA ", &mut lines),
+            qxk::MTX_UNLOCK_ATTEMPT => self.handle_mtx(&frame.payload, "Mtx-UnlkA", &mut lines),
+
             // ── Infrastructure / test back-channel ────────────────────────
             infra::TEST_PAUSED => lines.push("           TstPause".to_string()),
             infra::TEST_PROBE  => self.handle_test_probe(&frame.payload, &mut lines),
@@ -122,10 +165,10 @@ impl FrameInterpreter {
             infra::QF_RUN      => lines.push("           QF RUN".to_string()),
 
             // ── QSPY back-channel ─────────────────────────────────────────
-            65 => lines.push(format!(
+            infra::TARGET_DONE => lines.push(format!(
                 "           Trg-Done rec={}", frame.payload.first().copied().unwrap_or(0)
             )),
-            66 => self.handle_rx_status(&frame.payload, &mut lines),
+            infra::RX_STATUS => self.handle_rx_status(&frame.payload, &mut lines),
 
             // ── User records ──────────────────────────────────────────────
             rec if rec >= 100 || self.dict.users.contains_key(&rec)
@@ -512,7 +555,7 @@ impl FrameInterpreter {
 
     // ── QF: event queue / memory pool init handlers ───────────────────────────
 
-    /// `QS_QF_EQUEUE_INIT` (18): [ts | eq | len: equeue_ctr]
+    /// `QS_QF_EQUEUE_INIT` (19): [ts | eq | len: equeue_ctr]
     fn handle_equeue_init(&mut self, payload: &[u8], lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(eq), Some(len)) = (
@@ -557,7 +600,7 @@ impl FrameInterpreter {
 
     // ── QF: event queue handlers ──────────────────────────────────────────────
 
-    /// `QS_QF_EQUEUE_POST_FIFO/LIFO` (19/20): [ts | sig | eq | pool | ref | free | min]
+    /// `QS_QF_EQUEUE_POST_FIFO/LIFO` (20/21): [ts | sig | eq | pool | ref | free | min]
     fn handle_equeue_post(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(sig), Some(eq),
@@ -576,7 +619,8 @@ impl FrameInterpreter {
         }
     }
 
-    /// `QS_QF_EQUEUE_GET / GET_LAST` (21/22): [ts | sig | eq | pool | ref | free]
+    /// `QS_QF_EQUEUE_GET` (22): [ts | sig | eq | pool | ref | free]
+    /// Free=0 indicates this was the last event in the queue.
     fn handle_equeue_get(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
         let mut cur = Cursor::new(payload);
         if let (Some(ts), Some(sig), Some(eq), Some(pool), Some(rref), Some(free)) = (
@@ -717,6 +761,39 @@ impl FrameInterpreter {
             cur.read_u8(), cur.read_u8(),
         ) {
             lines.push(format!("{ts:010} {label} Nesting={nesting},Pri={prio}"));
+        }
+    }
+
+    // ── QXK semaphore / mutex handlers ───────────────────────────────────────
+
+    /// Semaphore records (71–74): [ts | sem_ptr(8) | thread_prio(1) | count(2)]
+    fn handle_sem(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(sem), Some(prio), Some(count)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u64(),
+            cur.read_u8(),
+            cur.read_u16(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Pri={prio},Cnt={count}",
+                self.obj_str(sem)
+            ));
+        }
+    }
+
+    /// Mutex records (75–80): [ts | mtx_ptr(8) | thread_prio(1)]
+    fn handle_mtx(&mut self, payload: &[u8], label: &str, lines: &mut Vec<String>) {
+        let mut cur = Cursor::new(payload);
+        if let (Some(ts), Some(mtx), Some(prio)) = (
+            cur.read_sized(self.sizes.time_size),
+            cur.read_u64(),
+            cur.read_u8(),
+        ) {
+            lines.push(format!(
+                "{ts:010} {label} Obj={},Pri={prio}",
+                self.obj_str(mtx)
+            ));
         }
     }
 
@@ -1051,64 +1128,14 @@ impl FrameInterpreter {
             }
         }
 
-        // Per-record pretty-printers that override the generic field list.
-        if name == "LORA_TX_PKT" {
-            if let Some(line) = format_lora_tx_pkt(&values) {
+        // Project-registered formatters override the generic field list.
+        // qspy ships none; downstream crates register record-specific
+        // pretty-printers via `add_user_formatter` (see `add_user_formatter`).
+        for formatter in &self.user_formatters {
+            if let Some(line) = formatter(&name, &values) {
                 lines.push(format!("{ts:010} {line}"));
                 return;
             }
-        }
-        if name == "SWM_ACTOR_TRAN" {
-            if let Some(line) = format_swm_actor_tran(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "SWM_SESSION_TRAN" {
-            if let Some(line) = format_swm_session_tran(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_TELEMETRY_RX" {
-            if let Some(line) = format_mc_telemetry_rx(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_PAIR_REQUEST" {
-            if let Some(line) = format_mc_pair_request(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_PAIR_OK" {
-            if let Some(line) = format_mc_pair_ok(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_PAIR_FAIL" {
-            if let Some(line) = format_mc_pair_fail(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_FOTA_MANIFEST" {
-            if let Some(line) = format_mc_fota_manifest(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_FOTA_START" {
-            if let Some(line) = format_mc_fota_start(&values) {
-                lines.push(format!("{ts:010} {line}"));
-                return;
-            }
-        }
-        if name == "MC_FOTA_COMPLETE" {
-            lines.push(format!("{ts:010} MC_FOTA_COMPLETE"));
-            return;
         }
 
         lines.push(format!("{ts:010} {name} {}", values.join(" ")));
@@ -1216,182 +1243,3 @@ fn parse_addr(s: &str) -> Result<u64, std::num::ParseIntError> {
     u64::from_str_radix(hex, 16)
 }
 
-// ── Pretty-printers for known user records ────────────────────────────────────
-
-fn format_lora_tx_pkt(values: &[String]) -> Option<String> {
-    if values.len() < 6 { return None; }
-
-    let freq_hz: u64 = values[0].parse().ok()?;
-    let sf:  u8 = values[1].parse().ok()?;
-    let bw:  u8 = values[2].parse().ok()?;
-    let cr:  u8 = values[3].parse().ok()?;
-    let pwr: u8 = values[4].parse().ok()?;
-
-    let hex_str = values[5].strip_prefix("mem:")?;
-    if hex_str.len() < 2 { return None; }
-
-    let frame_bytes: Vec<u8> = (0..hex_str.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex_str[i..i+2], 16).ok())
-        .collect();
-
-    let bw_khz = match bw { 0 => "125", 1 => "250", 2 => "500", _ => "?" };
-    let cr_str = match cr { 0 => "4/5", 1 => "4/6", 2 => "4/7", 3 => "4/8", _ => "?" };
-
-    let lorawan = if frame_bytes.len() >= 8 {
-        let mhdr  = frame_bytes[0];
-        let m_type = (mhdr >> 5) & 0x07;
-        let mtype_str = match m_type {
-            0 => "JoinReq", 1 => "JoinAcc", 2 => "UnconfUp", 3 => "UnconfDn",
-            4 => "ConfUp",  5 => "ConfDn",  _ => "Prop",
-        };
-        let dev_addr = u32::from_le_bytes([
-            frame_bytes[1], frame_bytes[2], frame_bytes[3], frame_bytes[4],
-        ]);
-        let fctrl = frame_bytes[5];
-        let fcnt  = u16::from_le_bytes([frame_bytes[6], frame_bytes[7]]);
-        let fopts_len = (fctrl & 0x0F) as usize;
-        let has_fport = frame_bytes.len() > 8 + fopts_len + 4;
-        let fport = if has_fport { Some(frame_bytes[8 + fopts_len]) } else { None };
-        let payload_len = frame_bytes.len()
-            .saturating_sub(8 + fopts_len + if has_fport { 1 } else { 0 } + 4);
-
-        if let Some(fp) = fport {
-            format!(" | {mtype_str} DevAddr={dev_addr:#010X} FCnt={fcnt} FPort={fp} FRMPayload={payload_len}B MIC={:02X}{:02X}{:02X}{:02X}",
-                frame_bytes[frame_bytes.len()-4], frame_bytes[frame_bytes.len()-3],
-                frame_bytes[frame_bytes.len()-2], frame_bytes[frame_bytes.len()-1])
-        } else {
-            format!(" | {mtype_str} DevAddr={dev_addr:#010X} FCnt={fcnt}")
-        }
-    } else {
-        String::new()
-    };
-
-    Some(format!(
-        "LORA_TX_PKT {:.3}MHz SF{sf} BW{bw_khz}kHz CR{cr_str} +{pwr}dBm frame[{}B]:{lorawan}",
-        freq_hz as f64 / 1_000_000.0,
-        frame_bytes.len(),
-    ))
-}
-
-// ── SWM pretty-printers ───────────────────────────────────────────────────────
-
-fn actor_mode_name(v: u8) -> &'static str {
-    match v {
-        0 => "Boot", 1 => "Idle", 2 => "Sampling", 3 => "Processing",
-        4 => "Transmitting", 5 => "Sleeping", 6 => "Service", 7 => "Fault", _ => "?",
-    }
-}
-
-fn swm_signal_name(v: u16) -> &'static str {
-    match v {
-        0  => "Boot",            1  => "Tick",           2  => "Fault",
-        3  => "ConfigLoad",      4  => "ConfigLoaded",   5  => "ConfigUpdate",
-        6  => "ConfigCommitted", 7  => "SampleRequest",  8  => "SampleReady",
-        9  => "LevelComputed",   10 => "TxRequest",      11 => "TxDone",
-        12 => "RxFrame",         13 => "AckTimeout",     14 => "MacSlot",
-        15 => "CommandReceived", 16 => "CommandAccepted",17 => "CommandRejected",
-        18 => "CommandApplied",  19 => "FeedbackChanged",20 => "HealthRequest",
-        21 => "HealthReport",    22 => "MaintenanceEnter",23=>"MaintenanceExit",
-        24 => "FotaPolicy",      25 => "FotaManifest",  26 => "FotaChunk",
-        27 => "FotaApply",       28 => "FotaStatus",    _ => "?",
-    }
-}
-
-fn session_state_name(v: u8) -> &'static str {
-    match v {
-        0 => "Unbound", 1 => "BoundIdle", 2 => "TxPending", 3 => "TxActive",
-        4 => "WaitAck", 5 => "RxWindow",  6 => "Backoff",   7 => "ServiceWindow",
-        8 => "Fault",   _ => "?",
-    }
-}
-
-/// `values`: [actor_name, from_u8, to_u8, signal_u16]
-fn format_swm_actor_tran(values: &[String]) -> Option<String> {
-    if values.len() < 4 { return None; }
-    let actor  = &values[0];
-    let from: u8  = values[1].parse().ok()?;
-    let to:   u8  = values[2].parse().ok()?;
-    let sig:  u16 = values[3].parse().ok()?;
-    Some(format!(
-        "SWM_ACTOR_TRAN {actor} {}→{} [{}]",
-        actor_mode_name(from), actor_mode_name(to), swm_signal_name(sig),
-    ))
-}
-
-/// `values`: [actor_name, from_u8, to_u8, signal_u16]
-fn format_swm_session_tran(values: &[String]) -> Option<String> {
-    if values.len() < 4 { return None; }
-    let actor  = &values[0];
-    let from: u8  = values[1].parse().ok()?;
-    let to:   u8  = values[2].parse().ok()?;
-    let sig:  u16 = values[3].parse().ok()?;
-    Some(format!(
-        "SWM_SESSION_TRAN {actor} {}→{} [{}]",
-        session_state_name(from), session_state_name(to), swm_signal_name(sig),
-    ))
-}
-
-// ── MC (Pramukh) pretty-printers ─────────────────────────────────────────────
-
-fn pair_fail_reason_name(v: u8) -> &'static str {
-    match v {
-        0 => "AuthMismatch", 1 => "DecodeError", 2 => "UnexpectedResponse", _ => "?",
-    }
-}
-
-/// `values`: [src_u16, seq_u16, level_u8, state_u8, dist_u32, batt_u8, flags_u8, stale_u8]
-fn format_mc_telemetry_rx(values: &[String]) -> Option<String> {
-    if values.len() < 8 { return None; }
-    let src:   u16 = values[0].parse().ok()?;
-    let seq:   u16 = values[1].parse().ok()?;
-    let level: u8  = values[2].parse().ok()?;
-    let state: u8  = values[3].parse().ok()?;
-    let dist:  u32 = values[4].parse().ok()?;
-    let batt:  u8  = values[5].parse().ok()?;
-    let flags: u8  = values[6].parse().ok()?;
-    let stale: u8  = values[7].parse().ok()?;
-    Some(format!(
-        "MC_TELEMETRY_RX src={src} seq={seq} level={level}% state={} dist={dist}mm batt={batt}% flags={flags:#04x} stale={}",
-        actor_mode_name(state),
-        if stale != 0 { "true" } else { "false" },
-    ))
-}
-
-/// `values`: [src_u16, hw_id_u8, fw_ver_u32]
-fn format_mc_pair_request(values: &[String]) -> Option<String> {
-    if values.len() < 3 { return None; }
-    let src:    u16 = values[0].parse().ok()?;
-    let hw_id:  u8  = values[1].parse().ok()?;
-    let fw_ver: u32 = values[2].parse().ok()?;
-    Some(format!("MC_PAIR_REQUEST src={src} hw_id={hw_id:#04x} fw_ver={fw_ver}"))
-}
-
-/// `values`: [src_u16]
-fn format_mc_pair_ok(values: &[String]) -> Option<String> {
-    if values.is_empty() { return None; }
-    let src: u16 = values[0].parse().ok()?;
-    Some(format!("MC_PAIR_OK src={src}"))
-}
-
-/// `values`: [src_u16, reason_u8]
-fn format_mc_pair_fail(values: &[String]) -> Option<String> {
-    if values.len() < 2 { return None; }
-    let src:    u16 = values[0].parse().ok()?;
-    let reason: u8  = values[1].parse().ok()?;
-    Some(format!("MC_PAIR_FAIL src={src} reason={}", pair_fail_reason_name(reason)))
-}
-
-/// `values`: [dst_u16]
-fn format_mc_fota_manifest(values: &[String]) -> Option<String> {
-    if values.is_empty() { return None; }
-    let dst: u16 = values[0].parse().ok()?;
-    Some(format!("MC_FOTA_MANIFEST dst={dst}"))
-}
-
-/// `values`: [dst_u16]
-fn format_mc_fota_start(values: &[String]) -> Option<String> {
-    if values.is_empty() { return None; }
-    let dst: u16 = values[0].parse().ok()?;
-    Some(format!("MC_FOTA_START dst={dst}"))
-}

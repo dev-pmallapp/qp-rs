@@ -1,0 +1,22 @@
+// ─────────────────────────────────────────────────────────────
+//  stm32g0b1_devkit.repl — SWM Dhara / Nalvar on STM32G0B1CETx
+//
+//  Platform: STM32G0B1CET6 (Cortex-M0+).
+//  Role:     Actuator (Dhara) or PUMP combined (Nalvar), plus the
+//            four shim bins (gagan/talab/pramukh/griha) for the
+//            Phase 3.3 brand-name matrix.
+//  Power:    Mains-derived 3V3 — no charger in the loop.
+//  Radio:    External LR1121 module on SPI1 (PA5/6/7, NSS=PA4).
+//            stm32g0b1_devkit.resc unregisters spi1 and loads
+//            SPI.LR1121SpiRadio in its place.
+//
+//  Inherits the STM32G0B1 SoC; node-specific peripherals (relay GPIO,
+//  pressure I2C stubs, solar charger) attach via .resc bindings.
+//
+//  Added in Phase 6.3 follow-up so that the per-pair generator
+//  fragment endpoint_stm32g0b1.resc.tmpl can point at a node-level
+//  repl uniformly with the WLE5 and U545 endpoints — symmetry the
+//  original Phase 1 set-up missed.
+// ─────────────────────────────────────────────────────────────
+
+using "../../../soc/arm/stm32g0b1/stm32g0b1.repl"

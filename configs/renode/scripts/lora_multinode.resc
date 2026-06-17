@@ -1,0 +1,90 @@
+# ═══════════════════════════════════════════════════════════════
+#  lora_multinode.resc  —  Multi-node LoRa wireless simulation
+#
+#  Usage (from Renode monitor):
+#      include @scripts/lora_multinode.resc
+#
+#  Nodes created:
+#      node-sensor-1   — SX1276, placed at (0, 0, 0)
+#      node-sensor-2   — SX1276, placed at (50, 0, 0)
+#      node-gateway    — SX1262, placed at (25, 0, 0)  [hub]
+#
+#  Wireless medium: IEEE802_15_4Medium (generic wireless bus)
+#  Range limit    : 100 units  (node-sensor-1 <-> node-sensor-2 at dist=50: OK)
+#
+#  NOTE: Adjust firmware paths before running.
+# ═══════════════════════════════════════════════════════════════
+
+# ── Variables (override via CLI: -e '$FIRMWARE_SENSOR=...' ) ──
+$sensor_fw   ?= @firmware/sensor_node.elf
+$gateway_fw  ?= @firmware/gateway.elf
+$medium_name ?= "loraMedium"
+$range       ?= 100
+
+# ── 1. Create the shared wireless medium ──────────────────────
+emulation CreateIEEE802_15_4Medium $medium_name
+
+# Set range-based delivery — packets fail beyond $range units
+loraMedium SetRangeWirelessFunction $range
+
+# ══════════════════════════════════════════════════════════════
+#  SENSOR NODE 1
+# ══════════════════════════════════════════════════════════════
+mach create "node-sensor-1"
+machine LoadPlatformDescription @configs/renode/swm/ref_platform/node_sx1276.repl
+sysbus LoadELF $sensor_fw
+
+connector Connect sysbus.radio $medium_name
+wireless SetPosition sysbus.radio 0 0 0
+
+showAnalyzer sysbus.uart1
+logLevel 3 sysbus.radio     # Info-level logging for the radio peripheral
+
+# ══════════════════════════════════════════════════════════════
+#  SENSOR NODE 2
+# ══════════════════════════════════════════════════════════════
+mach create "node-sensor-2"
+machine LoadPlatformDescription @configs/renode/swm/ref_platform/node_sx1276.repl
+sysbus LoadELF $sensor_fw
+
+connector Connect sysbus.radio $medium_name
+wireless SetPosition sysbus.radio 50 0 0
+
+showAnalyzer sysbus.uart1
+logLevel 3 sysbus.radio
+
+# ══════════════════════════════════════════════════════════════
+#  GATEWAY NODE  (SX1262 — different platform)
+# ══════════════════════════════════════════════════════════════
+mach create "node-gateway"
+machine LoadPlatformDescription @configs/renode/swm/ref_platform/node_sx1262.repl
+sysbus LoadELF $gateway_fw
+
+connector Connect sysbus.radio $medium_name
+wireless SetPosition sysbus.radio 25 0 0  # central, equidistant
+
+showAnalyzer sysbus.uart0
+logLevel 3 sysbus.radio
+
+# ══════════════════════════════════════════════════════════════
+#  OUT-OF-RANGE NODE  (tests that range limiting works)
+# ══════════════════════════════════════════════════════════════
+mach create "node-out-of-range"
+machine LoadPlatformDescription @configs/renode/swm/ref_platform/node_sx1276.repl
+sysbus LoadELF $sensor_fw
+
+connector Connect sysbus.radio $medium_name
+wireless SetPosition sysbus.radio 200 0 0   # 200 units away — beyond $range=100
+
+showAnalyzer sysbus.uart1
+logLevel 3 sysbus.radio
+
+# ══════════════════════════════════════════════════════════════
+#  TRAFFIC LOGGING  (open output.pcap in Wireshark)
+# ══════════════════════════════════════════════════════════════
+emulation LogIEEE802_15_4Traffic @logs/lora_traffic.pcap $medium_name
+
+# ══════════════════════════════════════════════════════════════
+#  START ALL MACHINES
+# ══════════════════════════════════════════════════════════════
+start

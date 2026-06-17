@@ -1,0 +1,24 @@
+[package]
+name = "qf-port-riscv"
+version = "8.1.1"
+edition = "2021"
+authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
+description = "RISC-V hardware port for the Quantum Platform QXK dual-mode kernel"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Enable std on the host (used for tests and hosted emulation).
+default = ["std"]
+std = ["qf/std", "qk/std", "qxk/std"]
+# Enable when building for a real RISC-V target.
+hw = []
+
+[dependencies]
+qf  = { path = "../../crates/qf",  default-features = false }
+qk  = { path = "../../crates/qk",  default-features = false }
+qxk = { path = "../../crates/qxk", default-features = false }
+spin = "0.9"
+hal-rvsis = { path = "../../hal/hal-rvsis", default-features = false }

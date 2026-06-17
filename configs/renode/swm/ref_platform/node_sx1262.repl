@@ -1,0 +1,39 @@
+// ─────────────────────────────────────────────────────────
+//  node_sx1262.repl  —  nRF52840 + SX1262 LoRa node
+//
+//  Use this for the gateway or a second board type.
+//  Peripheral path used by the wireless medium:  sysbus.radio
+// ─────────────────────────────────────────────────────────
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xFF
+    systickFrequency: 64000000
+    IRQ -> cpu@0
+
+// ── Memory ──────────────────────────────────────────────
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x40000       // 256 KB
+
+flash: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x100000      // 1 MB
+
+// ── GPIO ────────────────────────────────────────────────
+gpio0: GPIOPort.NRFGPIOPort @ sysbus 0x50000000
+
+// ── SPI2 (used for SX1262) ──────────────────────────────
+spi2: SPI.NRFSPIMaster @ sysbus 0x40023000
+    IRQ -> nvic@3
+
+// ── SX1262 LoRa radio on SPI2, CS=0 ────────────────────
+//    Implements IRadio — can be connected to a wireless medium
+//    NOTE: use SPI.SX1261 if SX1262 is not yet in your Renode build;
+//          they share the same register-level interface.
+radio: SPI.SX1261 @ spi2 0
+    DIO1 -> gpio0@6     // IRQ line (all events muxed to DIO1 on SX126x)
+
+// ── UART0 (debug / test output) ─────────────────────────
+uart0: UART.NRF5x_UART @ sysbus 0x40002000
+    IRQ -> nvic@2

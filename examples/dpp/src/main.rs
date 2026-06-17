@@ -3,9 +3,8 @@
 //! This example mirrors the reference application in
 //! `scratch/qp-8.1.1/qpcpp/examples/posix-win32/dpp_comp`, showing how active
 //! objects, the preemptive kernel, time events, and QS tracing integrate in
-//! Rust.
+//! Rust using the QHsm framework.
 
-use std::convert::TryInto;
 use std::env;
 use std::error::Error;
 use std::io::Read;
@@ -16,19 +15,17 @@ use std::time::Duration;
 
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
-use qf::active::{new_active_object, ActiveBehavior, ActiveContext};
+use qf::active::{new_active_object, ActiveObjectId};
 use qf::event::{DynEvent, DynPayload, Event};
+use qf::hsm::reserved::*;
 use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo};
-use qf::{ActiveObjectId, Signal, TraceError};
+use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult, Signal, TraceError};
 use qf_port_posix::{PosixPort, PosixQkRuntime};
 use qk::{QkKernel, QkKernelError};
-use qs::records::qep::{
-    DISPATCH as QS_QEP_DISPATCH, IGNORED as QS_QEP_IGNORED, INIT_TRAN as QS_QEP_INIT_TRAN,
-    INTERN_TRAN as QS_QEP_INTERN_TRAN, STATE_ENTRY as QS_QEP_STATE_ENTRY,
-    STATE_EXIT as QS_QEP_STATE_EXIT, STATE_INIT as QS_QEP_STATE_INIT, TRAN as QS_QEP_TRAN,
-    UNHANDLED as QS_QEP_UNHANDLED,
-};
-use qs::{TargetInfo, UserRecordBuilder};
+use qs::qutest::make_probe_record;
+use qs::records::infra::TEST_PROBE as QS_TEST_PROBE_GET;
+use qs::rx::{cmd as rx_cmd, RxCmd, RxParser};
+use qs::{clear_test_probes, set_test_probe, GlbFilter, TargetInfo, UserRecordBuilder};
 
 const N_PHILO: usize = 5;
 const TABLE_ID: ActiveObjectId = ActiveObjectId::new(1);
@@ -56,18 +53,16 @@ const PHILO_INITIAL_NAME: &str = "Philo::initial";
 const PHILO_THINKING_NAME: &str = "Philo::thinking";
 const PHILO_HUNGRY_NAME: &str = "Philo::hungry";
 const PHILO_EATING_NAME: &str = "Philo::eating";
-const TABLE_ACTIVE_NAME: &str = "Table::active";
 const TABLE_SERVING_NAME: &str = "Table::serving";
 const TABLE_PAUSED_NAME: &str = "Table::paused";
 
-const PHILO_FUN_NAMES: &[&str] = &[
-    PHILO_INITIAL_NAME,
-    PHILO_THINKING_NAME,
-    PHILO_HUNGRY_NAME,
-    PHILO_EATING_NAME,
-];
+const QS_TARGET_DONE: u8 = 65;
+const QS_RX_STATUS: u8 = 66;
 
-const TABLE_FUN_NAMES: &[&str] = &[TABLE_ACTIVE_NAME, TABLE_SERVING_NAME, TABLE_PAUSED_NAME];
+static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
+static PORT: OnceLock<Arc<PosixPort>> = OnceLock::new();
+
+static NAMES: [&str; N_PHILO] = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"];
 
 fn dict_handle(name: &str) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
@@ -114,137 +109,115 @@ fn philo_trace_entries() -> &'static [PhiloTraceEntry] {
         .as_slice()
 }
 
-fn emit_qep_record(
-    ctx: &ActiveContext,
-    record_type: u8,
-    payload: Vec<u8>,
-    with_timestamp: bool,
-    label: &'static str,
-) {
-    if let Err(err) = ctx.emit_trace_with_timestamp(record_type, &payload, with_timestamp) {
-        eprintln!("failed to emit {label}: {err}");
+// ── Philosopher HSM Data & State Handlers ─────────────────────────────────────
+
+struct PhiloData {
+    index: usize,
+    name: &'static str,
+    timer: Arc<TimeEvent>,
+    rng: SmallRng,
+}
+
+impl PhiloData {
+    fn think_ticks(&mut self) -> u64 {
+        self.rng.gen_range(3..=6)
     }
-}
 
-fn emit_qep_state_entry(ctx: &ActiveContext, obj_addr: u64, state_addr: u64) {
-    let mut payload = Vec::with_capacity(16);
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(
-        ctx,
-        QS_QEP_STATE_ENTRY,
-        payload,
-        false,
-        "QS_QEP_STATE_ENTRY",
-    );
-}
+    fn eat_ticks(&mut self) -> u64 {
+        self.rng.gen_range(2..=5)
+    }
 
-fn emit_qep_state_exit(ctx: &ActiveContext, obj_addr: u64, state_addr: u64) {
-    let mut payload = Vec::with_capacity(16);
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_STATE_EXIT, payload, false, "QS_QEP_STATE_EXIT");
-}
-
-fn emit_qep_state_init(ctx: &ActiveContext, obj_addr: u64, source_addr: u64, target_addr: u64) {
-    let mut payload = Vec::with_capacity(24);
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&source_addr.to_le_bytes());
-    payload.extend_from_slice(&target_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_STATE_INIT, payload, false, "QS_QEP_STATE_INIT");
-}
-
-fn emit_qep_init_tran(ctx: &ActiveContext, obj_addr: u64, target_addr: u64) {
-    let mut payload = Vec::with_capacity(16);
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&target_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_INIT_TRAN, payload, true, "QS_QEP_INIT_TRAN");
-}
-
-fn emit_qep_dispatch(ctx: &ActiveContext, obj_addr: u64, signal: Signal, state_addr: u64) {
-    let mut payload = Vec::with_capacity(18);
-    payload.extend_from_slice(&signal.0.to_le_bytes());
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_DISPATCH, payload, true, "QS_QEP_DISPATCH");
-}
-
-fn emit_qep_internal_tran(ctx: &ActiveContext, obj_addr: u64, signal: Signal, state_addr: u64) {
-    let mut payload = Vec::with_capacity(18);
-    payload.extend_from_slice(&signal.0.to_le_bytes());
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_INTERN_TRAN, payload, true, "QS_QEP_INTERN_TRAN");
-}
-
-fn emit_qep_tran(
-    ctx: &ActiveContext,
-    obj_addr: u64,
-    signal: Signal,
-    source_addr: u64,
-    target_addr: u64,
-) {
-    let mut payload = Vec::with_capacity(26);
-    payload.extend_from_slice(&signal.0.to_le_bytes());
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&source_addr.to_le_bytes());
-    payload.extend_from_slice(&target_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_TRAN, payload, true, "QS_QEP_TRAN");
-}
-
-fn emit_qep_ignored(ctx: &ActiveContext, obj_addr: u64, signal: Signal, state_addr: u64) {
-    let mut payload = Vec::with_capacity(18);
-    payload.extend_from_slice(&signal.0.to_le_bytes());
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_IGNORED, payload, true, "QS_QEP_IGNORED");
-}
-
-fn emit_qep_unhandled(ctx: &ActiveContext, obj_addr: u64, signal: Signal, state_addr: u64) {
-    let mut payload = Vec::with_capacity(18);
-    payload.extend_from_slice(&signal.0.to_le_bytes());
-    payload.extend_from_slice(&obj_addr.to_le_bytes());
-    payload.extend_from_slice(&state_addr.to_le_bytes());
-    emit_qep_record(ctx, QS_QEP_UNHANDLED, payload, false, "QS_QEP_UNHANDLED");
-}
-
-const QS_RX_INFO: u8 = 0;
-const QS_RX_COMMAND: u8 = 1;
-const QS_TARGET_DONE: u8 = 65;
-const QS_RX_STATUS: u8 = 66;
-const QS_FRAME_FLAG: u8 = 0x7E;
-const QS_FRAME_ESCAPE: u8 = 0x7D;
-const QS_FRAME_ESCAPE_XOR: u8 = 0x20;
-const MAX_RX_FRAME: usize = 128;
-
-static KERNEL: OnceLock<Arc<QkKernel>> = OnceLock::new();
-
-static NAMES: [&str; N_PHILO] = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhiloState {
-    Thinking,
-    Hungry,
-    Eating,
-}
-
-impl PhiloState {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PhiloState::Thinking => "thinking",
-            PhiloState::Hungry => "hungry",
-            PhiloState::Eating => "eating",
+    fn post_table(&self, signal: Signal) {
+        if let Some(kernel) = KERNEL.get() {
+            let payload: DynPayload = Arc::new(TableMsg::new(ActiveObjectId::new(PHILO_BASE_ID + self.index as u8)));
+            let evt = Event::with_arc(signal, payload);
+            let _ = kernel.post(TABLE_ID, evt);
         }
     }
 
-    fn addr(&self) -> u64 {
-        match self {
-            PhiloState::Thinking => dict_handle(PHILO_THINKING_NAME),
-            PhiloState::Hungry => dict_handle(PHILO_HUNGRY_NAME),
-            PhiloState::Eating => dict_handle(PHILO_EATING_NAME),
+    fn log_state(&self, state_str: &'static str) {
+        println!("{} is {}", self.name, state_str);
+        if let Some(port) = PORT.get() {
+            let mut builder = UserRecordBuilder::with_capacity(self.name.len() + 8);
+            builder.push_u8(1, self.index as u8);
+            builder.push_str(state_str);
+            let payload = builder.into_vec();
+            let _ = port.emit_record(PHILO_STAT_RECORD, &payload, true);
         }
     }
 }
+
+fn philo_initial(_sm: &mut PhiloData, _e: &DynEvent) -> QHsmResult<PhiloData> {
+    q_tran!(thinking)
+}
+
+fn thinking(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            let ticks = sm.think_ticks();
+            sm.timer.arm(ticks, None);
+            sm.log_state("thinking");
+            q_handled!()
+        }
+        Q_EXIT_SIG_VAL => {
+            sm.timer.disarm();
+            q_handled!()
+        }
+        10 => { // TIMEOUT_SIG
+            let tp_fn = thinking as usize as u64;
+            if let Some(tp) = qs::qutest::take_test_probe(tp_fn) {
+                if let Some(port) = PORT.get() {
+                    let rec = make_probe_record(tp_fn, tp);
+                    let _ = port.emit_record(QS_TEST_PROBE_GET, &rec, false);
+                }
+                if tp != 0 {
+                    return q_handled!();
+                }
+            }
+            q_tran!(hungry)
+        }
+        8 => { // TEST_SIG
+            q_handled!()
+        }
+        _ => q_super!(QHsm::<PhiloData>::top_state),
+    }
+}
+
+fn hungry(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            sm.post_table(HUNGRY_SIG);
+            sm.log_state("hungry");
+            q_handled!()
+        }
+        4 => { // EAT_SIG
+            q_tran!(eating)
+        }
+        _ => q_super!(QHsm::<PhiloData>::top_state),
+    }
+}
+
+fn eating(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            let ticks = sm.eat_ticks();
+            sm.timer.arm(ticks, None);
+            sm.log_state("eating");
+            q_handled!()
+        }
+        Q_EXIT_SIG_VAL => {
+            sm.timer.disarm();
+            sm.post_table(DONE_SIG);
+            q_handled!()
+        }
+        10 => { // TIMEOUT_SIG
+            q_tran!(thinking)
+        }
+        _ => q_super!(QHsm::<PhiloData>::top_state),
+    }
+}
+
+// ── Table HSM Data & State Handlers ───────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
 struct TableMsg {
@@ -257,180 +230,16 @@ impl TableMsg {
     }
 }
 
-struct Philosopher {
-    index: usize,
-    name: &'static str,
-    state: PhiloState,
-    timer: Arc<TimeEvent>,
-    rng: SmallRng,
-    object_addr: u64,
-}
-
-impl Philosopher {
-    fn new(index: usize, timer: Arc<TimeEvent>, object_addr: u64) -> Self {
-        Self {
-            index,
-            name: NAMES[index],
-            state: PhiloState::Thinking,
-            timer,
-            rng: SmallRng::seed_from_u64(index as u64 + 1),
-            object_addr,
-        }
-    }
-
-    fn id(&self) -> ActiveObjectId {
-        ActiveObjectId::new(PHILO_BASE_ID + self.index as u8)
-    }
-
-    fn think_ticks(&mut self) -> u64 {
-        self.rng.gen_range(3..=6)
-    }
-
-    fn eat_ticks(&mut self) -> u64 {
-        self.rng.gen_range(2..=5)
-    }
-
-    fn schedule_think(&mut self) {
-        let ticks = self.think_ticks();
-        self.timer.arm(ticks, None);
-    }
-
-    fn schedule_eat(&mut self) {
-        let ticks = self.eat_ticks();
-        self.timer.arm(ticks, None);
-    }
-
-    fn post_table(&self, signal: Signal) {
-        if let Some(kernel) = KERNEL.get() {
-            let payload: DynPayload = Arc::new(TableMsg::new(self.id()));
-            let evt = Event::with_arc(signal, payload);
-            let _ = kernel.post(TABLE_ID, evt);
-        }
-    }
-
-    fn log_state(&self, ctx: &mut ActiveContext, state: PhiloState) {
-        println!("{} is {:?}", self.name, state);
-        let mut builder = UserRecordBuilder::with_capacity(self.name.len() + 8);
-        builder.push_u8(1, self.index as u8);
-        builder.push_str(state.as_str());
-        let payload = builder.into_vec();
-        let _ = ctx.emit_trace(PHILO_STAT_RECORD, &payload);
-    }
-
-    fn entry_preroll(&mut self, state: PhiloState) {
-        match state {
-            PhiloState::Thinking => self.schedule_think(),
-            PhiloState::Hungry => self.post_table(HUNGRY_SIG),
-            PhiloState::Eating => self.schedule_eat(),
-        }
-    }
-
-    fn entry_post(&self, ctx: &mut ActiveContext, state: PhiloState) {
-        self.log_state(ctx, state);
-    }
-
-    fn exit_actions(&mut self, state: PhiloState) -> bool {
-        match state {
-            PhiloState::Thinking => {
-                self.timer.disarm();
-                true
-            }
-            PhiloState::Hungry => false,
-            PhiloState::Eating => {
-                self.timer.disarm();
-                self.post_table(DONE_SIG);
-                true
-            }
-        }
-    }
-
-    fn transition_to(&mut self, ctx: &mut ActiveContext, signal: Signal, target: PhiloState) {
-        let source = self.state;
-        if self.exit_actions(source) {
-            emit_qep_state_exit(ctx, self.object_addr, source.addr());
-        }
-        self.state = target;
-        self.entry_preroll(target);
-        emit_qep_state_entry(ctx, self.object_addr, target.addr());
-        emit_qep_tran(ctx, self.object_addr, signal, source.addr(), target.addr());
-        self.entry_post(ctx, target);
-    }
-}
-
-impl ActiveBehavior for Philosopher {
-    fn on_start(&mut self, ctx: &mut ActiveContext) {
-        emit_qep_state_init(
-            ctx,
-            self.object_addr,
-            dict_handle(QHSM_TOP_NAME),
-            dict_handle(PHILO_THINKING_NAME),
-        );
-        self.state = PhiloState::Thinking;
-        self.entry_preroll(self.state);
-        emit_qep_state_entry(ctx, self.object_addr, self.state.addr());
-        emit_qep_init_tran(ctx, self.object_addr, self.state.addr());
-        self.entry_post(ctx, self.state);
-    }
-
-    fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent) {
-        let signal = event.signal();
-        emit_qep_dispatch(ctx, self.object_addr, signal, self.state.addr());
-
-        match (self.state, signal) {
-            (PhiloState::Thinking, TIMEOUT_SIG) => {
-                self.transition_to(ctx, signal, PhiloState::Hungry);
-            }
-            (PhiloState::Thinking, TEST_SIG) => {
-                emit_qep_internal_tran(ctx, self.object_addr, signal, self.state.addr());
-            }
-            (PhiloState::Thinking, other) => {
-                emit_qep_ignored(ctx, self.object_addr, other, self.state.addr());
-            }
-            (PhiloState::Hungry, EAT_SIG) => {
-                self.transition_to(ctx, signal, PhiloState::Eating);
-            }
-            (PhiloState::Hungry, other) => {
-                emit_qep_ignored(ctx, self.object_addr, other, self.state.addr());
-            }
-            (PhiloState::Eating, TIMEOUT_SIG) => {
-                self.transition_to(ctx, signal, PhiloState::Thinking);
-            }
-            (PhiloState::Eating, other) => {
-                emit_qep_ignored(ctx, self.object_addr, other, self.state.addr());
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-enum TableMode {
-    Serving,
-    Paused,
-}
-
-impl TableMode {
-    fn addr(&self) -> u64 {
-        match self {
-            TableMode::Serving => dict_handle(TABLE_SERVING_NAME),
-            TableMode::Paused => dict_handle(TABLE_PAUSED_NAME),
-        }
-    }
-}
-
-struct TableState {
+struct TableData {
     forks: [bool; N_PHILO],
     hungry: [bool; N_PHILO],
-    state: TableMode,
-    object_addr: u64,
 }
 
-impl TableState {
+impl TableData {
     fn new() -> Self {
         Self {
             forks: [true; N_PHILO],
             hungry: [false; N_PHILO],
-            state: TableMode::Serving,
-            object_addr: dict_handle(TABLE_OBJECT_NAME),
         }
     }
 
@@ -456,48 +265,10 @@ impl TableState {
         self.forks[Self::left(idx)] = true;
     }
 
-    fn state_addr(&self) -> u64 {
-        self.state.addr()
-    }
-
-    fn entry_preroll(&mut self, state: TableMode) {
-        match state {
-            TableMode::Serving => {
-                for idx in 0..N_PHILO {
-                    if self.hungry[idx] && self.can_eat(idx) {
-                        self.grant_forks(idx, "Table now serves");
-                    }
-                }
-            }
-            TableMode::Paused => {}
-        }
-    }
-
-    fn entry_post(&self, _ctx: &mut ActiveContext, _state: TableMode) {}
-
-    fn exit_actions(&mut self, state: TableMode) -> bool {
-        match state {
-            TableMode::Serving => false,
-            TableMode::Paused => true,
-        }
-    }
-
-    fn transition_to(&mut self, ctx: &mut ActiveContext, signal: Signal, target: TableMode) {
-        let source = self.state;
-        if self.exit_actions(source) {
-            emit_qep_state_exit(ctx, self.object_addr, source.addr());
-        }
-        self.state = target;
-        self.entry_preroll(target);
-        emit_qep_state_entry(ctx, self.object_addr, target.addr());
-        emit_qep_tran(ctx, self.object_addr, signal, source.addr(), target.addr());
-        self.entry_post(ctx, target);
-    }
-
     fn grant_forks(&mut self, idx: usize, prefix: &str) {
         self.take_forks(idx);
         self.hungry[idx] = false;
-        println!("{prefix} {}", NAMES[idx]);
+        println!("{} {}", prefix, NAMES[idx]);
         if let Some(kernel) = KERNEL.get() {
             let target = ActiveObjectId::new(PHILO_BASE_ID + idx as u8);
             let _ = kernel.post(target, DynEvent::empty_dyn(EAT_SIG));
@@ -536,99 +307,103 @@ impl TableState {
     fn msg_index(&self, msg: &TableMsg) -> usize {
         (msg.philo.0 - PHILO_BASE_ID) as usize
     }
+}
 
-    fn handle_serving(&mut self, ctx: &mut ActiveContext, signal: Signal, event: &DynEvent) {
-        let serving_handle = dict_handle(TABLE_SERVING_NAME);
-        let active_handle = dict_handle(TABLE_ACTIVE_NAME);
-        match signal {
-            HUNGRY_SIG => {
-                if let Some(msg) = event.payload.as_ref().downcast_ref::<TableMsg>() {
-                    let idx = self.msg_index(msg);
-                    self.handle_hungry(idx);
-                    emit_qep_internal_tran(ctx, self.object_addr, signal, serving_handle);
-                } else {
-                    emit_qep_unhandled(ctx, self.object_addr, signal, serving_handle);
-                }
-            }
-            DONE_SIG => {
-                if let Some(msg) = event.payload.as_ref().downcast_ref::<TableMsg>() {
-                    let idx = self.msg_index(msg);
-                    self.handle_done(idx);
-                    emit_qep_internal_tran(ctx, self.object_addr, signal, serving_handle);
-                } else {
-                    emit_qep_unhandled(ctx, self.object_addr, signal, serving_handle);
-                }
-            }
-            PAUSE_SIG => self.transition_to(ctx, signal, TableMode::Paused),
-            TEST_SIG => emit_qep_internal_tran(ctx, self.object_addr, signal, active_handle),
-            EAT_SIG => emit_qep_internal_tran(ctx, self.object_addr, signal, serving_handle),
-            _ => emit_qep_ignored(ctx, self.object_addr, signal, self.state_addr()),
-        }
-    }
+fn table_initial(_sm: &mut TableData, _e: &DynEvent) -> QHsmResult<TableData> {
+    q_tran!(serving)
+}
 
-    fn handle_paused(&mut self, ctx: &mut ActiveContext, signal: Signal, event: &DynEvent) {
-        let paused_handle = dict_handle(TABLE_PAUSED_NAME);
-        let active_handle = dict_handle(TABLE_ACTIVE_NAME);
-        match signal {
-            SERVE_SIG => self.transition_to(ctx, signal, TableMode::Serving),
-            HUNGRY_SIG => {
-                if let Some(msg) = event.payload.as_ref().downcast_ref::<TableMsg>() {
-                    let idx = self.msg_index(msg);
-                    self.hungry[idx] = true;
-                    println!("{} waits for forks", NAMES[idx]);
-                    emit_qep_internal_tran(ctx, self.object_addr, signal, paused_handle);
-                } else {
-                    emit_qep_unhandled(ctx, self.object_addr, signal, paused_handle);
-                }
-            }
-            DONE_SIG => {
-                if let Some(msg) = event.payload.as_ref().downcast_ref::<TableMsg>() {
-                    let idx = self.msg_index(msg);
-                    self.handle_paused_done(idx);
-                    emit_qep_internal_tran(ctx, self.object_addr, signal, paused_handle);
-                } else {
-                    emit_qep_unhandled(ctx, self.object_addr, signal, paused_handle);
-                }
-            }
-            TEST_SIG => emit_qep_internal_tran(ctx, self.object_addr, signal, active_handle),
-            _ => emit_qep_ignored(ctx, self.object_addr, signal, self.state_addr()),
+fn active(_sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
+    match e.signal().0 {
+        Q_INIT_SIG_VAL => {
+            q_tran!(serving)
         }
+        8 => { // TEST_SIG
+            q_handled!()
+        }
+        _ => q_super!(QHsm::<TableData>::top_state),
     }
 }
 
-impl ActiveBehavior for TableState {
-    fn on_start(&mut self, ctx: &mut ActiveContext) {
-        println!("Table is ready");
-        emit_qep_state_init(
-            ctx,
-            self.object_addr,
-            dict_handle(QHSM_TOP_NAME),
-            dict_handle(TABLE_SERVING_NAME),
-        );
-        self.state = TableMode::Serving;
-        self.entry_preroll(self.state);
-        emit_qep_state_entry(ctx, self.object_addr, self.state.addr());
-        emit_qep_init_tran(ctx, self.object_addr, self.state.addr());
-        self.entry_post(ctx, self.state);
-    }
-
-    fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent) {
-        let signal = event.signal();
-        emit_qep_dispatch(ctx, self.object_addr, signal, self.state_addr());
-
-        match self.state {
-            TableMode::Serving => self.handle_serving(ctx, signal, &event),
-            TableMode::Paused => self.handle_paused(ctx, signal, &event),
+fn serving(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            println!("Table is ready");
+            for idx in 0..N_PHILO {
+                if sm.hungry[idx] && sm.can_eat(idx) {
+                    sm.grant_forks(idx, "Table now serves");
+                }
+            }
+            q_handled!()
         }
+        11 => { // HUNGRY_SIG
+            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
+                let idx = sm.msg_index(msg);
+                sm.handle_hungry(idx);
+            }
+            q_handled!()
+        }
+        5 => { // DONE_SIG
+            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
+                let idx = sm.msg_index(msg);
+                sm.handle_done(idx);
+            }
+            q_handled!()
+        }
+        6 => { // PAUSE_SIG
+            q_tran!(paused)
+        }
+        _ => q_super!(active),
     }
 }
+
+fn paused(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
+    match e.signal().0 {
+        Q_ENTRY_SIG_VAL => {
+            println!("Table paused");
+            if let Some(port) = PORT.get() {
+                let _ = port.emit_record(PAUSED_STAT_RECORD, &[1], true);
+            }
+            q_handled!()
+        }
+        Q_EXIT_SIG_VAL => {
+            println!("Table resumed");
+            if let Some(port) = PORT.get() {
+                let _ = port.emit_record(PAUSED_STAT_RECORD, &[0], true);
+            }
+            q_handled!()
+        }
+        7 => { // SERVE_SIG
+            q_tran!(serving)
+        }
+        11 => { // HUNGRY_SIG
+            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
+                let idx = sm.msg_index(msg);
+                sm.hungry[idx] = true;
+                println!("{} waits for forks", NAMES[idx]);
+            }
+            q_handled!()
+        }
+        5 => { // DONE_SIG
+            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
+                let idx = sm.msg_index(msg);
+                sm.handle_paused_done(idx);
+            }
+            q_handled!()
+        }
+        _ => q_super!(active),
+    }
+}
+
+// ── Wiring & Runtime ─────────────────────────────────────────────────────────
 
 fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
     let port = init_port();
     let mut builder = QkKernel::builder();
 
+    let table_hsm = QHsm::new(TableData::new(), table_initial);
     builder = builder
-        .register(new_active_object(TABLE_ID, 10, TableState::new()))?;
+        .register(new_active_object(TABLE_ID, 10, table_hsm))?;
 
     let mut timers = Vec::new();
     for entry in philo_trace_entries() {
@@ -640,9 +415,19 @@ fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
             tick_rate: DEFAULT_TICK_RATE,
         });
         timers.push(Arc::clone(&timer));
-        let behavior = Philosopher::new(entry.index, Arc::clone(&timer), entry.object_handle);
+        
+        let philo_hsm = QHsm::new(
+            PhiloData {
+                index: entry.index,
+                name: NAMES[entry.index],
+                timer: Arc::clone(&timer),
+                rng: SmallRng::seed_from_u64(entry.index as u64 + 1),
+            },
+            philo_initial,
+        );
+        
         builder = builder
-            .register(new_active_object(id, (entry.index + 1) as u8, behavior))?;
+            .register(new_active_object(id, (entry.index + 1) as u8, philo_hsm))?;
     }
 
     let mut runtime = PosixQkRuntime::with_port(builder, &port)?;
@@ -674,6 +459,7 @@ fn init_port() -> Arc<PosixPort> {
     };
 
     let port = Arc::new(port);
+    PORT.set(Arc::clone(&port)).unwrap_or_else(|_| panic!("port already set"));
     start_command_channel(&cmd_addr, Arc::clone(&port));
     port
 }
@@ -716,13 +502,13 @@ fn handle_command_stream(mut stream: TcpStream, port: Arc<PosixPort>) {
         println!("QS command channel connected to {peer}");
     }
     let mut buffer = [0u8; 128];
-    let mut decoder = QsRxDecoder::new(port);
+    let mut ctx = QsRxContext::new(port);
     loop {
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => {
                 for &byte in &buffer[..count] {
-                    decoder.ingest(byte);
+                    ctx.ingest(byte);
                 }
             }
             Err(err) => {
@@ -736,145 +522,91 @@ fn handle_command_stream(mut stream: TcpStream, port: Arc<PosixPort>) {
     }
 }
 
-struct QsRxDecoder {
-    port: Arc<PosixPort>,
-    frame: Vec<u8>,
-    escaped: bool,
+struct QsRxContext {
+    port:   Arc<PosixPort>,
+    parser: RxParser,
 }
 
-impl QsRxDecoder {
+impl QsRxContext {
     fn new(port: Arc<PosixPort>) -> Self {
-        Self {
-            port,
-            frame: Vec::with_capacity(32),
-            escaped: false,
-        }
+        Self { port, parser: RxParser::new() }
     }
 
     fn ingest(&mut self, byte: u8) {
-        if byte == QS_FRAME_FLAG {
-            self.finish_frame();
-            self.escaped = false;
-            return;
+        if let Some(cmd) = self.parser.push(byte) {
+            self.handle_cmd(cmd);
         }
-
-        if byte == QS_FRAME_ESCAPE {
-            self.escaped = true;
-            return;
-        }
-
-        let value = if self.escaped {
-            self.escaped = false;
-            byte ^ QS_FRAME_ESCAPE_XOR
-        } else {
-            byte
-        };
-
-        if self.frame.len() >= MAX_RX_FRAME {
-            eprintln!("QS-RX frame exceeded {MAX_RX_FRAME} bytes; dropping");
-            self.frame.clear();
-            self.escaped = false;
-            self.report_error(0x50);
-            return;
-        }
-
-        self.frame.push(value);
     }
 
-    fn finish_frame(&mut self) {
-        if self.frame.is_empty() {
-            return;
-        }
-
-        let mut frame = Vec::new();
-        std::mem::swap(&mut frame, &mut self.frame);
-        self.handle_frame(&frame);
-    }
-
-    fn handle_frame(&self, frame: &[u8]) {
-        if frame.len() < 3 {
-            self.report_error(0x50);
-            return;
-        }
-
-        let (data, checksum_slice) = frame.split_at(frame.len() - 1);
-        let checksum = checksum_slice[0];
-        let mut sum: u8 = 0;
-        for byte in data {
-            sum = sum.wrapping_add(*byte);
-        }
-
-        if sum.wrapping_add(checksum) != 0xFF {
-            eprintln!("QS-RX checksum mismatch (sum={sum:#04x}, checksum={checksum:#04x})");
-            self.report_error(0x51);
-            return;
-        }
-
-        if data.len() < 2 {
-            self.report_error(0x52);
-            return;
-        }
-
-        let record = data[1];
-        let payload = &data[2..];
-
-        match record {
-            QS_RX_INFO => {
+    fn handle_cmd(&self, cmd: RxCmd) {
+        match cmd {
+            RxCmd::Info => {
                 if let Err(err) = self.port.emit_target_info(&TargetInfo::default()) {
-                    eprintln!("failed to emit target info for QS-RX: {err}");
+                    eprintln!("QS-RX INFO error: {err}");
                 }
             }
-            QS_RX_COMMAND => {
-                self.handle_command(payload);
+            RxCmd::Reset => {
+                eprintln!("QS-RX RESET (not implemented in this demo)");
             }
-            other => {
-                eprintln!("unsupported QS-RX record {other}");
-                self.report_error(0x43);
+            RxCmd::Command { id, p1, p2, p3 } => {
+                self.ack(rx_cmd::COMMAND);
+                println!("QS command id={id} params=[{p1}, {p2}, {p3}]");
+                self.done(rx_cmd::COMMAND);
+            }
+            RxCmd::TestSetup => {
+                clear_test_probes();
+                self.ack_done(rx_cmd::TEST_SETUP);
+            }
+            RxCmd::TestTeardown => {
+                clear_test_probes();
+                self.ack_done(rx_cmd::TEST_TEARDOWN);
+            }
+            RxCmd::TestContinue => {
+                self.ack_done(rx_cmd::TEST_CONTINUE);
+            }
+            RxCmd::TestProbe { fn_ptr, data } => {
+                set_test_probe(fn_ptr, data);
+                self.ack_done(rx_cmd::TEST_PROBE);
+            }
+            RxCmd::Event { prio, signal, .. } => {
+                if let Some(kernel) = KERNEL.get() {
+                    let _ = kernel.post(
+                        ActiveObjectId::new(prio),
+                        DynEvent::empty_dyn(Signal(signal)),
+                    );
+                }
+                self.ack_done(rx_cmd::EVENT);
+            }
+            RxCmd::GlbFilter { bits } => {
+                self.port.set_filter(GlbFilter::from_bytes(bits));
+                self.ack_done(rx_cmd::GLB_FILTER);
+            }
+            RxCmd::Tick { .. }       => self.ack_done(rx_cmd::TICK),
+            RxCmd::AoFilter { .. }   => self.ack_done(rx_cmd::AO_FILTER),
+            RxCmd::LocFilter { .. }  => self.ack_done(rx_cmd::LOC_FILTER),
+            RxCmd::CurrObj { .. }    => self.ack_done(rx_cmd::CURR_OBJ),
+            RxCmd::QueryCurr { .. }  => self.ack_done(rx_cmd::QUERY_CURR),
+            RxCmd::Peek { .. }       => self.ack_done(rx_cmd::PEEK),
+            RxCmd::Poke { .. }       => self.ack_done(rx_cmd::POKE),
+            RxCmd::Fill { .. }       => self.ack_done(rx_cmd::FILL),
+            RxCmd::Unknown { cmd, .. } => {
+                eprintln!("unknown QS-RX record {cmd:#04x}");
+                let _ = self.port.emit_record(QS_RX_STATUS, &[0x80 | 0x43u8], false);
             }
         }
     }
 
-    fn handle_command(&self, payload: &[u8]) {
-        if payload.len() < 13 {
-            eprintln!("QS command payload too short: {} bytes", payload.len());
-            self.report_error(0x50);
-            return;
-        }
-
-        let cmd_id = payload[0];
-        let param1 = u32::from_le_bytes(payload[1..5].try_into().expect("param1"));
-        let param2 = u32::from_le_bytes(payload[5..9].try_into().expect("param2"));
-        let param3 = u32::from_le_bytes(payload[9..13].try_into().expect("param3"));
-
-        self.report_ack(QS_RX_COMMAND);
-        self.dispatch_command(cmd_id, [param1, param2, param3]);
-        self.report_done(QS_RX_COMMAND);
+    fn ack(&self, rec_id: u8) {
+        let _ = self.port.emit_record(QS_RX_STATUS, &[rec_id], false);
     }
 
-    fn dispatch_command(&self, cmd_id: u8, params: [u32; 3]) {
-        println!(
-            "QS command received: id={cmd_id}, param1={}, param2={}, param3={}",
-            params[0], params[1], params[2]
-        );
+    fn done(&self, rec_id: u8) {
+        let _ = self.port.emit_record(QS_TARGET_DONE, &[rec_id], true);
     }
 
-    fn report_ack(&self, rec_id: u8) {
-        if let Err(err) = self.port.emit_record(QS_RX_STATUS, &[rec_id], false) {
-            eprintln!("failed to emit QS-RX ack: {err}");
-        }
-    }
-
-    fn report_done(&self, rec_id: u8) {
-        if let Err(err) = self.port.emit_record(QS_TARGET_DONE, &[rec_id], true) {
-            eprintln!("failed to emit QS target-done: {err}");
-        }
-    }
-
-    fn report_error(&self, code: u8) {
-        let payload = [0x80 | code];
-        if let Err(err) = self.port.emit_record(QS_RX_STATUS, &payload, false) {
-            eprintln!("failed to emit QS-RX error: {err}");
-        }
+    fn ack_done(&self, rec_id: u8) {
+        self.ack(rec_id);
+        self.done(rec_id);
     }
 }
 
@@ -906,13 +638,14 @@ fn emit_reference_dictionary(port: &PosixPort) -> Result<(), TraceError> {
         port.emit_obj_dict(entry.timer_handle, entry.timer_name.as_str())?;
     }
 
-    for name in PHILO_FUN_NAMES {
-        port.emit_fun_dict(dict_handle(name), name)?;
-    }
-
-    for name in TABLE_FUN_NAMES {
-        port.emit_fun_dict(dict_handle(name), name)?;
-    }
+    port.emit_fun_dict(philo_initial as usize as u64, PHILO_INITIAL_NAME)?;
+    port.emit_fun_dict(thinking      as usize as u64, PHILO_THINKING_NAME)?;
+    port.emit_fun_dict(hungry        as usize as u64, PHILO_HUNGRY_NAME)?;
+    port.emit_fun_dict(eating        as usize as u64, PHILO_EATING_NAME)?;
+    port.emit_fun_dict(table_initial as usize as u64, "Table::initial")?;
+    port.emit_fun_dict(active        as usize as u64, "Table::active")?;
+    port.emit_fun_dict(serving       as usize as u64, TABLE_SERVING_NAME)?;
+    port.emit_fun_dict(paused        as usize as u64, TABLE_PAUSED_NAME)?;
 
     Ok(())
 }

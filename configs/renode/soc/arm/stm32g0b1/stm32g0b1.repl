@@ -1,0 +1,58 @@
+// ─────────────────────────────────────────────────────────────
+// STM32G0B1CETx SoC platform description
+//
+// Cortex-M0+ @ up to 64 MHz.  Reference: RM0444 (STM32G0x1).
+// Memory map:
+//   Flash (dual-bank, contiguous view): 512 KB @ 0x0800_0000
+//     Bank 1: 0x0800_0000 .. 0x0803_FFFF (256 KB)
+//     Bank 2: 0x0804_0000 .. 0x0807_FFFF (256 KB)
+//   SRAM total 144 KB @ 0x2000_0000  (SRAM1 80 KB + SRAM2 32 KB + SRAM3 32 KB)
+//
+// Inherits Renode's stock STM32G0 description (USART1/2/3, SPI1/2/3,
+// I2C1/2, ADC, TIM1/2/3/14-17, GPIOA-F, EXTI, RCC stub, IWDG, FLASH_IF,
+// DMA1/2).  This file overrides the memory sizes for the G0B1 variant
+// and tags G0B1-only peripherals (USB, FDCAN, AES) so register accesses
+// to those blocks during bring-up don't trip "no peripheral mapped"
+// warnings.
+//
+// Used by:
+//   ports/stm32g0b1/   (swm-dhara-g0b1 — bins `dhara`, `nalvar`)
+// ─────────────────────────────────────────────────────────────
+
+using "platforms/cpus/stm32g0.repl"
+
+// ── Memory sizing override (STM32G0B1CETx) ─────────────────────
+// The base stm32g0.repl declares `flash` and `ram` with sizes for the
+// smaller STM32G0x1 variants. Re-declaring with an explicit type is
+// rejected (E02 "Variable already declared"), so we override only the
+// size attribute here.
+//   STM32G0B1CETx: 512 KB Flash, 144 KB SRAM total.
+flash:
+    size: 0x80000
+
+ram:
+    size: 0x24000
+
+// ── PWR (write-back memory) ───────────────────────────────────
+// The stock stm32g0.repl tags PWR at 0x40007000 but provides no
+// backing store, so embassy-stm32's clock-init loop spins forever
+// waiting for the regulator-ready bits it just wrote to read back.
+// A 1 KB MappedMemory satisfies both reads and writes.
+pwr: Memory.MappedMemory @ sysbus 0x40007000
+    size: 0x400
+
+// ── DBG (write-back memory) ───────────────────────────────────
+// Same reasoning for the DBG MCU block; firmware enables DBG_STANDBY
+// during init and reads it back.
+dbg: Memory.MappedMemory @ sysbus 0x40015800
+    size: 0x400
+
+// ── G0B1-specific tag regions ──────────────────────────────────
+// These keep the bring-up log free of unmapped-peripheral noise; the
+// real models (USB FS, FDCAN1/2, AES) attach in later phases.
+sysbus:
+    init add:
+        Tag <0x40005C00, 0x40005FFF> "USB_FS"
+        Tag <0x40006400, 0x400067FF> "FDCAN1"
+        Tag <0x40006800, 0x40006BFF> "FDCAN2"
+        Tag <0x40026000, 0x400263FF> "AES"

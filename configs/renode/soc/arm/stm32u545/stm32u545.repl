@@ -1,0 +1,102 @@
+// ─────────────────────────────────────────────────────────────
+// STM32U545RETxQ SoC platform description
+//
+// Cortex-M33 (TrustZone-capable, TZEN=0 for RevA) @ up to 160 MHz.
+// Reference: RM0456 (STM32U5x5/U5x9).
+//
+// Memory map (U545RE, single-bank linker view in ports/stm32u545/memory.x):
+//   Flash        0x0800_0000  512 KB  (dual-bank: bank1 256K + bank2 256K)
+//   SRAM1        0x2000_0000  192 KB
+//   SRAM2        0x2003_0000   64 KB
+//   SRAM3        0x2004_0000   16 KB  (shared SRAM, USB/crypto)
+//   APB1         0x4000_xxxx
+//   APB2         0x4001_xxxx
+//   AHB1 (GPIO non-secure view) 0x4202_xxxx
+//   AHB3         0x4202_xxxx  (RCC, FLASH, PWR — U5 moves several blocks)
+//
+// The STM32U5 family does not ship a stock Renode platform; this is
+// based on stm32l552.repl (same M33 core, similar AHB/APB layout) with
+// U545 memory sizing, PWR/DBG MappedMemory bring-up backing, and tag
+// regions for the U5-only peripherals embassy-stm32's init touches
+// (ICACHE, OCTOSPI placeholder, etc.).
+//
+// Used by:
+//   ports/stm32u545/   (swm-pramukh-u545 — bins `pramukh`, `griha`,
+//                       `gagan`, `talab`, `dhara`, `nalvar`)
+// Phase 6.2.1 of tmp/stm32_renode_parity_plan.md.
+// ─────────────────────────────────────────────────────────────
+
+using "platforms/cpus/stm32l552.repl"
+
+// ── Memory sizing override (STM32U545RETxQ) ────────────────────
+// L552 base declares flash/sram1 at smaller sizes; U545 has 512K
+// flash / 192K SRAM1 (the linker view; SRAM2/3 are mapped but not
+// owned by the linker in RevA).  Re-declaring with an explicit type
+// is rejected — override `size:` only.
+flash:
+    size: 0x80000
+
+sram1:
+    size: 0x30000
+
+// SRAM2 / SRAM3 (used by USB OTG_FS endpoint memory and some crypto
+// staging) — back with MappedMemory so the embassy-stm32 init code that
+// reads back SRAM2 ECC bits doesn't fault.
+sram2: Memory.MappedMemory @ sysbus 0x20030000
+    size: 0x10000
+
+sram3: Memory.MappedMemory @ sysbus 0x20040000
+    size: 0x4000
+
+// ── PWR (write-back memory) ───────────────────────────────────
+// embassy-stm32's clock-init touches PWR_CR1..CR4, PWR_SR1..SR2, and
+// reads back regulator-ready flags.  L552 tags PWR at 0x40007000 with
+// no backing store; we replace with a 1 KB MappedMemory.
+pwr: Memory.MappedMemory @ sysbus 0x40007000
+    size: 0x400
+
+// ── DBGMCU (write-back memory) ────────────────────────────────
+// Cortex-M debug MCU block at 0xE0044000 on U5 (moved from 0xE0042000
+// on earlier families).  Bring-up enables DBG_STANDBY/STOP/SLEEP and
+// reads back; back with MappedMemory.
+dbgmcu: Memory.MappedMemory @ sysbus 0xE0044000
+    size: 0x400
+
+// ── RCC (write-back memory) ───────────────────────────────────
+// RCC lives at 0x46020C00 on U5 (RM0456 §11.4); the L552 base ties
+// the clock-init via tagged-write magic at 0x40021000 (L5's RCC base),
+// which U5 silicon does not honour.  Provide a U5-correct backing
+// store; clock-ready bits are forced via the sysbus init below.
+rcc_u5: Memory.MappedMemory @ sysbus 0x46020C00
+    size: 0x400
+
+// ── ICACHE (write-back memory) ────────────────────────────────
+// U5 introduces a unified instruction cache controlled via ICACHE
+// (0x40030400).  embassy-stm32 disables it during clock-init; back
+// with MappedMemory so the disable sequence completes.
+icache: Memory.MappedMemory @ sysbus 0x40030400
+    size: 0x400
+
+// ── Region tags for U5-only / not-yet-modelled blocks ──────────
+// Keep the bring-up log free of unmapped-peripheral noise; real models
+// attach in later phases (or are not needed for the SWM firmware
+// surface).  Use `init add:` so we extend L552's existing init block.
+sysbus:
+    init add:
+        // Hard-set U5's RCC_CR (offset 0 on the U5 RCC base) to
+        // latch HSI/HSE/PLL ready bits — short-circuits embassy-stm32's
+        // clock-spin in Renode.
+        Tag <0x46020C00 4> "RCC_CR_U5" 0x2A020403
+
+        Tag <0x40026000, 0x400263FF> "AES"
+        Tag <0x40026400, 0x400267FF> "HASH"
+        Tag <0x40026800, 0x40026BFF> "RNG"
+        Tag <0x4002A000, 0x4002A3FF> "PKA"
+        Tag <0x40034000, 0x400343FF> "FMAC"
+        Tag <0x40034400, 0x400347FF> "CORDIC"
+        Tag <0x44022000, 0x440223FF> "ADC1"
+        Tag <0x46021000, 0x460213FF> "PWR_U5"
+        Tag <0x46022400, 0x460227FF> "FLASH_U5"
+        // OCTOSPI (Quad/Octal SPI controllers) — not used by SWM firmware.
+        Tag <0x420D1000, 0x420D13FF> "OCTOSPI1"
+        Tag <0x420D2000, 0x420D23FF> "OCTOSPI2"

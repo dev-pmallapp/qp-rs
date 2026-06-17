@@ -1,0 +1,24 @@
+####################################################################
+# test_usb_serial_jtag_platform.resc — USB-Serial-JTAG console stub
+# isolation. Loads the ESP32-C6 SoC platform (so usb_serial_jtag is
+# attached as defined in esp32c6.repl), compiles the C# peripheral
+# source, and skips firmware load. Robot tests drive EP1 register
+# writes directly and verify byte passthrough through the UART tester.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+i @configs/renode/shared/peripherals/lora/lora.cs
+# Order matters: lr1121_subghz.cs defines the base class that
+# lr1121_radio.cs's LR1121SpiRadio alias derives from.
+i @configs/renode/shared/peripherals/lora/lr1121_subghz.cs
+i @configs/renode/shared/peripherals/lora/lr1121_radio.cs
+
+mach create "UsbSerialJtagTest"
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.LR1121Radio @ sysbus 0x60081000"
+
+cpu0 ExecutionMode SingleStep

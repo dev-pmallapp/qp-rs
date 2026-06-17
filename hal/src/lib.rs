@@ -9,6 +9,7 @@
 extern crate alloc;
 
 pub mod error;
+pub mod mmio;
 pub mod gpio;
 pub mod uart;
 pub mod spi;
@@ -18,6 +19,8 @@ pub mod adc;
 pub mod dac;
 pub mod interrupt;
 pub mod lora;
+pub mod rf;
+pub mod drivers;
 
 #[cfg(feature = "qp-integration")]
 pub mod integration;

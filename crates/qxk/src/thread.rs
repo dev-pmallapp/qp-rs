@@ -180,7 +180,7 @@ impl ExtendedThread {
         self.state == ThreadState::Terminated
     }
 
-    /// Sets the thread state.
+    #[cfg(test)]
     pub(crate) fn set_state(&mut self, state: ThreadState) {
         self.state = state;
     }
@@ -276,13 +276,11 @@ mod tests {
     #[test]
     fn thread_poll_lifecycle() {
         let scheduler = Arc::new(QxkScheduler::new(None));
-        let mut counter = 0u32;
 
         let mut thread = ExtendedThread::new(ThreadConfig::new(
             ThreadId(3),
             ThreadPriority(4),
             Box::new(move |ctx| {
-                counter += 1;
                 if ctx.iteration() < 3 {
                     ThreadAction::Continue
                 } else {

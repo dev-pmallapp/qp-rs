@@ -5,19 +5,45 @@
 //! tools (for example [`qpspy`](https://www.state-machine.com/qtools/qpspy.html))
 //! can interpret the stream.
 
-use std::io::{self, Write};
-use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use thiserror::Error;
+// `alloc` is needed in both configs: `use alloc::sync::Arc` below is
+// unconditional, and `alloc` is available under `std` too. Gating this to
+// `not(std)` made std builds (e.g. the qspy host tool) fail to resolve `alloc`.
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+#[cfg(not(feature = "std"))]
+use core::time::Duration;
+
+#[cfg(feature = "std")]
+use std::io::{self, Write};
+#[cfg(feature = "std")]
+use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+#[cfg(feature = "std")]
+use std::time::SystemTime;
+#[cfg(feature = "std")]
+use std::time::Duration;
+
+use alloc::sync::Arc;
+
+#[cfg(feature = "std")]
+use std::sync::Mutex;
+#[cfg(not(feature = "std"))]
+use spin::Mutex;
 
 mod record;
 
 pub mod predefined;
+pub mod qutest;
 pub mod records;
+pub mod rx;
 
 pub use predefined::TargetInfo;
+pub use qutest::{clear_test_probes, set_test_probe, take_test_probe};
+pub use rx::{RxCmd, RxParser};
 pub use record::{
     make_format, UserRecordBuilder, FMT_F32, FMT_F64, FMT_FUN, FMT_HEX, FMT_I16, FMT_I32, FMT_I64,
     FMT_I8_ENUM, FMT_MEM, FMT_OBJ, FMT_SIG, FMT_STR, FMT_U16, FMT_U32, FMT_U64, FMT_U8,
@@ -29,7 +55,9 @@ const DEFAULT_MAX_RECORD_LEN: usize = 64;
 /// Configuration for the tracer.
 #[derive(Debug, Clone)]
 pub struct QsConfig {
+    /// Maximum payload length per record (excluding header/checksum).
     pub max_record_len: usize,
+    /// Whether to include a timestamp in records that request one.
     pub include_timestamp: bool,
 }
 
@@ -45,32 +73,73 @@ impl Default for QsConfig {
 /// A single QS record.
 #[derive(Debug, Clone)]
 pub struct QsRecord {
+    /// Sequence number (wraps at `u8::MAX`).
     pub seq: u8,
+    /// QS record type id.
     pub record_type: u8,
+    /// Optional timestamp captured when the record was emitted.
     pub timestamp: Option<Duration>,
+    /// Record payload bytes.
     pub payload: Vec<u8>,
 }
 
 /// Errors that can occur while emitting QS data.
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum TraceError {
-    #[error("payload too large: {0} bytes")]
+    /// The payload exceeded the configured maximum record length.
     PayloadTooLarge(usize),
-    #[error("backend error: {0}")]
-    Backend(#[from] io::Error),
+    /// The backend failed to write the frame.
+    #[cfg(feature = "std")]
+    Backend(io::Error),
+    /// The backend failed to write the frame.
+    #[cfg(not(feature = "std"))]
+    Backend,
+}
+
+impl core::fmt::Display for TraceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::PayloadTooLarge(size) => write!(f, "payload too large: {} bytes", size),
+            #[cfg(feature = "std")]
+            Self::Backend(err) => write!(f, "backend error: {}", err),
+            #[cfg(not(feature = "std"))]
+            Self::Backend => write!(f, "backend error"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TraceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<io::Error> for TraceError {
+    fn from(err: io::Error) -> Self {
+        Self::Backend(err)
+    }
 }
 
 /// Backend trait that consumes HDLC framed bytes.
 pub trait TraceBackend: Send + Sync {
+    /// Writes one complete HDLC-framed record to the transport.
     fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError>;
 }
 
 /// Simple backend that writes frames to any `Write` implementation.
+#[cfg(feature = "std")]
 pub struct WriterBackend<W: Write + Send + Sync + 'static> {
     writer: Arc<Mutex<W>>,
 }
 
+#[cfg(feature = "std")]
 impl<W: Write + Send + Sync + 'static> WriterBackend<W> {
+    /// Wraps any [`Write`] implementation as a trace backend.
     pub fn new(writer: W) -> Self {
         Self {
             writer: Arc::new(Mutex::new(writer)),
@@ -78,6 +147,7 @@ impl<W: Write + Send + Sync + 'static> WriterBackend<W> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<W: Write + Send + Sync + 'static> TraceBackend for WriterBackend<W> {
     fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
         let mut guard = self.writer.lock().unwrap();
@@ -91,48 +161,78 @@ pub struct Tracer<B: TraceBackend> {
     backend: B,
     cfg: QsConfig,
     seq: u8,
+    #[cfg(feature = "std")]
     epoch: SystemTime,
+    filter: GlbFilter,
 }
 
+/// Cheaply clonable, thread-safe handle to a shared [`Tracer`].
 #[derive(Clone)]
 pub struct TracerHandle<B: TraceBackend> {
     inner: Arc<Mutex<Tracer<B>>>,
 }
 
 impl<B: TraceBackend> Tracer<B> {
+    /// Creates a tracer writing to `backend` with the given configuration.
     pub fn new(cfg: QsConfig, backend: B) -> Self {
         Self {
             backend,
             cfg,
             seq: 0,
+            #[cfg(feature = "std")]
             epoch: SystemTime::now(),
+            filter: GlbFilter::allow_all(),
         }
     }
 
+    /// Replace the global filter.  Records whose bit is 0 are silently dropped.
+    pub fn set_filter(&mut self, filter: GlbFilter) {
+        self.filter = filter;
+    }
+
+    /// Returns a reference to the current global filter.
+    pub fn filter(&self) -> &GlbFilter {
+        &self.filter
+    }
+
+    /// Wraps the tracer in a shareable [`TracerHandle`].
     pub fn into_handle(self) -> TracerHandle<B> {
         TracerHandle {
             inner: Arc::new(Mutex::new(self)),
         }
     }
 
+    /// Encodes and writes one record, returning the encoded [`QsRecord`].
+    /// Records suppressed by the global filter are returned without being sent.
     pub fn record(
         &mut self,
         record_type: u8,
         payload: &[u8],
         with_timestamp: bool,
     ) -> Result<QsRecord, TraceError> {
+        if !self.filter.is_allowed(record_type) {
+            return Ok(QsRecord {
+                seq: self.seq,
+                record_type,
+                timestamp: None,
+                payload: Vec::new(),
+            });
+        }
         if payload.len() > self.cfg.max_record_len {
             return Err(TraceError::PayloadTooLarge(payload.len()));
         }
 
         let timestamp = if self.cfg.include_timestamp && with_timestamp {
-            Some(self.epoch.elapsed().unwrap_or_default())
+            #[cfg(feature = "std")]
+            { Some(self.epoch.elapsed().unwrap_or_default()) }
+            #[cfg(not(feature = "std"))]
+            { None }
         } else {
             None
         };
 
         self.seq = self.seq.wrapping_add(1);
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "std"))]
         {
             println!("QS TX record_type={record_type} len={}", payload.len());
         }
@@ -198,10 +298,20 @@ impl<B: TraceBackend> Tracer<B> {
 }
 
 impl<B: TraceBackend + 'static> TracerHandle<B> {
+    /// Replace the global filter on the underlying tracer.
+    pub fn set_filter(&self, filter: GlbFilter) {
+        #[cfg(feature = "std")]
+        self.inner.lock().unwrap().set_filter(filter);
+        #[cfg(not(feature = "std"))]
+        self.inner.lock().set_filter(filter);
+    }
+
+    /// Emits a record without a timestamp.
     pub fn emit(&self, record_type: u8, payload: &[u8]) -> Result<QsRecord, TraceError> {
         self.emit_internal(record_type, payload, false)
     }
 
+    /// Emits a record including a timestamp.
     pub fn emit_with_timestamp(
         &self,
         record_type: u8,
@@ -210,6 +320,8 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         self.emit_internal(record_type, payload, true)
     }
 
+    /// Emits a record, choosing whether to include a timestamp, discarding the
+    /// returned [`QsRecord`].
     pub fn emit_with_flag(
         &self,
         record_type: u8,
@@ -226,14 +338,22 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
         payload: &[u8],
         with_timestamp: bool,
     ) -> Result<QsRecord, TraceError> {
+        #[cfg(feature = "std")]
         let mut guard = self.inner.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let mut guard = self.inner.lock();
         guard.record(record_type, payload, with_timestamp)
     }
 
+    /// Returns a [`TraceHook`] closure that emits through this handle, suitable
+    /// for installing on a kernel or active object.
     pub fn hook(&self) -> TraceHook {
         let inner = Arc::clone(&self.inner);
         Arc::new(move |record_type, payload, with_timestamp| {
+            #[cfg(feature = "std")]
             let mut guard = inner.lock().unwrap();
+            #[cfg(not(feature = "std"))]
+            let mut guard = inner.lock();
             guard
                 .record(record_type, payload, with_timestamp)
                 .map(|_| ())
@@ -241,55 +361,137 @@ impl<B: TraceBackend + 'static> TracerHandle<B> {
     }
 }
 
+/// Shared callback used across the framework to emit a QS record
+/// `(record_type, payload, with_timestamp)`.
 pub type TraceHook = Arc<dyn Fn(u8, &[u8], bool) -> Result<(), TraceError> + Send + Sync>;
 
-/// Convenience backend that writes frames to stdout; handy for early bring-up.
-pub fn stdout_backend() -> WriterBackend<io::Stdout> {
-    WriterBackend::new(io::stdout())
+/// 256-bit per-record-type filter.
+///
+/// Each bit position corresponds to a QS record type (0–255). When a bit is 0
+/// the corresponding record is suppressed before reaching the backend.
+/// Equivalent to `QS_GLB_FILTER()` in QP/C++.
+///
+/// The storage is 256 bits (`[u64; 4]`) because record ids are `u8` (0–255);
+/// the SWM application records, for example, occupy 0x80–0x96. The QS/Spy
+/// `GLB_FILTER` wire command only carries 128 bits (records 0–127) — see
+/// [`from_bits`](Self::from_bits) / [`from_bytes`](Self::from_bytes) for how
+/// the upper 128 records are handled.
+#[derive(Clone, Debug)]
+pub struct GlbFilter {
+    bits: [u64; 4],
 }
 
-/// Backend that streams QS frames over a TCP connection.
-pub struct TcpBackend {
-    stream: Arc<Mutex<TcpStream>>,
-}
+impl GlbFilter {
+    /// Allow all record types (all bits set).
+    pub const fn allow_all() -> Self {
+        Self { bits: [u64::MAX; 4] }
+    }
 
-impl TcpBackend {
-    /// Establishes a TCP connection to the provided socket address.
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr)?;
-        stream.set_nodelay(true).ok();
-        Ok(Self {
-            stream: Arc::new(Mutex::new(stream)),
-        })
+    /// Create a global filter from a raw 16-byte (128-bit) little-endian bitmask.
+    ///
+    /// The 16 bytes set records 0–127; records 128–255 (e.g. the SWM
+    /// application records) are left **allowed**, so a legacy 128-bit
+    /// `GLB_FILTER` command cannot silently suppress them.
+    pub fn from_bits(bits: [u8; 16]) -> Self {
+        let low = u64::from_le_bytes(bits[0..8].try_into().unwrap());
+        let high = u64::from_le_bytes(bits[8..16].try_into().unwrap());
+        Self { bits: [low, high, u64::MAX, u64::MAX] }
+    }
+
+    /// Block all record types (all bits cleared).
+    pub const fn deny_all() -> Self {
+        Self { bits: [0; 4] }
+    }
+
+    /// Allow a single record type.
+    pub fn allow(&mut self, record: u8) {
+        let (word, bit) = Self::addr(record);
+        self.bits[word] |= 1u64 << bit;
+    }
+
+    /// Block a single record type.
+    pub fn block(&mut self, record: u8) {
+        let (word, bit) = Self::addr(record);
+        self.bits[word] &= !(1u64 << bit);
+    }
+
+    /// Returns `true` if `record` is allowed.
+    pub fn is_allowed(&self, record: u8) -> bool {
+        let (word, bit) = Self::addr(record);
+        (self.bits[word] >> bit) & 1 != 0
+    }
+
+    /// Construct from a 16-byte little-endian bitmask (as received in `RxCmd::GlbFilter`).
+    ///
+    /// As with [`from_bits`](Self::from_bits), the 16 wire bytes cover records
+    /// 0–127; records 128–255 are left allowed.
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        let lo = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let hi = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        Self { bits: [lo, hi, u64::MAX, u64::MAX] }
+    }
+
+    fn addr(record: u8) -> (usize, u32) {
+        let r = record as u32;
+        ((r / 64) as usize, r % 64)
     }
 }
 
-impl TraceBackend for TcpBackend {
-    fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
-        let mut guard = self.stream.lock().unwrap();
-        guard.write_all(frame).map_err(TraceError::from)
+#[cfg(feature = "std")]
+pub use std_backends::*;
+
+#[cfg(feature = "std")]
+mod std_backends {
+    use super::*;
+
+    /// Convenience backend that writes frames to stdout; handy for early bring-up.
+    pub fn stdout_backend() -> WriterBackend<io::Stdout> {
+        WriterBackend::new(io::stdout())
     }
-}
 
-/// Backend that streams QS frames over a UDP socket.
-pub struct UdpBackend {
-    socket: Arc<Mutex<UdpSocket>>,
-}
-
-impl UdpBackend {
-    /// Binds a local UDP socket and connects it to the provided remote address.
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.connect(addr)?;
-        Ok(Self {
-            socket: Arc::new(Mutex::new(socket)),
-        })
+    /// Backend that streams QS frames over a TCP connection.
+    pub struct TcpBackend {
+        stream: Arc<Mutex<TcpStream>>,
     }
-}
 
-impl TraceBackend for UdpBackend {
-    fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
-        let guard = self.socket.lock().unwrap();
-        guard.send(frame).map(|_| ()).map_err(TraceError::from)
+    impl TcpBackend {
+        /// Establishes a TCP connection to the provided socket address.
+        pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+            let stream = TcpStream::connect(addr)?;
+            stream.set_nodelay(true).ok();
+            Ok(Self {
+                stream: Arc::new(Mutex::new(stream)),
+            })
+        }
+    }
+
+    impl TraceBackend for TcpBackend {
+        fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
+            let mut guard = self.stream.lock().unwrap();
+            guard.write_all(frame).map_err(TraceError::from)
+        }
+    }
+
+    /// Backend that streams QS frames over a UDP socket.
+    pub struct UdpBackend {
+        socket: Arc<Mutex<UdpSocket>>,
+    }
+
+    impl UdpBackend {
+        /// Binds a local UDP socket and connects it to the provided remote address.
+        pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+            let socket = UdpSocket::bind("0.0.0.0:0")?;
+            socket.connect(addr)?;
+            Ok(Self {
+                socket: Arc::new(Mutex::new(socket)),
+            })
+        }
+    }
+
+    impl TraceBackend for UdpBackend {
+        fn write_frame(&self, frame: &[u8]) -> Result<(), TraceError> {
+            let guard = self.socket.lock().unwrap();
+            guard.send(frame).map(|_| ()).map_err(TraceError::from)
+        }
     }
 }

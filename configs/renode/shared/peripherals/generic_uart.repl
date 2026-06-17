@@ -1,0 +1,20 @@
+// shared/peripherals/generic_uart.repl
+// Drop-in stub when a platform's native UART peripheral class
+// is not available in your Renode build.
+//
+// Usage — include at the end of your board .repl:
+//
+//   uart0: UART.SimpleUart @ sysbus 0x<BASE_ADDR>
+//       -> <irqController>@<irqNum>
+//
+// SimpleUart maps:
+//   offset 0x00 (W) → transmit character (echoed to terminal)
+//   offset 0x04 (R) → receive character / status
+//
+// This is intentionally minimal; replace with the real model
+// once it is available or once you write a C# peripheral model.
+
+// Example instantiation (copy into your .repl, not this file):
+//
+// uart0: UART.SimpleUart @ sysbus 0x10013000
+//     -> plic@3

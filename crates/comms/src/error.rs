@@ -3,6 +3,7 @@
 use core::fmt;
 use hal::error::HalError;
 
+/// Errors returned by the comms stack (LoRa transport, MAC, FOTA).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommsError {
     /// Nothing to receive right now.
@@ -15,8 +16,11 @@ pub enum CommsError {
     Hardware(HalError),
     /// FOTA-specific error.
     Fota(FotaError),
+    /// Port binding table is full.
+    TableFull,
 }
 
+/// Errors specific to firmware-over-the-air (FOTA) transfers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FotaError {
     /// Chunk index is out of range.
@@ -39,6 +43,7 @@ impl fmt::Display for CommsError {
             Self::MacError         => write!(f, "MAC layer error"),
             Self::Hardware(e)      => write!(f, "hardware error: {e}"),
             Self::Fota(e)          => write!(f, "FOTA error: {e:?}"),
+            Self::TableFull        => write!(f, "port binding table full"),
         }
     }
 }

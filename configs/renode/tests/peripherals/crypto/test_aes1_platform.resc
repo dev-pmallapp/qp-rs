@@ -1,0 +1,14 @@
+####################################################################
+# test_aes1_platform.resc — STM32WL_AES1 model isolation harness
+#
+# Compiles the model, instantiates a bare Cortex-M4 + RAM + AES1
+# platform, and leaves the simulation paused.  Robot drives the AES
+# register block directly.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/crypto/stm32wl_aes1.cs
+
+mach create "AesIsolation"
+machine LoadPlatformDescription @configs/renode/tests/peripherals/crypto/test_aes1_platform.repl

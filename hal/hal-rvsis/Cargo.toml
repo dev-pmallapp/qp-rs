@@ -1,0 +1,15 @@
+[package]
+name = "hal-rvsis"
+version.workspace = true
+edition.workspace = true
+description = "RISC-V implementation for HAL"
+
+[dependencies]
+hal = { path = ".." }
+
+[features]
+default = []
+esp32c3 = []
+esp32c6 = []
+gd32vf103 = []
+qp-integration = ["hal/qp-integration"]

@@ -1,8 +1,10 @@
 //! Cooperative kernel and scheduling services (SRS §3.4).
 
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::sync::{Arc, Mutex};
@@ -10,6 +12,7 @@ use crate::trace::{TraceError, TraceHook};
 
 use crate::active::{ActiveObjectId, ActiveObjectRef};
 use crate::event::{DynEvent, Signal};
+use crate::pubsub::PubSubTable;
 
 const QS_SCHED_LOCK: u8 = 50;
 const QS_SCHED_UNLOCK: u8 = 51;
@@ -28,14 +31,23 @@ struct SchedulerState {
 /// configuration options like idle callbacks.
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
+    /// Application name reported in the QS `TARGET_INFO` record.
     pub name: &'static str,
+    /// Maximum number of active objects the system is sized for.
     pub max_active: u8,
+    /// Maximum number of event pools.
     pub max_event_pools: u8,
+    /// Maximum number of tick-rate domains.
     pub max_tick_rate: u8,
+    /// Byte width of event-queue counters (for QS encoding).
     pub event_queue_ctr_size: u8,
+    /// Byte width of time-event counters (for QS encoding).
     pub time_event_ctr_size: u8,
+    /// Optional callback invoked when the kernel goes idle.
     pub idle_callback: Option<fn()>,
+    /// Framework version reported to QS (e.g. `740`).
     pub version: u16,
+    /// Optional free-form build information string for QS.
     pub build_info: Option<&'static str>,
 }
 
@@ -161,40 +173,57 @@ impl KernelConfigBuilder {
     }
 }
 
+/// Builder for the cooperative [`Kernel`]: register active objects, attach a
+/// trace hook, then [`build`](Self::build).
 pub struct KernelBuilder {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
     trace: Option<TraceHook>,
+    pubsub: Option<PubSubTable>,
 }
 
 impl KernelBuilder {
+    /// Creates a builder seeded with the given configuration.
     pub fn new(config: KernelConfig) -> Self {
         Self {
             config,
             objects: Vec::new(),
             trace: None,
+            pubsub: None,
         }
     }
 
+    /// Initializes publish-subscribe with subscriber bitmap table up to `max_signal`.
+    pub fn ps_init(mut self, max_signal: u16) -> Self {
+        self.pubsub = Some(PubSubTable::new(max_signal));
+        self
+    }
+
+    /// Registers an active object with the kernel.
     pub fn register(mut self, object: ActiveObjectRef) -> Self {
         self.objects.push(object);
         self
     }
 
+    /// Attaches a QS trace hook to the kernel.
     pub fn with_trace_hook(mut self, hook: TraceHook) -> Self {
         self.trace = Some(hook);
         self
     }
 
-    pub fn build(mut self) -> Kernel {
+    /// Sorts the registered objects by priority and constructs the [`QvKernel`].
+    pub fn build(mut self) -> QvKernel {
         self.objects.sort_by_key(|ao| ao.priority());
-        Kernel::new(self.config, self.objects, self.trace)
+        QvKernel::new(self.config, self.objects, self.trace, self.pubsub)
     }
 }
 
+/// Errors returned by cooperative-kernel operations.
 #[derive(Debug)]
 pub enum KernelError {
+    /// No active object is registered for the given id.
     NotFound(ActiveObjectId),
+    /// Emitting a QS trace record failed.
     Trace(TraceError),
 }
 
@@ -216,23 +245,38 @@ impl From<TraceError> for KernelError {
     }
 }
 
-pub struct Kernel {
+/// Cooperative, priority-based QF kernel: dispatches registered active objects
+/// run-to-completion, highest priority first, with scheduler-ceiling locking.
+///
+/// This is the QP/C++ **QV** kernel equivalent (cooperative, non-preemptive,
+/// single-stack). [`Kernel`] is kept as a backwards-compatible alias.
+pub struct QvKernel {
     config: KernelConfig,
     objects: Vec<ActiveObjectRef>,
     by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
     scheduler: Mutex<SchedulerState>,
+    /// Set by `stop()` to break out of a `run()` loop.
+    stop_flag: AtomicBool,
+    pubsub: Option<PubSubTable>,
 }
 
-impl Kernel {
+/// Backwards-compatible alias for [`QvKernel`], the QP/C++ **QV**-equivalent
+/// cooperative kernel. Prefer `QvKernel` in new code.
+pub type Kernel = QvKernel;
+
+impl QvKernel {
+    /// Returns a builder using the default [`KernelConfig`].
     pub fn builder() -> KernelBuilder {
         KernelBuilder::new(KernelConfig::default())
     }
 
+    /// Returns a builder seeded with the given [`KernelConfig`].
     pub fn with_config(config: KernelConfig) -> KernelBuilder {
         KernelBuilder::new(config)
     }
 
+    /// Posts an event to the target active object's queue.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), KernelError> {
         if let Some(ao) = self.by_id.get(&target) {
             ao.post(event);
@@ -242,21 +286,38 @@ impl Kernel {
         }
     }
 
+    /// Broadcasts or multicasts an event (with `signal`) to registered active objects.
     pub fn publish(&self, signal: Signal, event: DynEvent) {
-        for ao in &self.objects {
-            // Basic publish duplicates the event header, but payload is shared via Arc.
-            let mut cloned = event.clone();
-            cloned.header.signal = signal;
-            ao.post(cloned);
+        if let Some(ref pubsub) = self.pubsub {
+            self.emit_publish(signal);
+            let subscribers = pubsub.subscribers(signal);
+            for ao in &self.objects {
+                let priority = ao.priority();
+                if (subscribers & (1u64 << priority)) != 0 {
+                    let mut cloned = event.clone();
+                    cloned.header.signal = signal;
+                    ao.post(cloned);
+                }
+            }
+        } else {
+            for ao in &self.objects {
+                // Basic publish duplicates the event header, but payload is shared via Arc.
+                let mut cloned = event.clone();
+                cloned.header.signal = signal;
+                ao.post(cloned);
+            }
         }
     }
 
+    /// Starts every registered active object, installing the trace hook.
     pub fn start(&self) {
         for ao in &self.objects {
             ao.start(self.trace.clone());
         }
     }
 
+    /// Dispatches ready active objects until none remain, then runs the
+    /// configured idle callback (if any).
     pub fn run_until_idle(&self) {
         while self.dispatch_once() {}
         // Call idle callback if configured
@@ -265,11 +326,67 @@ impl Kernel {
         }
     }
 
+    /// Blocking run loop equivalent to `QF::run()` in QP/C++.
+    ///
+    /// Calls `tick_fn` once per iteration (for advancing time events), then
+    /// drains all pending events. Returns when `stop()` is called.
+    ///
+    /// `start()` is called automatically before the first iteration.
+    pub fn run(&self, mut tick_fn: impl FnMut()) {
+        self.start();
+        self.stop_flag.store(false, Ordering::Release);
+        loop {
+            if self.stop_flag.load(Ordering::Acquire) {
+                break;
+            }
+            tick_fn();
+            self.run_until_idle();
+        }
+    }
+
+    /// Signal the `run()` loop to exit.
+    ///
+    /// Thread-safe; may be called from any context including a signal handler.
+    pub fn stop(&self) {
+        self.stop_flag.store(true, Ordering::Release);
+    }
+
+    /// `true` if any registered AO has queued events.
+    pub fn has_pending_work(&self) -> bool {
+        self.objects.iter().any(|ao| ao.has_events())
+    }
+
+    /// Post `event` to `target` from an ISR context.
+    ///
+    /// Semantically equivalent to `QActive::postFromISR_()` in QP/C++.
+    /// The caller must have entered ISR context with `qk_isr_entry!()`.
+    pub fn post_from_isr(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), KernelError> {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "post_from_isr called outside ISR context"
+        );
+        self.post(target, event)
+    }
+
+    /// Publish `event` to all registered AOs from an ISR context.
+    ///
+    /// Semantically equivalent to `QActive::publishFromISR_()` in QP/C++.
+    /// The caller must have entered ISR context with `qk_isr_entry!()`.
+    pub fn publish_from_isr(&self, signal: Signal, event: DynEvent) {
+        debug_assert!(
+            crate::isr::in_isr(),
+            "publish_from_isr called outside ISR context"
+        );
+        self.publish(signal, event)
+    }
+
     /// Returns the kernel configuration.
     pub fn config(&self) -> &KernelConfig {
         &self.config
     }
 
+    /// Dispatches one event to the highest-priority ready active object that the
+    /// scheduler ceiling permits; returns `true` if an event was handled.
     pub fn dispatch_once(&self) -> bool {
         let candidate = self
             .objects
@@ -329,13 +446,14 @@ impl Kernel {
         }
     }
 
+    /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
     }
 }
 
-impl Kernel {
-    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>) -> Self {
+impl QvKernel {
+    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
         let mut by_id = BTreeMap::new();
         for ao in &objects {
             by_id.insert(ao.id(), Arc::clone(ao));
@@ -346,6 +464,31 @@ impl Kernel {
             by_id,
             trace,
             scheduler: Mutex::new(SchedulerState::default()),
+            stop_flag: AtomicBool::new(false),
+            pubsub,
+        }
+    }
+
+    /// Subscribe the active object at `priority` to the given `signal`.
+    pub fn subscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.subscribe(signal, priority);
+            self.emit_subscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from the given `signal`.
+    pub fn unsubscribe(&self, signal: Signal, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe(signal, priority);
+            self.emit_unsubscribe(priority, signal);
+        }
+    }
+
+    /// Unsubscribe the active object at `priority` from all signals.
+    pub fn unsubscribe_all(&self, priority: u8) {
+        if let Some(ref pubsub) = self.pubsub {
+            pubsub.unsubscribe_all(priority);
         }
     }
 
@@ -354,9 +497,32 @@ impl Kernel {
             let _ = trace(record_type, &payload, true);
         }
     }
+
+    fn emit_subscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
+
+    fn emit_publish(&self, signal: Signal) {
+        if let Some(trace) = &self.trace {
+            let sig_bytes = signal.0.to_le_bytes();
+            let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
+        }
+    }
 }
 
-impl Kernel {
+impl QvKernel {
+    /// Raises the scheduler ceiling to `ceiling`, suppressing dispatch of active
+    /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
     pub fn lock_scheduler(&self, ceiling: u8) {
         let mut note = None;
         {
@@ -373,6 +539,7 @@ impl Kernel {
         }
     }
 
+    /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
     pub fn unlock_scheduler(&self) {
         let mut note = None;
         {

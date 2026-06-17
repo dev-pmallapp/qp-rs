@@ -1,0 +1,16 @@
+// test_solar_charger_platform.repl — Minimal isolation platform for the
+// solar charger stub. No firmware, no SoC peripherals — just the stub
+// mapped at a test-only base address. Drives the abstract solar-charging
+// semantics validated by solar_charger.robot.
+
+cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32imac"
+    timeProvider: empty
+
+solar_charger: Python.PythonPeripheral @ sysbus 0x60010000
+    size: 0x1000
+    initable: true
+    filename: "configs/renode/shared/peripherals/solar_charger/solar_charger_stub.py"
+
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x1000

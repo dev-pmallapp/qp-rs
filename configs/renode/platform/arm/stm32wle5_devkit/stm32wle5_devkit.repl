@@ -1,0 +1,34 @@
+// ─────────────────────────────────────────────────────────────
+//  stm32wle5_devkit.repl  —  SWM Gagan / Talab on STM32WLE5JC
+//
+//  Platform: STM32WLE5JC (Cortex-M4F, integrated Sub-GHz radio)
+//  Role:     Endpoint — Gagan OHT or Talab SPT, selected by Cargo
+//            feature flag in ports/stm32wle5/.
+//  Power:    Single-cell Li-ion + solar panel (MCP73831 charger).
+//  Radio:    Integrated SUBGHZSPI transceiver — Phase 2 attaches the
+//            LR1121-compatible model here.
+//
+//  Inherits the STM32WLE5 SoC; node-specific peripherals (sensor
+//  stubs, battery ADC) attach below.  Layout mirrors gagan.repl.
+// ─────────────────────────────────────────────────────────────
+
+using "../../../soc/arm/stm32wle5/stm32wle5.repl"
+
+// ── Ultrasonic Level Sensor (HC-SR04-class)
+// PA8=USON_PWR_EN, PA9=USON_TRIG, PA10=USON_ECHO  (SCH_SWM §3)
+// Phase 2 attaches ultrasonic_stm32.py here.
+
+// ── Battery + solar telemetry (ADC channels 0, 5)
+// BAT_SENSE on PA0 (ADC_IN5), SOLAR_SENSE on PC0, CHG_STAT_N on PB15.
+// The SoC's `adc` block at 0x50040000 carries both readings.
+
+// ── Pressure sensor (I²C, BMP388/DPS310-class)
+// Hooked to I²C1 (PB6/PB7).  Phase 2 attaches pressure_i2c_stm32.py.
+
+// ── External NOR (MX25R6435F) for OTA staging
+// Wired to SPI1.  Phase 2 attaches a flash model.
+
+// ── LoRa radio (SUBGHZSPI @ 0x58010000)
+// Inherited from stm32wle5.repl as a generic SPI block.
+// stm32wle5_devkit.resc unregisters this and loads
+// `SPI.LR1121SubGhzRadio` (byte-stream STM32 SPI variant) in its place.

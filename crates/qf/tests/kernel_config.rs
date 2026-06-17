@@ -51,7 +51,7 @@ fn kernel_idle_callback() {
     use std::sync::{Arc, Mutex};
 
     let idle_called = Arc::new(Mutex::new(false));
-    let idle_clone = idle_called.clone();
+    let _idle_clone = idle_called.clone();
 
     fn idle_callback() {
         // This would be set if we could access the Arc from here

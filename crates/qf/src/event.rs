@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// Signals are globally unique numeric identifiers. The SRS recommends a
 /// 16-bit range for portable deployments; we follow the same convention here.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Signal(pub u16);
 
 impl From<u16> for Signal {
@@ -49,6 +49,7 @@ pub struct EventHeader {
 }
 
 impl EventHeader {
+    /// Creates a header for the given signal: no pool, reference count 1.
     pub const fn new(signal: Signal) -> Self {
         Self {
             signal,
@@ -57,11 +58,13 @@ impl EventHeader {
         }
     }
 
+    /// Returns a copy of the header tagged with the originating pool id.
     pub fn with_pool(mut self, pool_id: u8) -> Self {
         self.pool_id = Some(pool_id);
         self
     }
 
+    /// Returns a copy of the header with the given reference count.
     pub fn with_ref_count(mut self, ref_count: u8) -> Self {
         self.ref_count = ref_count;
         self
@@ -72,11 +75,14 @@ impl EventHeader {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug)]
 pub struct Event<T = ()> {
+    /// Shared event metadata (signal, pool id, refcount).
     pub header: EventHeader,
+    /// Application-defined event payload.
     pub payload: T,
 }
 
 impl<T> Event<T> {
+    /// Creates an event carrying `payload` for the given signal.
     pub fn new(signal: Signal, payload: T) -> Self {
         Self {
             header: EventHeader::new(signal),
@@ -84,12 +90,14 @@ impl<T> Event<T> {
         }
     }
 
+    /// Returns the event's signal.
     pub fn signal(&self) -> Signal {
         self.header.signal
     }
 }
 
 impl Event<()> {
+    /// Creates a signal-only event with no payload.
     pub fn empty(signal: Signal) -> Self {
         Self::new(signal, ())
     }
@@ -111,10 +119,12 @@ pub type DynPayload = Arc<dyn Any + Send + Sync>;
 pub type DynEvent = Event<DynPayload>;
 
 impl Event<DynPayload> {
+    /// Creates a dynamic event from an already-`Arc`-wrapped type-erased payload.
     pub fn with_arc(signal: Signal, payload: DynPayload) -> Self {
         Self::new(signal, payload)
     }
 
+    /// Creates a signal-only dynamic event (unit payload).
     pub fn empty_dyn(signal: Signal) -> Self {
         let payload: DynPayload = Arc::new(()) as DynPayload;
         Self::with_arc(signal, payload)

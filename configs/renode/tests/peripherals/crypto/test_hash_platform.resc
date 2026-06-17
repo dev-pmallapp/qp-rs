@@ -1,0 +1,10 @@
+####################################################################
+# test_hash_platform.resc — STM32U5_HASH isolation harness.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/crypto/stm32u5_hash.cs
+
+mach create "HashIsolation"
+machine LoadPlatformDescription @configs/renode/tests/peripherals/crypto/test_hash_platform.repl

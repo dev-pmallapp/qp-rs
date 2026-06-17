@@ -16,8 +16,16 @@ impl SystemTimer {
 
     /// Configures the periodic tick frequency expected by the kernel.
     pub fn configure_periodic(&self, tick_hz: u32) {
-        // HAL TODO: Replace with ESP-IDF GPTimer setup for RISC-V target.
         self.tick_hz.store(tick_hz, Ordering::Release);
+        #[cfg(feature = "rt")]
+        {
+            use hal_rvsis::clint::ClintTimer;
+            use hal::timer::{Timer, TimerMode};
+            // ESP32-C6 XTAL clock is 40 MHz; CLINT base is 0x2000_0000 in Renode
+            let period_us = 1_000_000u64 / tick_hz as u64;
+            let mut clint = ClintTimer::new(0x2000_0000, 40_000_000);
+            let _ = clint.start(period_us, TimerMode::Periodic);
+        }
     }
 
     /// Returns the currently configured tick frequency in hertz.

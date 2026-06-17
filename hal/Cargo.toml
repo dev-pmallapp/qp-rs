@@ -1,11 +1,11 @@
 [workspace]
 members = [
-    "hal-esp",
-    "hal-ti",
+    # "hal-esp-idf",   # ESP-IDF C SDK wrapper — requires xtensa/riscv C toolchain
     "hal-cmsis",
-    "hal-ht32",
-    "examples/gpio-blink",
-    "examples/uart-echo",
+    "hal-lxsis",
+    "hal-rvsis",
+    # "examples/gpio-blink",
+    # "examples/uart-echo",
 ]
 resolver = "2"
 

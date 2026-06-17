@@ -1,0 +1,47 @@
+####################################################################
+# test_sx1278_platform.resc — SX1278Radio model test platform
+#
+# Minimal three-machine setup for Robot Framework unit tests.
+# No firmware is loaded — tests drive SPI registers directly.
+#
+# Machines:
+#   SWM-Gagan-OHT  — SX1278Radio spi2 at position (0, 0, 0)
+#   SWM-Pramukh-MC — SX1278Radio spi2 at position (50, 0, 0)
+#   SWM-OOR-Node   — SX1278Radio spi2 at position (300, 0, 0) — out-of-range
+# Medium: swmMedium (range 200 units)
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/console/usb_serial_jtag.cs
+i @configs/renode/shared/peripherals/lora/sx1278_radio.cs
+
+emulation CreateIEEE802_15_4Medium "swmMedium"
+swmMedium SetRangeWirelessFunction 200
+
+# ── Gagan OHT sensor node ──────────────────────────────────────────
+mach create "SWM-Gagan-OHT"
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.SX1278Radio @ sysbus 0x60081000"
+connector Connect sysbus.spi2 "swmMedium"
+wireless SetPosition sysbus.spi2 0 0 0
+logLevel 3 sysbus.spi2
+
+# ── Pramukh MC master controller ──────────────────────────────────
+mach create "SWM-Pramukh-MC"
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.SX1278Radio @ sysbus 0x60081000"
+connector Connect sysbus.spi2 "swmMedium"
+wireless SetPosition sysbus.spi2 50 0 0
+logLevel 3 sysbus.spi2
+
+# ── Out-of-range node (beyond 200-unit limit) ──────────────────────
+mach create "SWM-OOR-Node"
+machine LoadPlatformDescription @configs/renode/soc/riscv/esp32c6/esp32c6.repl
+sysbus Unregister "spi2"
+machine LoadPlatformDescriptionFromString "spi2: SPI.SX1278Radio @ sysbus 0x60081000"
+connector Connect sysbus.spi2 "swmMedium"
+wireless SetPosition sysbus.spi2 300 0 0
+logLevel 3 sysbus.spi2

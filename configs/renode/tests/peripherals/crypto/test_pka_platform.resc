@@ -1,0 +1,10 @@
+####################################################################
+# test_pka_platform.resc — STM32WL_PKA model isolation harness.
+####################################################################
+
+python "import System.IO, System; System.IO.Directory.SetCurrentDirectory(System.Environment.GetEnvironmentVariable('PWD'))"
+
+i @configs/renode/shared/peripherals/crypto/stm32wl_pka.cs
+
+mach create "PkaIsolation"
+machine LoadPlatformDescription @configs/renode/tests/peripherals/crypto/test_pka_platform.repl

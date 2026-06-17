@@ -1,31 +1,28 @@
-//! [`CommsAO`] — QP-RS active object for the Comms middleware.
-//!
-//! Owns a [`LoRaRf`] and responds to [`RF_TX_REQ_SIG`] events.
-//! QS tracing is wired up automatically in `on_start` when the `qs` feature
-//! is enabled.
+//! MAC layer implementations and legacy CommsAO.
+
+pub mod lorawan;
 
 use qf::active::{ActiveBehavior, ActiveContext};
 use qf::event::DynEvent;
-
 use crate::events::{RfTxReqPayload, RF_TX_REQ_SIG};
 use crate::lora::LoRaRf;
-use hal::lora::RfDriver;
+use hal::rf::RfPhy;
 
 /// Active object that owns and drives an [`LoRaRf`].
-pub struct CommsAO<D: RfDriver + 'static> {
+pub struct CommsAO<D: RfPhy + 'static> {
     rf:          LoRaRf<D>,
     initialized: bool,
 }
 
-impl<D: RfDriver + 'static> CommsAO<D> {
+impl<D: RfPhy + 'static> CommsAO<D> {
+    /// Creates a comms active object wrapping the given LoRa transport.
     pub fn new(rf: LoRaRf<D>) -> Self {
         Self { rf, initialized: false }
     }
 }
 
-impl<D: RfDriver + Send + 'static> ActiveBehavior for CommsAO<D> {
+impl<D: RfPhy + Send + 'static> ActiveBehavior for CommsAO<D> {
     fn on_start(&mut self, ctx: &mut ActiveContext) {
-        // Wire up QS tracing before init so the first TX record is captured.
         self.rf.set_trace_hook(ctx.trace_hook());
 
         println!("CommsAO: initialising RF ({})", self.rf.chip_name());
