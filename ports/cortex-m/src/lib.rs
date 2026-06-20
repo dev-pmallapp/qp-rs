@@ -110,6 +110,19 @@ impl CortexMQfRuntime {
     }
 }
 
+impl qf::port::Runtime for CortexMQfRuntime {
+    type TickError = qf::time::TimeEventError;
+    fn tick(&self) -> Result<(), Self::TickError> {
+        self.tick()
+    }
+    fn run_until_idle(&self) {
+        self.run_until_idle();
+    }
+    fn has_pending_work(&self) -> bool {
+        self.has_pending_work()
+    }
+}
+
 /// Cortex-M QK runtime.
 pub struct CortexMQkRuntime {
     kernel: alloc::sync::Arc<QkKernel>,
@@ -152,6 +165,19 @@ impl CortexMQkRuntime {
     /// Check if there is pending work.
     pub fn has_pending_work(&self) -> bool {
         self.kernel.has_pending_work()
+    }
+}
+
+impl qf::port::Runtime for CortexMQkRuntime {
+    type TickError = qk::QkTimeEventError;
+    fn tick(&self) -> Result<(), Self::TickError> {
+        self.tick()
+    }
+    fn run_until_idle(&self) {
+        self.run_until_idle();
+    }
+    fn has_pending_work(&self) -> bool {
+        self.has_pending_work()
     }
 }
 
@@ -247,6 +273,12 @@ impl CortexMQxkRuntime {
             let prev = core::ptr::read_volatile(SCB_SHPR3);
             core::ptr::write_volatile(SCB_SHPR3, (prev & !0x00FF_0000) | 0x00FF_0000);
         }
+    }
+}
+
+impl qf::port::ContextSwitch for CortexMQxkRuntime {
+    fn request(&self) {
+        Self::pend_sv();
     }
 }
 

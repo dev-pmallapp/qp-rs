@@ -83,6 +83,12 @@ impl XtensaQxkRuntime {
     }
 }
 
+impl qf::port::ContextSwitch for XtensaQxkRuntime {
+    fn request(&self) {
+        Self::pend_sv();
+    }
+}
+
 #[cfg(feature = "hw")]
 #[no_mangle]
 pub unsafe extern "C" fn qxk_schedule() {

@@ -63,6 +63,19 @@ impl RiscVQfRuntime {
     }
 }
 
+impl qf::port::Runtime for RiscVQfRuntime {
+    type TickError = qf::time::TimeEventError;
+    fn tick(&self) -> Result<(), Self::TickError> {
+        self.tick()
+    }
+    fn run_until_idle(&self) {
+        self.run_until_idle();
+    }
+    fn has_pending_work(&self) -> bool {
+        self.has_pending_work()
+    }
+}
+
 /// RISC-V QK runtime.
 pub struct RiscVQkRuntime {
     kernel: alloc::sync::Arc<QkKernel>,
@@ -105,6 +118,19 @@ impl RiscVQkRuntime {
     /// Check if there is pending work.
     pub fn has_pending_work(&self) -> bool {
         self.kernel.has_pending_work()
+    }
+}
+
+impl qf::port::Runtime for RiscVQkRuntime {
+    type TickError = qk::QkTimeEventError;
+    fn tick(&self) -> Result<(), Self::TickError> {
+        self.tick()
+    }
+    fn run_until_idle(&self) {
+        self.run_until_idle();
+    }
+    fn has_pending_work(&self) -> bool {
+        self.has_pending_work()
     }
 }
 
@@ -175,6 +201,12 @@ impl RiscVQxkRuntime {
             const CLINT_MSIP0: *mut u32 = 0x0200_0000 as *mut u32;
             core::ptr::write_volatile(CLINT_MSIP0, 1);
         }
+    }
+}
+
+impl qf::port::ContextSwitch for RiscVQxkRuntime {
+    fn request(&self) {
+        Self::pend_sv();
     }
 }
 

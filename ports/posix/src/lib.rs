@@ -169,6 +169,31 @@ impl PosixQkRuntime {
     }
 }
 
+/// Portable driver API — lets application code be generic over the runtime.
+impl qf::port::Runtime for PosixQkRuntime {
+    type TickError = QkTimeEventError;
+
+    fn tick(&self) -> Result<(), Self::TickError> {
+        self.timers.tick()
+    }
+
+    fn run_until_idle(&self) {
+        self.kernel.run_until_idle();
+    }
+
+    fn has_pending_work(&self) -> bool {
+        self.kernel.has_pending_work()
+    }
+}
+
+/// Exposes the POSIX trace transport as a uniform [`qf::port::TraceSink`].
+impl qf::port::TraceSink for PosixPort {
+    fn trace_hook(&self) -> TraceHook {
+        // Inherent method takes resolution priority — no recursion.
+        PosixPort::trace_hook(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +249,19 @@ mod tests {
         }
 
         assert!(!runtime.has_pending_work());
+    }
+
+    #[test]
+    fn runtime_is_usable_through_generic_trait() {
+        // Proves application code can be written generic over the port runtime.
+        fn drive<R: qf::port::Runtime>(rt: &R) -> bool {
+            let _ = rt.tick();
+            rt.run_until_idle();
+            rt.has_pending_work()
+        }
+
+        let runtime = PosixQkRuntime::with_builder(QkKernel::builder())
+            .expect("runtime should build");
+        assert!(!drive(&runtime));
     }
 }
