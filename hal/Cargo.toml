@@ -27,13 +27,9 @@ edition.workspace = true
 description = "Core hardware abstraction layer traits"
 
 [dependencies]
-# Optional QP integration (path points to main workspace)
-qf = { path = "../crates/qf", optional = true }
-qk = { path = "../crates/qk", optional = true }
 embedded-hal = "1.0"
 embedded-io   = "0.6"
 
 [features]
 default = []
-std = ["qf?/std", "qk?/std"]
-qp-integration = ["qk", "qf"]
+std = []

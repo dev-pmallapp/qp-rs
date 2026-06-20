@@ -22,8 +22,5 @@ pub mod lora;
 pub mod rf;
 pub mod drivers;
 
-#[cfg(feature = "qp-integration")]
-pub mod integration;
-
 // Re-export commonly used types
 pub use error::HalError;

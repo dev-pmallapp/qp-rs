@@ -63,8 +63,7 @@ poster.post_event(button_ao_id, signal, event).unwrap();
 ### Core HAL Traits
 ```bash
 cd hal
-cargo build                           # No vendor dependencies
-cargo build --features qp-integration # With QP-RS integration
+cargo build                           # Framework-agnostic; no qf/qk dependency
 cargo doc --open                      # View trait documentation
 ```
 
