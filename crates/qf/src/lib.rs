@@ -23,6 +23,7 @@ pub mod qmsm;
 pub mod isr;
 pub mod kernel;
 pub mod pool;
+pub mod port;
 pub mod pubsub;
 pub mod priospec;
 mod sync;
@@ -36,6 +37,7 @@ pub use qmsm::{QMsm, QMState, QMsmResult, QMStateHandler, same_qmstate};
 pub use isr::{in_isr, isr_nesting};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, QvKernel};
 pub use pool::QMPool;
+pub use port::{ContextSwitch, NoopContextSwitch, Runtime, TraceSink};
 pub use pubsub::PubSubTable;
 pub use priospec::{QPrioSpec, q_prio};
 #[cfg(feature = "qs")]
