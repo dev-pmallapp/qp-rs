@@ -40,6 +40,18 @@ pub use qxk;
 #[cfg(feature = "qs")]
 pub use qs;
 
+#[cfg(feature = "comms")]
+pub use comms;
+
+#[cfg(feature = "hal")]
+pub use hal;
+
+/// Platform / port contract ([`Runtime`], [`TraceSink`], [`ContextSwitch`]).
+///
+/// Implemented by the thin per-target port crates so application code can be
+/// written generically over the runtime. See [`qf::port`].
+pub use qf::port;
+
 /// Commonly used imports — `use qp_rs::prelude::*;` in application code.
 pub mod prelude {
     pub use qf::{
@@ -70,6 +82,10 @@ pub mod prelude {
         TraceHook,
         // Context-switch hook (QP/C++ QF_onContextSw equivalent)
         ContextSwitchHook,
+        // Platform / port contract for portable application code
+        ContextSwitch,
+        Runtime,
+        TraceSink,
     };
 
     #[cfg(feature = "qk")]
@@ -88,4 +104,7 @@ pub mod prelude {
 
     #[cfg(feature = "qs")]
     pub use qs::{QsConfig, Tracer, TraceBackend};
+
+    #[cfg(feature = "comms")]
+    pub use comms::{CommsAO, Rf, RfStack, RfStackAO};
 }

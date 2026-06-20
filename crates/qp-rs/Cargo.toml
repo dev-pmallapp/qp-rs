@@ -26,12 +26,15 @@ std = [
     "qk?/std",
     "qxk?/std",
     "qs?/std",
+    "comms?/std",
+    "hal?/std",
 ]
 
 qs = [
     "dep:qs",
     "qf/qs",
-    "qk?/qs",   # only propagates when qk is also selected
+    "qk?/qs",     # only propagates when qk is also selected
+    "comms?/qs",  # only propagates when comms is also selected
 ]
 
 # Preemptive kernel.
@@ -40,11 +43,19 @@ qk = ["dep:qk"]
 # Dual-mode kernel (blocking threads + active objects). Implies qk.
 qxk = ["dep:qxk", "dep:qk"]
 
+# LoRa/LoRaWAN + FOTA communication middleware (drives QF active objects).
+comms = ["dep:comms"]
+
+# Framework-agnostic peripheral traits (embedded-hal based).
+hal = ["dep:hal"]
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 [dependencies]
 # qf is always present – it is the foundation for all kernel variants.
-qf  = { path = "../qf",  default-features = false }
-qk  = { path = "../qk",  default-features = false, optional = true }
-qxk = { path = "../qxk", default-features = false, optional = true }
-qs  = { path = "../qs",  default-features = false, optional = true }
+qf    = { path = "../qf",    default-features = false }
+qk    = { path = "../qk",    default-features = false, optional = true }
+qxk   = { path = "../qxk",   default-features = false, optional = true }
+qs    = { path = "../qs",    default-features = false, optional = true }
+comms = { path = "../comms", default-features = false, optional = true }
+hal   = { path = "../../hal", default-features = false, optional = true }
