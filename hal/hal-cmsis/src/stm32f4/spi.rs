@@ -24,10 +24,10 @@ impl Stm32F4Spi {
     fn regs(&self) -> &SpiRegs {
         unsafe { &*self.regs }
     }
-}
 
-impl SpiMaster for Stm32F4Spi {
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
+    /// Configure SPI registers from a [`SpiConfig`].
+    /// Called by both the legacy trait impl and the `configure()` extension method.
+    pub fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         let mut cr1 = 1 << 2; // MSTR (Master configuration)
         cr1 |= 1 << 9; // SSM (Software slave management)
         cr1 |= 1 << 8; // SSI (Internal slave select)
@@ -61,43 +61,86 @@ impl SpiMaster for Stm32F4Spi {
         Ok(())
     }
 
+    fn transfer_word(&mut self, tx: u8) -> u8 {
+        while (self.regs().sr.read() & (1 << 1)) == 0 {} // wait TXE
+        self.regs().dr.write(tx as u32);
+        while (self.regs().sr.read() & (1 << 0)) == 0 {} // wait RXNE
+        self.regs().dr.read() as u8
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy SpiMaster impl (deprecated)
+// ---------------------------------------------------------------------------
+#[allow(deprecated)]
+impl SpiMaster for Stm32F4Spi {
+    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
+        Stm32F4Spi::configure(self, config)
+    }
+
     fn transfer(&mut self, tx_data: &[u8], rx_buffer: &mut [u8]) -> HalResult<()> {
         let len = tx_data.len().min(rx_buffer.len());
         for i in 0..len {
-            // Wait until TXE (Transmit buffer empty) is set (SR bit 1)
-            while (self.regs().sr.read() & (1 << 1)) == 0 {}
-            self.regs().dr.write(tx_data[i] as u32);
-
-            // Wait until RXNE (Receive buffer not empty) is set (SR bit 0)
-            while (self.regs().sr.read() & (1 << 0)) == 0 {}
-            rx_buffer[i] = self.regs().dr.read() as u8;
+            rx_buffer[i] = self.transfer_word(tx_data[i]);
         }
         Ok(())
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<()> {
         for &byte in data {
-            // Wait until TXE is set
-            while (self.regs().sr.read() & (1 << 1)) == 0 {}
-            self.regs().dr.write(byte as u32);
-            
-            // Wait until RXNE is set and read DR to clear flags
-            while (self.regs().sr.read() & (1 << 0)) == 0 {}
-            let _ = self.regs().dr.read();
+            self.transfer_word(byte);
         }
         Ok(())
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> HalResult<()> {
-        for i in 0..buffer.len() {
-            // Wait until TXE is set
-            while (self.regs().sr.read() & (1 << 1)) == 0 {}
-            self.regs().dr.write(0xFF); // Send dummy byte
-            
-            // Wait until RXNE is set
-            while (self.regs().sr.read() & (1 << 0)) == 0 {}
-            buffer[i] = self.regs().dr.read() as u8;
+        for slot in buffer.iter_mut() {
+            *slot = self.transfer_word(0xFF);
         }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 SpiBus impl
+// ---------------------------------------------------------------------------
+impl embedded_hal::spi::ErrorType for Stm32F4Spi {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_hal::spi::SpiBus<u8> for Stm32F4Spi {
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        for slot in words.iter_mut() {
+            *slot = self.transfer_word(0xFF);
+        }
+        Ok(())
+    }
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        for &byte in words {
+            self.transfer_word(byte);
+        }
+        Ok(())
+    }
+
+    fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+        let len = read.len().min(write.len());
+        for i in 0..len {
+            read[i] = self.transfer_word(write[i]);
+        }
+        Ok(())
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        for slot in words.iter_mut() {
+            *slot = self.transfer_word(*slot);
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // Wait until BSY flag (bit 7) is cleared
+        while (self.regs().sr.read() & (1 << 7)) != 0 {}
         Ok(())
     }
 }

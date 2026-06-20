@@ -44,6 +44,7 @@ impl EspSpiMaster {
 }
 
 #[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+#[allow(deprecated)]
 impl SpiMaster for EspSpiMaster {
     fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         // Changing SPI device parameters requires removing and re-adding the device.
@@ -112,5 +113,60 @@ impl SpiMaster for EspSpiMaster {
 impl Drop for EspSpiMaster {
     fn drop(&mut self) {
         unsafe { sys::spi_bus_remove_device(self.handle); }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 SpiBus impl
+// ---------------------------------------------------------------------------
+#[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+impl embedded_hal::spi::ErrorType for EspSpiMaster {
+    type Error = hal::error::HalError;
+}
+
+#[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+impl embedded_hal::spi::SpiBus<u8> for EspSpiMaster {
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        let zeros = alloc::vec![0u8; words.len()];
+        self.transfer(words, &zeros)
+            .map_err(|e| e)
+    }
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        let mut dummy = alloc::vec![0u8; words.len()];
+        self.transfer(&mut dummy, words)
+    }
+
+    fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+        if read.len() != write.len() {
+            return Err(hal::error::HalError::InvalidParameter);
+        }
+        let mut t = sys::spi_transaction_t {
+            length: (write.len() * 8) as usize,
+            rxlength: (read.len() * 8) as usize,
+            __bindgen_anon_3: sys::spi_transaction_t__bindgen_ty_3 {
+                tx_buffer: write.as_ptr() as *const _,
+            },
+            __bindgen_anon_4: sys::spi_transaction_t__bindgen_ty_4 {
+                rx_buffer: read.as_mut_ptr() as *mut _,
+            },
+            ..Default::default()
+        };
+        let ret = unsafe { sys::spi_device_polling_transmit(self.handle, &mut t) };
+        if ret != sys::ESP_OK as i32 {
+            Err(hal::error::HalError::VendorError(ret))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        let tx = words.to_vec();
+        self.transfer(words, &tx)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // spi_device_polling_transmit is synchronous; nothing to flush.
+        Ok(())
     }
 }

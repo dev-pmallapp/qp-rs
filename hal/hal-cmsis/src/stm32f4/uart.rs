@@ -26,6 +26,7 @@ impl Stm32F4Uart {
     }
 }
 
+#[allow(deprecated)]
 impl UartPort for Stm32F4Uart {
     fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         let mut cr1 = (1 << 3) | (1 << 2); // TE (Transmitter enable) | RE (Receiver enable)
@@ -94,5 +95,46 @@ impl UartPort for Stm32F4Uart {
         // Wait until TC (Transmission complete) is set (SR bit 6)
         while (self.regs().sr.read() & (1 << 6)) == 0 {}
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-io impls
+// ---------------------------------------------------------------------------
+impl embedded_io::ErrorType for Stm32F4Uart {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_io::Write for Stm32F4Uart {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        for &byte in buf {
+            // Wait until TXE (SR bit 7)
+            while (self.regs().sr.read() & (1 << 7)) == 0 {}
+            self.regs().dr.write(byte as u32);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // Wait until TC (Transmission complete, SR bit 6)
+        while (self.regs().sr.read() & (1 << 6)) == 0 {}
+        Ok(())
+    }
+}
+
+impl embedded_io::Read for Stm32F4Uart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() { return Ok(0); }
+        // Block until at least one byte is available (RXNE, SR bit 5)
+        while (self.regs().sr.read() & (1 << 5)) == 0 {}
+        let mut count = 0;
+        for slot in buf.iter_mut() {
+            if (self.regs().sr.read() & (1 << 5)) == 0 {
+                break; // no more data immediately available
+            }
+            *slot = self.regs().dr.read() as u8;
+            count += 1;
+        }
+        Ok(count)
     }
 }

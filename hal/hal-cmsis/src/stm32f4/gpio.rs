@@ -27,6 +27,7 @@ impl Stm32F4Pin {
     }
 }
 
+#[allow(deprecated)]
 impl GpioPin for Stm32F4Pin {
     fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let shift = (self.pin as u32) * 2;
@@ -64,5 +65,44 @@ impl GpioPin for Stm32F4Pin {
 
     fn pin_number(&self) -> u32 {
         self.pin as u32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 digital pin impls
+// ---------------------------------------------------------------------------
+impl embedded_hal::digital::ErrorType for Stm32F4Pin {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_hal::digital::OutputPin for Stm32F4Pin {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.regs().bsrr.write(1u32 << self.pin);
+        Ok(())
+    }
+
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.regs().bsrr.write(1u32 << (self.pin + 16));
+        Ok(())
+    }
+}
+
+impl embedded_hal::digital::InputPin for Stm32F4Pin {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().idr.read() >> self.pin) & 1 != 0)
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().idr.read() >> self.pin) & 1 == 0)
+    }
+}
+
+impl embedded_hal::digital::StatefulOutputPin for Stm32F4Pin {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().odr.read() >> self.pin) & 1 != 0)
+    }
+
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().odr.read() >> self.pin) & 1 == 0)
     }
 }

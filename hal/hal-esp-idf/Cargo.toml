@@ -1,11 +1,15 @@
+[workspace]
+
 [package]
 name        = "hal-esp-idf"
-version.workspace = true
-edition.workspace = true
+version     = "0.1.0"
+edition     = "2021"
 description = "ESP-IDF C SDK wrapper implementing HAL traits — for WiFi/BLE/OTA use cases"
 
 [dependencies]
-hal        = { path = ".." }
+hal            = { path = ".." }
+embedded-hal   = "1.0"
+embedded-io    = "0.6"
 esp-idf-sys = { version = "0.35", features = ["binstart"], optional = true }
 
 [build-dependencies]

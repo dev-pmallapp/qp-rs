@@ -1,6 +1,28 @@
 //! I2C (Inter-Integrated Circuit) abstraction
+//!
+//! The canonical bus trait is re-exported from [`embedded_hal::i2c`]:
+//! - [`I2c`] — blocking write, read, write_read, and transaction operations
+//!
+//! Platform crates implement `I2c` for their concrete bus types.  The legacy
+//! [`I2cMaster`] / [`I2cDevice`] traits below are **deprecated** and will be
+//! removed in a future release.
 
 use crate::error::HalResult;
+
+// ---------------------------------------------------------------------------
+// Re-exports from embedded-hal
+// ---------------------------------------------------------------------------
+pub use embedded_hal::i2c::{
+    ErrorType as I2cErrorType,
+    I2c,
+    Operation,
+    SevenBitAddress,
+    TenBitAddress,
+};
+
+// ---------------------------------------------------------------------------
+// Configuration helpers (not part of embedded-hal)
+// ---------------------------------------------------------------------------
 
 /// I2C address (7-bit or 10-bit)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +44,7 @@ pub enum I2cSpeed {
     HighSpeed,
 }
 
-/// I2C configuration
+/// I2C configuration (used by platform `configure()` extension methods)
 #[derive(Debug, Clone)]
 pub struct I2cConfig {
     pub speed: I2cSpeed,
@@ -36,7 +58,15 @@ impl Default for I2cConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Legacy traits — DEPRECATED; implement embedded_hal::i2c::I2c instead
+// ---------------------------------------------------------------------------
+
 /// I2C master trait
+///
+/// # Deprecated
+/// Implement [`embedded_hal::i2c::I2c`] instead.
+#[deprecated(since = "0.2.0", note = "implement embedded_hal::i2c::I2c instead")]
 pub trait I2cMaster: Send + Sync {
     /// Configure I2C parameters
     fn configure(&mut self, config: &I2cConfig) -> HalResult<()>;
@@ -57,6 +87,10 @@ pub trait I2cMaster: Send + Sync {
 }
 
 /// I2C device (master + address)
+///
+/// # Deprecated
+/// Use [`embedded_hal::i2c::I2c`] together with the device address directly.
+#[deprecated(since = "0.2.0", note = "use embedded_hal::i2c::I2c with the device address directly")]
 pub trait I2cDevice: Send + Sync {
     /// Get device address
     fn address(&self) -> I2cAddress;

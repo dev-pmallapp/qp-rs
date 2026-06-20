@@ -27,6 +27,7 @@ impl Nrf52Pin {
     }
 }
 
+#[allow(deprecated)]
 impl GpioPin for Nrf52Pin {
     fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let pin_cnf = match mode {
@@ -64,5 +65,44 @@ impl GpioPin for Nrf52Pin {
 
     fn pin_number(&self) -> u32 {
         self.pin as u32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 digital pin impls
+// ---------------------------------------------------------------------------
+impl embedded_hal::digital::ErrorType for Nrf52Pin {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_hal::digital::OutputPin for Nrf52Pin {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.regs().outset.write(1u32 << self.pin);
+        Ok(())
+    }
+
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.regs().outclr.write(1u32 << self.pin);
+        Ok(())
+    }
+}
+
+impl embedded_hal::digital::InputPin for Nrf52Pin {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().in_.read() & (1 << self.pin)) != 0)
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().in_.read() & (1 << self.pin)) == 0)
+    }
+}
+
+impl embedded_hal::digital::StatefulOutputPin for Nrf52Pin {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().out.read() & (1 << self.pin)) != 0)
+    }
+
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((self.regs().out.read() & (1 << self.pin)) == 0)
     }
 }

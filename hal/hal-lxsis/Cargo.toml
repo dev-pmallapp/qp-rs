@@ -5,7 +5,9 @@ edition.workspace = true
 description = "Xtensa LX implementation for HAL"
 
 [dependencies]
-hal = { path = ".." }
+hal            = { path = ".." }
+embedded-hal   = "1.0"
+embedded-io    = "0.6"
 
 [features]
 default = []

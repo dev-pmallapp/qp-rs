@@ -42,6 +42,7 @@ impl Lpc17Spi {
     }
 }
 
+#[allow(deprecated)]
 impl SpiMaster for Lpc17Spi {
     fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         // Disable SSP during configuration
@@ -100,6 +101,53 @@ impl SpiMaster for Lpc17Spi {
         for slot in buf.iter_mut() {
             *slot = self.transfer_byte(0xFF);
         }
+        self.wait_idle();
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 SpiBus impl
+// ---------------------------------------------------------------------------
+impl embedded_hal::spi::ErrorType for Lpc17Spi {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_hal::spi::SpiBus<u8> for Lpc17Spi {
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        for slot in words.iter_mut() {
+            *slot = self.transfer_byte(0xFF);
+        }
+        self.wait_idle();
+        Ok(())
+    }
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        for &b in words {
+            self.transfer_byte(b);
+        }
+        self.wait_idle();
+        Ok(())
+    }
+
+    fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+        let len = read.len().min(write.len());
+        for i in 0..len {
+            read[i] = self.transfer_byte(write[i]);
+        }
+        self.wait_idle();
+        Ok(())
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        for slot in words.iter_mut() {
+            *slot = self.transfer_byte(*slot);
+        }
+        self.wait_idle();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
         self.wait_idle();
         Ok(())
     }

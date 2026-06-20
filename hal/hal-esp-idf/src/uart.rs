@@ -20,6 +20,7 @@ impl EspUart {
 }
 
 #[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+#[allow(deprecated)]
 impl UartPort for EspUart {
     fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         let data_bits = match config.data_bits {
@@ -109,5 +110,58 @@ impl UartPort for EspUart {
 impl Drop for EspUart {
     fn drop(&mut self) {
         unsafe { sys::uart_driver_delete(self.port); }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-io impls
+// ---------------------------------------------------------------------------
+#[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+impl embedded_io::ErrorType for EspUart {
+    type Error = hal::error::HalError;
+}
+
+#[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+impl embedded_io::Write for EspUart {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        let written = unsafe {
+            sys::uart_write_bytes(self.port, buf.as_ptr() as *const i8, buf.len())
+        };
+        if written < 0 {
+            Err(hal::error::HalError::HardwareError)
+        } else {
+            Ok(written as usize)
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        let ret = unsafe { sys::uart_flush(self.port) };
+        if ret != sys::ESP_OK as i32 {
+            Err(hal::error::HalError::VendorError(ret))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(any(feature = "esp32", feature = "esp32s3", feature = "esp32c6"))]
+impl embedded_io::Read for EspUart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() { return Ok(0); }
+        // Block indefinitely (portMAX_DELAY) — callers wanting a timeout
+        // should use the legacy UartPort::read with timeout_ms.
+        let n = unsafe {
+            sys::uart_read_bytes(
+                self.port,
+                buf.as_mut_ptr() as *mut core::ffi::c_void,
+                buf.len() as u32,
+                u32::MAX, // portMAX_DELAY
+            )
+        };
+        if n < 0 {
+            Err(hal::error::HalError::HardwareError)
+        } else {
+            Ok(n as usize)
+        }
     }
 }

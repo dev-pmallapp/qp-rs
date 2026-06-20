@@ -26,6 +26,7 @@ impl Nrf52Spi {
     }
 }
 
+#[allow(deprecated)]
 impl SpiMaster for Nrf52Spi {
     fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         // Set frequency register values (constants from Product Specification)
@@ -111,6 +112,74 @@ impl SpiMaster for Nrf52Spi {
         self.regs().tasks_start.write(1);
         while self.regs().events_ready.read() == 0 {}
         self.regs().tasks_stop.write(1);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-hal 1.0 SpiBus impl
+// ---------------------------------------------------------------------------
+impl embedded_hal::spi::ErrorType for Nrf52Spi {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_hal::spi::SpiBus<u8> for Nrf52Spi {
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        if words.is_empty() { return Ok(()); }
+        self.regs().txd.ptr.write(0);
+        self.regs().txd.maxcnt.write(0);
+        self.regs().rxd.ptr.write(words.as_mut_ptr() as u32);
+        self.regs().rxd.maxcnt.write(words.len() as u32);
+        self.regs().events_ready.write(0);
+        self.regs().tasks_start.write(1);
+        while self.regs().events_ready.read() == 0 {}
+        self.regs().tasks_stop.write(1);
+        Ok(())
+    }
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        if words.is_empty() { return Ok(()); }
+        self.regs().txd.ptr.write(words.as_ptr() as u32);
+        self.regs().txd.maxcnt.write(words.len() as u32);
+        self.regs().rxd.ptr.write(0);
+        self.regs().rxd.maxcnt.write(0);
+        self.regs().events_ready.write(0);
+        self.regs().tasks_start.write(1);
+        while self.regs().events_ready.read() == 0 {}
+        self.regs().tasks_stop.write(1);
+        Ok(())
+    }
+
+    fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+        let len = read.len().min(write.len());
+        if len == 0 { return Ok(()); }
+        self.regs().txd.ptr.write(write.as_ptr() as u32);
+        self.regs().txd.maxcnt.write(len as u32);
+        self.regs().rxd.ptr.write(read.as_mut_ptr() as u32);
+        self.regs().rxd.maxcnt.write(len as u32);
+        self.regs().events_ready.write(0);
+        self.regs().tasks_start.write(1);
+        while self.regs().events_ready.read() == 0 {}
+        self.regs().tasks_stop.write(1);
+        Ok(())
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        // nRF52 SPIM can use same buffer for TX and RX (EasyDMA allows overlap)
+        if words.is_empty() { return Ok(()); }
+        self.regs().txd.ptr.write(words.as_ptr() as u32);
+        self.regs().txd.maxcnt.write(words.len() as u32);
+        self.regs().rxd.ptr.write(words.as_mut_ptr() as u32);
+        self.regs().rxd.maxcnt.write(words.len() as u32);
+        self.regs().events_ready.write(0);
+        self.regs().tasks_start.write(1);
+        while self.regs().events_ready.read() == 0 {}
+        self.regs().tasks_stop.write(1);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // SPIM is always flushed after tasks_stop; nothing to do.
         Ok(())
     }
 }

@@ -29,6 +29,7 @@ impl Lpc17Uart {
     }
 }
 
+#[allow(deprecated)]
 impl UartPort for Lpc17Uart {
     fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         // Enable FIFO and reset TX/RX FIFOs via FCR
@@ -99,5 +100,44 @@ impl UartPort for Lpc17Uart {
     fn flush(&mut self) -> HalResult<()> {
         while (self.regs().lsr.read() & UART_LSR_THRE) == 0 {}
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-io impls
+// ---------------------------------------------------------------------------
+impl embedded_io::ErrorType for Lpc17Uart {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_io::Write for Lpc17Uart {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        for &byte in buf {
+            while (self.regs().lsr.read() & UART_LSR_THRE) == 0 {}
+            self.regs().rbr_thr_dll.write(byte as u32);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        while (self.regs().lsr.read() & UART_LSR_THRE) == 0 {}
+        Ok(())
+    }
+}
+
+impl embedded_io::Read for Lpc17Uart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() { return Ok(0); }
+        // Block for first byte
+        while (self.regs().lsr.read() & UART_LSR_RDR) == 0 {}
+        let mut count = 0;
+        for slot in buf.iter_mut() {
+            if (self.regs().lsr.read() & UART_LSR_RDR) == 0 {
+                break;
+            }
+            *slot = self.regs().rbr_thr_dll.read() as u8;
+            count += 1;
+        }
+        Ok(count)
     }
 }

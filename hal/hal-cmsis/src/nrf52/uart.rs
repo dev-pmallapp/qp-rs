@@ -26,6 +26,7 @@ impl Nrf52Uart {
     }
 }
 
+#[allow(deprecated)]
 impl UartPort for Nrf52Uart {
     fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         // Set baud rate constants
@@ -105,5 +106,43 @@ impl UartPort for Nrf52Uart {
 
     fn flush(&mut self) -> HalResult<()> {
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-io impls
+// ---------------------------------------------------------------------------
+impl embedded_io::ErrorType for Nrf52Uart {
+    type Error = hal::error::HalError;
+}
+
+impl embedded_io::Write for Nrf52Uart {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() { return Ok(0); }
+        self.regs().txd.ptr.write(buf.as_ptr() as u32);
+        self.regs().txd.maxcnt.write(buf.len() as u32);
+        self.regs().events_endtx.write(0);
+        self.regs().tasks_starttx.write(1);
+        while self.regs().events_endtx.read() == 0 {}
+        self.regs().tasks_stoptx.write(1);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // DMA TX is always complete after events_endtx; nothing more to do.
+        Ok(())
+    }
+}
+
+impl embedded_io::Read for Nrf52Uart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() { return Ok(0); }
+        self.regs().rxd.ptr.write(buf.as_mut_ptr() as u32);
+        self.regs().rxd.maxcnt.write(buf.len() as u32);
+        self.regs().events_endrx.write(0);
+        self.regs().tasks_startrx.write(1);
+        while self.regs().events_endrx.read() == 0 {}
+        let n = self.regs().rxd.amount.read() as usize;
+        Ok(n)
     }
 }
