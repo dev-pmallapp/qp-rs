@@ -33,16 +33,19 @@ use qp_rs::qs::QsConfig;        // tracing (when `qs` is enabled)
 
 The facade re-exports each crate under its own module, gated by the matching feature:
 
-| Module        | Content                                                        | Feature gate |
-|---------------|----------------------------------------------------------------|--------------|
-| `qp_rs::qf`   | Active objects, events, cooperative kernel, time events, HSM   | always       |
-| `qp_rs::qk`   | Preemptive single-stack kernel                                 | `qk`         |
-| `qp_rs::qxk`  | Dual-mode kernel with blocking threads                         | `qxk`        |
-| `qp_rs::qs`   | QS binary tracing protocol                                     | `qs`         |
+| Module          | Content                                                        | Feature gate |
+|-----------------|----------------------------------------------------------------|--------------|
+| `qp_rs::qf`     | Active objects, events, cooperative kernel, time events, HSM   | always       |
+| `qp_rs::port`   | Platform contract: `Runtime`, `TraceSink`, `ContextSwitch`     | always       |
+| `qp_rs::qk`     | Preemptive single-stack kernel                                 | `qk`         |
+| `qp_rs::qxk`    | Dual-mode kernel with blocking threads                         | `qxk`        |
+| `qp_rs::qs`     | QS binary tracing protocol                                     | `qs`         |
+| `qp_rs::comms`  | LoRa/LoRaWAN + FOTA middleware (drives QF active objects)      | `comms`      |
+| `qp_rs::hal`    | Framework-agnostic peripheral traits (embedded-hal based)      | `hal`        |
 
-`qf` is always present because it is the foundation for every kernel variant. The other
-three modules only exist when their feature is enabled, so a project that never enables
-`qxk` does not compile (or link) the dual-mode kernel at all.
+`qf` (and the always-on `port` contract) is present because it is the foundation for
+every kernel variant. The other modules only exist when their feature is enabled, so a
+project that never enables `qxk` does not compile (or link) the dual-mode kernel at all.
 
 ### The prelude
 
@@ -72,9 +75,15 @@ syntax, so you never enable a feature on a crate that isn't part of your build.
 | Feature  | Effect                                                                 |
 |----------|------------------------------------------------------------------------|
 | `std`    | Enables `std` support across every selected crate.                     |
-| `qs`     | Enables QS tracing; propagates to `qf` and (if selected) `qk`.         |
+| `qs`     | Enables QS tracing; propagates to `qf`, `qk`, and `comms`.             |
 | `qk`     | Pulls in the preemptive single-stack kernel (`qp_rs::qk`).             |
 | `qxk`    | Pulls in the dual-mode kernel (`qp_rs::qxk`); implies `qk`.            |
+| `comms`  | Pulls in the LoRa/LoRaWAN + FOTA middleware (`qp_rs::comms`). Requires `std` today. |
+| `hal`    | Re-exports the framework-agnostic peripheral traits (`qp_rs::hal`, embedded-hal based). `no_std`-ready. |
+
+The platform/port contract (`qp_rs::port`: `Runtime`, `TraceSink`,
+`ContextSwitch`) is always available — it lives in `qf` and carries no extra
+dependency.
 
 The default feature set is:
 
@@ -103,11 +112,46 @@ qp-rs = { path = "vendor/qp-rs/crates/qp-rs", default-features = false,
 
 # Minimal cooperative-only, no_std, no tracing
 qp-rs = { path = "vendor/qp-rs/crates/qp-rs", default-features = false }
+
+# Embedded radio app: kernel + tracing + comms middleware + peripheral traits
+qp-rs = { path = "vendor/qp-rs/crates/qp-rs",
+          features = ["std", "qk", "qs", "comms", "hal"] }
 ```
 
 > **`no_std`:** Build with `default-features = false` and omit `std`. The facade applies
 > `#![no_std]` automatically when the `std` feature is off, and all kernel/tracing
-> features are verified to compile in that mode.
+> features are verified to compile in that mode. The `comms` feature currently
+> requires `std`; the `hal` traits are `no_std`-ready.
+
+## Writing portable applications (the `port` contract)
+
+The facade gives you the framework; a **thin port crate** supplies the platform
+glue (tick source, trace transport, critical section, context switch). The two
+are decoupled by the `qp_rs::port` traits, so application logic can be written
+**generically over the runtime** instead of naming a concrete port type:
+
+```rust
+use qp_rs::prelude::*; // brings Runtime, TraceSink, ContextSwitch into scope
+
+/// Works on any target — host, Cortex-M, RISC-V, … — without change.
+fn run_app<R: Runtime>(rt: &R) {
+    while rt.has_pending_work() {
+        rt.run_until_idle();
+    }
+}
+```
+
+A consumer therefore depends on **one facade crate plus one small port crate**:
+
+```toml
+[dependencies]
+qp-rs        = { path = "vendor/qp-rs/crates/qp-rs", features = ["qk", "qs"] }
+qf-port-posix = { path = "vendor/qp-rs/ports/posix" }   # swap per target
+```
+
+The port crate implements `qp_rs::port::Runtime` (and `ContextSwitch` /
+`TraceSink` where relevant); your `run_app` stays identical when you switch the
+port dependency to `qf-port-cortex-m`, `qf-port-riscv`, and so on.
 
 ## Consumption methods
 
