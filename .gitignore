@@ -4,5 +4,11 @@
 # mdBook rendered output
 /docs/book/
 
+# Local Cargo home (toolchain binaries + crate registry cache)
+/.cargo_home/
+
+# Renode emulator local state
+/.renode_home/
+
 # Cargo lockfile is optional for workspaces with multiple crates
 # (keep tracked if desired)
