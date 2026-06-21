@@ -197,6 +197,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
                 ];
                 self.write_cmd(CMD_SET_PKT_PARAMS, &pkt_params)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
         Ok(())
     }
@@ -233,6 +234,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
                 ];
                 self.write_cmd(CMD_SET_PKT_PARAMS, &pkt_params)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
         Ok(())
     }
