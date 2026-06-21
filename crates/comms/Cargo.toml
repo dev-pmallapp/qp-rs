@@ -13,7 +13,7 @@ qs     = ["dep:qs", "qf/qs"]
 [dependencies]
 hal              = { path = "../../hal" }
 qf               = { path = "../qf", default-features = false }
-qs               = { path = "../qs", optional = true }
+qs               = { path = "../qs", optional = true, default-features = false }
 aes  = { version = "0.8", default-features = false, features = ["zeroize"] }
 cmac = { version = "0.7", default-features = false }
 heapless = { version = "0.8", default-features = false }
