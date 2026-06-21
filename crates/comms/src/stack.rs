@@ -3,7 +3,7 @@
 use alloc::sync::Arc;
 use crate::buf::{Frame, MAX_FRAME};
 use crate::error::CommsError;
-use hal::rf::{RfPhy, RfTxConfig, RfRxConfig, RadioMode};
+use hal::rf::{RfPhy, RfTxConfig, RfRxConfig, RadioMode, PhyEvent};
 use qf::active::{ActiveBehavior, ActiveContext, ActiveObjectRef, ActiveObjectId};
 use qf::event::DynEvent;
 use qf::time::{TimeEvent, TimeEventConfig};
@@ -395,6 +395,59 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     fn handle_phy_irq(&mut self, _ctx: &mut ActiveContext, _event: &DynEvent) {
         // Generic DIO fallback — no specific action; individual signals
         // (TX_DONE, RX_DONE, RX_TIMEOUT, CRC_ERROR) are dispatched directly.
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cooperative polling
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<T: Layer + 'static, N: Layer + 'static, M: Layer + 'static, P: RfPhy + 'static>
+    RfStackAO<T, N, M, P>
+{
+    /// Cooperatively poll the PHY for a pending IRQ and self-dispatch it.
+    ///
+    /// On bare-metal ports a port ISR bridge posts the PHY signals
+    /// (`RF_PHY_*_SIG`) into this AO's queue. On polled targets (host
+    /// simulation, or hardware without a wired DIO interrupt) there is no ISR —
+    /// drive this method from the application loop or an idle hook to drain the
+    /// radio's IRQ status and feed the resulting [`PhyEvent`] through the AO's
+    /// normal signal handlers, exactly as the ISR bridge would.
+    ///
+    /// Returns `true` if an event was dispatched, `false` if the PHY was idle.
+    pub fn pump(&mut self, ctx: &mut ActiveContext) -> bool {
+        let event = match self.stack.phy.poll_irq() {
+            Ok(Some(ev)) => ev,
+            Ok(None)     => return false,
+            Err(e)       => {
+                ceprintln!("RfStackAO: poll_irq failed: {e}");
+                return false;
+            }
+        };
+
+        // Map the PHY event onto the same signals the ISR bridge posts, then
+        // reuse `on_event` so the dispatch path is identical to the IRQ case.
+        let dyn_event = match event {
+            PhyEvent::TxDone       => DynEvent::empty_dyn(RF_PHY_TX_DONE_SIG),
+            PhyEvent::RxDone(meta) => DynEvent::with_arc(
+                RF_PHY_RX_DONE_SIG,
+                Arc::new(PhyIrqPayload { event, meta }),
+            ),
+            PhyEvent::RxTimeout    => DynEvent::empty_dyn(RF_PHY_RX_TIMEOUT_SIG),
+            PhyEvent::CrcError     => DynEvent::empty_dyn(RF_PHY_CRC_ERROR_SIG),
+            // CadDone / PreambleDetected have no dedicated handler — route them
+            // through the generic DIO fallback signal.
+            _                      => DynEvent::empty_dyn(RF_PHY_IRQ_SIG),
+        };
+
+        self.on_event(ctx, dyn_event);
+        true
+    }
+
+    /// Alias for [`pump`](Self::pump) for call sites that prefer `poll()`.
+    #[inline]
+    pub fn poll(&mut self, ctx: &mut ActiveContext) -> bool {
+        self.pump(ctx)
     }
 }
 
