@@ -1,13 +1,13 @@
 //! SX1276 LoRa transceiver driver.
 //!
-//! Generic driver operating over standard `SpiMaster` and `GpioPin` traits.
-//! Suitable for any host microcontroller architecture.
+//! Generic driver operating over embedded-hal 1.0 `SpiBus` and `OutputPin`
+//! traits. Suitable for any host microcontroller architecture.
 
 use crate::error::{HalError, HalResult};
-use crate::gpio::{GpioPin, Level, PinMode};
 use crate::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver};
 use crate::rf::{PhyEvent, RadioMode, RadioParams, RfPhy, RfRxConfig, RfTxConfig, RxMetadata};
-use crate::spi::SpiMaster;
+use embedded_hal::digital::OutputPin;
+use embedded_hal::spi::SpiBus;
 
 // Register map
 const REG_FIFO:                 u8 = 0x00;
@@ -51,7 +51,7 @@ pub struct Sx1276<SPI, PIN> {
     reset: PIN,
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> Sx1276<SPI, PIN> {
+impl<SPI: SpiBus, PIN: OutputPin> Sx1276<SPI, PIN> {
     /// Create a new driver instance.
     pub fn new(spi: SPI, reset: PIN) -> Self {
         Self { spi, reset }
@@ -59,13 +59,15 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1276<SPI, PIN> {
 
     /// Write a transceiver register.
     fn write_reg(&mut self, addr: u8, value: u8) -> HalResult<()> {
-        self.spi.write(&[addr | 0x80, value])
+        self.spi.write(&[addr | 0x80, value]).map_err(|_| HalError::HardwareError)
     }
 
     /// Read a transceiver register.
     fn read_reg(&mut self, addr: u8) -> HalResult<u8> {
         let mut buf = [0u8; 2];
-        self.spi.transfer(&[addr & 0x7F, 0x00], &mut buf)?;
+        self.spi
+            .transfer(&mut buf, &[addr & 0x7F, 0x00])
+            .map_err(|_| HalError::HardwareError)?;
         Ok(buf[1])
     }
 
@@ -75,7 +77,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1276<SPI, PIN> {
         let mut buf = [0u8; 256];
         buf[0] = REG_FIFO | 0x80;
         buf[1..=n].copy_from_slice(&data[..n]);
-        self.spi.write(&buf[..=n])
+        self.spi.write(&buf[..=n]).map_err(|_| HalError::HardwareError)
     }
 
     /// Encode and write carrier frequency registers.
@@ -88,16 +90,15 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1276<SPI, PIN> {
 
     /// Toggle hardware reset pin.
     fn hard_reset(&mut self) -> HalResult<()> {
-        self.reset.set_mode(PinMode::Output).map_err(|_| HalError::HardwareError)?;
-        self.reset.write(Level::Low).map_err(|_| HalError::HardwareError)?;
+        self.reset.set_low().map_err(|_| HalError::HardwareError)?;
         for _ in 0..100_000u32 { core::hint::spin_loop(); }  // ≥100 μs
-        self.reset.write(Level::High).map_err(|_| HalError::HardwareError)?;
+        self.reset.set_high().map_err(|_| HalError::HardwareError)?;
         for _ in 0..500_000u32 { core::hint::spin_loop(); }  // ≥5 ms
         Ok(())
     }
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1276<SPI, PIN> {
+impl<SPI: SpiBus + Send, PIN: OutputPin + Send> RfPhy for Sx1276<SPI, PIN> {
     fn init(&mut self) -> HalResult<()> {
         self.hard_reset()?;
         let ver = self.read_reg(REG_VERSION)?;
@@ -283,7 +284,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1276<SPI, PIN> {
     }
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> RfDriver for Sx1276<SPI, PIN> {
+impl<SPI: SpiBus + Send, PIN: OutputPin + Send> RfDriver for Sx1276<SPI, PIN> {
     fn init(&mut self) -> HalResult<()> {
         <Self as RfPhy>::init(self)
     }

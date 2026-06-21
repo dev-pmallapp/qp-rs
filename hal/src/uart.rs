@@ -101,6 +101,7 @@ pub trait UartPort: Send + Sync {
 /// # Deprecated
 /// Use platform-specific IRQ configuration together with `embedded_io::Read`.
 #[deprecated(since = "0.2.0", note = "use platform-specific IRQ configuration instead")]
+#[allow(deprecated)] // legacy trait intentionally extends the legacy UartPort
 pub trait UartPortAsync: UartPort {
     /// Enable RX interrupt
     fn enable_rx_interrupt(&mut self) -> HalResult<()>;

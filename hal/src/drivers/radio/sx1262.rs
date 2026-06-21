@@ -1,13 +1,13 @@
 //! SX1262 LoRa transceiver driver.
 //!
-//! Generic driver operating over standard `SpiMaster` and `GpioPin` traits.
-//! Suitable for any host microcontroller architecture.
+//! Generic driver operating over embedded-hal 1.0 `SpiBus`, `OutputPin`, and
+//! `InputPin` traits. Suitable for any host microcontroller architecture.
 
 use crate::error::{HalError, HalResult};
-use crate::gpio::{GpioPin, Level, PinMode};
 use crate::lora::{Bandwidth, CodingRate, LoRaTxConfig, RfDriver};
 use crate::rf::{PhyEvent, RadioMode, RadioParams, RfPhy, RfRxConfig, RfTxConfig, RxMetadata};
-use crate::spi::SpiMaster;
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::spi::SpiBus;
 
 // SX1262 opcode commands
 const CMD_SET_SLEEP:          u8 = 0x84;
@@ -44,7 +44,7 @@ pub struct Sx1262<SPI, PIN> {
     busy: Option<PIN>,
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> Sx1262<SPI, PIN> {
+impl<SPI: SpiBus, PIN: OutputPin + InputPin> Sx1262<SPI, PIN> {
     /// Create a new driver instance (for simulation / standard configurations without BUSY polling).
     pub fn new(spi: SPI, reset: PIN) -> Self {
         Self {
@@ -66,15 +66,19 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1262<SPI, PIN> {
     /// Wait for the transceiver BUSY pin to go low.
     fn wait_busy(&mut self) -> HalResult<()> {
         let Some(ref mut busy) = self.busy else { return Ok(()); };
-        busy.set_mode(PinMode::Input).map_err(|_| HalError::HardwareError)?;
         for _ in 0..200_000u32 {
-            match busy.read() {
-                Ok(Level::Low)  => return Ok(()),
-                Ok(Level::High) => core::hint::spin_loop(),
-                Err(_)          => return Err(HalError::HardwareError),
+            match busy.is_low() {
+                Ok(true)  => return Ok(()),
+                Ok(false) => core::hint::spin_loop(),
+                Err(_)    => return Err(HalError::HardwareError),
             }
         }
         Err(HalError::Timeout)
+    }
+
+    /// Full-duplex SPI exchange, mapping the bus error to [`HalError`].
+    fn xfer(&mut self, read: &mut [u8], write: &[u8]) -> HalResult<()> {
+        self.spi.transfer(read, write).map_err(|_| HalError::HardwareError)
     }
 
     /// Issue a command to the transceiver with a parameters slice.
@@ -84,7 +88,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1262<SPI, PIN> {
         let mut buf = [0u8; 8];
         buf[0] = cmd;
         buf[1..=n].copy_from_slice(&params[..n]);
-        self.spi.write(&buf[..=n])
+        self.spi.write(&buf[..=n]).map_err(|_| HalError::HardwareError)
     }
 
     /// Write bytes into the transceiver memory buffer.
@@ -95,15 +99,14 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1262<SPI, PIN> {
         buf[0] = CMD_WRITE_BUFFER;
         buf[1] = offset;
         buf[2..2 + n].copy_from_slice(&data[..n]);
-        self.spi.write(&buf[..2 + n])
+        self.spi.write(&buf[..2 + n]).map_err(|_| HalError::HardwareError)
     }
 
     /// Toggle hardware reset pin.
     fn hard_reset(&mut self) -> HalResult<()> {
-        self.reset.set_mode(PinMode::Output).map_err(|_| HalError::HardwareError)?;
-        self.reset.write(Level::Low).map_err(|_| HalError::HardwareError)?;
+        self.reset.set_low().map_err(|_| HalError::HardwareError)?;
         for _ in 0..100_000u32 { core::hint::spin_loop(); }  // ≥100 μs
-        self.reset.write(Level::High).map_err(|_| HalError::HardwareError)?;
+        self.reset.set_high().map_err(|_| HalError::HardwareError)?;
         for _ in 0..500_000u32 { core::hint::spin_loop(); }  // ≥5 ms
         Ok(())
     }
@@ -115,13 +118,13 @@ impl<SPI: SpiMaster, PIN: GpioPin> Sx1262<SPI, PIN> {
     }
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
+impl<SPI: SpiBus + Send, PIN: OutputPin + InputPin + Send> RfPhy for Sx1262<SPI, PIN> {
     fn init(&mut self) -> HalResult<()> {
         self.hard_reset()?;
         self.wait_busy()?;
         let status_buf = [CMD_GET_STATUS, 0x00];
         let mut rx = [0u8; 2];
-        self.spi.transfer(&status_buf, &mut rx)?;
+        self.xfer(&mut rx, &status_buf)?;
         let chip_mode = (rx[1] >> 4) & 0x07;
         if chip_mode == 0 {
             return Err(HalError::HardwareError);
@@ -271,7 +274,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
         let mut rx_buf = [0u8; 258];
         tx_buf[0..3].copy_from_slice(&cmd);
 
-        self.spi.transfer(&tx_buf[..3 + len], &mut rx_buf[..3 + len])?;
+        self.xfer(&mut rx_buf[..3 + len], &tx_buf[..3 + len])?;
         buf[..len].copy_from_slice(&rx_buf[3..3 + len]);
         Ok(())
     }
@@ -280,7 +283,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
         self.wait_busy()?;
         let cmd = [CMD_GET_IRQ_STATUS, 0x00, 0x00, 0x00];
         let mut rx = [0u8; 4];
-        self.spi.transfer(&cmd, &mut rx)?;
+        self.xfer(&mut rx, &cmd)?;
         let status = u16::from_be_bytes([rx[2], rx[3]]);
 
         if status == 0 {
@@ -296,7 +299,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
             // Read RX metadata
             let status_cmd = [CMD_GET_PACKET_STATUS, 0x00, 0x00, 0x00];
             let mut status_rx = [0u8; 4];
-            self.spi.transfer(&status_cmd, &mut status_rx)?;
+            self.xfer(&mut status_rx, &status_cmd)?;
             // rx[2] = RssiPkt, rx[3] = SnrPkt
             let rssi = -(status_rx[2] as i16) / 2;
             let snr = (status_rx[3] as i8) as i16; // tenths of dB is reported directly by chip * 4, but we keep it simple
@@ -305,7 +308,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
             // Get Rx buffer status to read packet length
             let len_cmd = [0x13, 0x00, 0x00, 0x00]; // GetRxBufferStatus
             let mut len_rx = [0u8; 4];
-            self.spi.transfer(&len_cmd, &mut len_rx)?;
+            self.xfer(&mut len_rx, &len_cmd)?;
             let pkt_len = len_rx[2];
 
             Ok(Some(PhyEvent::RxDone(RxMetadata {
@@ -335,7 +338,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
         self.wait_busy()?;
         let cmd = [CMD_GET_RSSI_INST, 0x00, 0x00];
         let mut rx = [0u8; 3];
-        self.spi.transfer(&cmd, &mut rx)?;
+        self.xfer(&mut rx, &cmd)?;
         let rssi_val = -(rx[2] as i16) / 2;
         Ok(rssi_val)
     }
@@ -345,7 +348,7 @@ impl<SPI: SpiMaster, PIN: GpioPin> RfPhy for Sx1262<SPI, PIN> {
     }
 }
 
-impl<SPI: SpiMaster, PIN: GpioPin> RfDriver for Sx1262<SPI, PIN> {
+impl<SPI: SpiBus + Send, PIN: OutputPin + InputPin + Send> RfDriver for Sx1262<SPI, PIN> {
     fn init(&mut self) -> HalResult<()> {
         <Self as RfPhy>::init(self)
     }

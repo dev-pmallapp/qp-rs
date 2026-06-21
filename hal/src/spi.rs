@@ -105,6 +105,7 @@ pub trait SpiMaster: Send + Sync {
 /// # Deprecated
 /// Use [`embedded_hal::spi::SpiDevice`] instead.
 #[deprecated(since = "0.2.0", note = "use embedded_hal::spi::SpiDevice instead")]
+#[allow(deprecated)] // legacy trait intentionally references the legacy SpiMaster
 pub trait SpiDeviceLegacy: Send + Sync {
     /// Execute transaction with CS assertion
     fn transaction<F, R>(&mut self, f: F) -> HalResult<R>

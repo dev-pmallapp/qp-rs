@@ -106,6 +106,7 @@ pub trait GpioPin: Send + Sync {
 /// # Deprecated
 /// Use platform-specific IRQ configuration instead.
 #[deprecated(since = "0.2.0", note = "use platform-specific IRQ configuration instead")]
+#[allow(deprecated)] // legacy trait intentionally extends the legacy GpioPin
 pub trait GpioPinInterrupt: GpioPin {
     /// Enable interrupt on edge
     fn enable_interrupt(&mut self, edge: Edge) -> HalResult<()>;
@@ -125,6 +126,7 @@ pub trait GpioPinInterrupt: GpioPin {
 /// # Deprecated
 /// Obtain typed pins directly from the platform HAL initializer.
 #[deprecated(since = "0.2.0", note = "obtain typed pins directly from the platform HAL")]
+#[allow(deprecated)] // legacy trait intentionally references legacy pin types
 pub trait GpioPort: Send + Sync {
     /// Pin type produced by this port
     type Pin: GpioPin;
