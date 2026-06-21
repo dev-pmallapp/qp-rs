@@ -1,6 +1,6 @@
 //! LPC1768 UART driver
 
-use hal::uart::{DataBits, Parity, StopBits, UartConfig, UartPort};
+use hal::uart::{DataBits, Parity, StopBits, UartConfig};
 use hal::error::HalResult;
 use super::regs::{UartRegs, UART_LCR_DLAB, UART_LSR_RDR, UART_LSR_THRE};
 
@@ -29,9 +29,10 @@ impl Lpc17Uart {
     }
 }
 
-#[allow(deprecated)]
-impl UartPort for Lpc17Uart {
-    fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
+impl Lpc17Uart {
+    /// Configure baud rate, framing and parity (embedded-io `Read`/`Write`
+    /// have no configure step).
+    pub fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         // Enable FIFO and reset TX/RX FIFOs via FCR
         self.regs().iir_fcr.write(0x07); // FIFO enable, clear RX/TX
 
@@ -66,40 +67,9 @@ impl UartPort for Lpc17Uart {
         Ok(())
     }
 
-    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        for &byte in data {
-            while (self.regs().lsr.read() & UART_LSR_THRE) == 0 {}
-            self.regs().rbr_thr_dll.write(byte as u32);
-        }
-        Ok(data.len())
-    }
-
-    fn read(&mut self, buffer: &mut [u8], timeout_ms: u32) -> HalResult<usize> {
-        let mut count = 0;
-        for slot in buffer.iter_mut() {
-            let mut timeout = timeout_ms * 1000;
-            while (self.regs().lsr.read() & UART_LSR_RDR) == 0 {
-                if timeout == 0 {
-                    return Ok(count);
-                }
-                timeout -= 1;
-                for _ in 0..10 {
-                    core::hint::spin_loop();
-                }
-            }
-            *slot = self.regs().rbr_thr_dll.read() as u8;
-            count += 1;
-        }
-        Ok(count)
-    }
-
-    fn available(&self) -> usize {
+    /// Number of bytes available to read (0 or 1 for this peripheral).
+    pub fn available(&self) -> usize {
         usize::from((self.regs().lsr.read() & UART_LSR_RDR) != 0)
-    }
-
-    fn flush(&mut self) -> HalResult<()> {
-        while (self.regs().lsr.read() & UART_LSR_THRE) == 0 {}
-        Ok(())
     }
 }
 

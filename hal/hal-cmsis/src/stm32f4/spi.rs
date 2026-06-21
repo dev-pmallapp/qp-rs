@@ -1,6 +1,6 @@
 //! STM32F4 SPI driver
 
-use hal::spi::{SpiMaster, SpiConfig, SpiMode, BitOrder};
+use hal::spi::{SpiConfig, SpiMode, BitOrder};
 use hal::error::HalResult;
 use super::regs::SpiRegs;
 
@@ -66,38 +66,6 @@ impl Stm32F4Spi {
         self.regs().dr.write(tx as u32);
         while (self.regs().sr.read() & (1 << 0)) == 0 {} // wait RXNE
         self.regs().dr.read() as u8
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy SpiMaster impl (deprecated)
-// ---------------------------------------------------------------------------
-#[allow(deprecated)]
-impl SpiMaster for Stm32F4Spi {
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
-        Stm32F4Spi::configure(self, config)
-    }
-
-    fn transfer(&mut self, tx_data: &[u8], rx_buffer: &mut [u8]) -> HalResult<()> {
-        let len = tx_data.len().min(rx_buffer.len());
-        for i in 0..len {
-            rx_buffer[i] = self.transfer_word(tx_data[i]);
-        }
-        Ok(())
-    }
-
-    fn write(&mut self, data: &[u8]) -> HalResult<()> {
-        for &byte in data {
-            self.transfer_word(byte);
-        }
-        Ok(())
-    }
-
-    fn read(&mut self, buffer: &mut [u8]) -> HalResult<()> {
-        for slot in buffer.iter_mut() {
-            *slot = self.transfer_word(0xFF);
-        }
-        Ok(())
     }
 }
 

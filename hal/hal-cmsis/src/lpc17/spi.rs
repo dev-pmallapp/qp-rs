@@ -1,6 +1,6 @@
 //! LPC1768 SSP (SPI) driver
 
-use hal::spi::{BitOrder, SpiConfig, SpiMaster, SpiMode};
+use hal::spi::{BitOrder, SpiConfig, SpiMode};
 use hal::error::{HalError, HalResult};
 use super::regs::{SspRegs, SSP_CR1_SSE, SSP_SR_BSY, SSP_SR_RNE, SSP_SR_TNF};
 
@@ -42,9 +42,10 @@ impl Lpc17Spi {
     }
 }
 
-#[allow(deprecated)]
-impl SpiMaster for Lpc17Spi {
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
+impl Lpc17Spi {
+    /// Configure SSP clock, mode and bit order (embedded-hal `SpiBus` has no
+    /// configure step).
+    pub fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         // Disable SSP during configuration
         self.regs().cr1.write(0);
 
@@ -75,33 +76,6 @@ impl SpiMaster for Lpc17Spi {
         self.regs().cr0.write(cr0);
         // Enable SSP as master
         self.regs().cr1.write(SSP_CR1_SSE);
-        Ok(())
-    }
-
-    fn transfer(&mut self, tx: &[u8], rx: &mut [u8]) -> HalResult<()> {
-        if tx.len() != rx.len() {
-            return Err(HalError::InvalidParameter);
-        }
-        for (t, r) in tx.iter().zip(rx.iter_mut()) {
-            *r = self.transfer_byte(*t);
-        }
-        self.wait_idle();
-        Ok(())
-    }
-
-    fn write(&mut self, data: &[u8]) -> HalResult<()> {
-        for &b in data {
-            self.transfer_byte(b);
-        }
-        self.wait_idle();
-        Ok(())
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> HalResult<()> {
-        for slot in buf.iter_mut() {
-            *slot = self.transfer_byte(0xFF);
-        }
-        self.wait_idle();
         Ok(())
     }
 }

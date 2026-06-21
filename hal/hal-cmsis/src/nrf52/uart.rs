@@ -1,6 +1,6 @@
 //! nRF52840 UARTE driver
 
-use hal::uart::{UartPort, UartConfig, Parity, FlowControl};
+use hal::uart::{UartConfig, Parity, FlowControl};
 use hal::error::HalResult;
 use super::regs::UarteRegs;
 
@@ -26,9 +26,10 @@ impl Nrf52Uart {
     }
 }
 
-#[allow(deprecated)]
-impl UartPort for Nrf52Uart {
-    fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
+impl Nrf52Uart {
+    /// Configure baud rate, parity and flow control (embedded-io `Read`/`Write`
+    /// have no configure step).
+    pub fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         // Set baud rate constants
         let baud = match config.baud_rate {
             115200 => 0x01D7E000,
@@ -56,56 +57,13 @@ impl UartPort for Nrf52Uart {
         Ok(())
     }
 
-    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        if data.is_empty() {
-            return Ok(0);
-        }
-
-        self.regs().txd.ptr.write(data.as_ptr() as u32);
-        self.regs().txd.maxcnt.write(data.len() as u32);
-
-        self.regs().events_endtx.write(0);
-        self.regs().tasks_starttx.write(1);
-
-        while self.regs().events_endtx.read() == 0 {}
-
-        self.regs().tasks_stoptx.write(1);
-        Ok(data.len())
-    }
-
-    fn read(&mut self, buffer: &mut [u8], _timeout_ms: u32) -> HalResult<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-
-        self.regs().rxd.ptr.write(buffer.as_mut_ptr() as u32);
-        self.regs().rxd.maxcnt.write(buffer.len() as u32);
-
-        self.regs().events_endrx.write(0);
-        self.regs().tasks_startrx.write(1);
-
-        let mut timeout = 100_000;
-        while self.regs().events_endrx.read() == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                self.regs().tasks_stoprx.write(1);
-                return Ok(self.regs().rxd.amount.read() as usize);
-            }
-        }
-
-        Ok(buffer.len())
-    }
-
-    fn available(&self) -> usize {
+    /// Number of bytes available to read (0 or 1 for this peripheral).
+    pub fn available(&self) -> usize {
         if self.regs().events_rxdrdy.read() != 0 {
             1
         } else {
             0
         }
-    }
-
-    fn flush(&mut self) -> HalResult<()> {
-        Ok(())
     }
 }
 

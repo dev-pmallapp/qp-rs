@@ -1,6 +1,6 @@
 //! STM32F4 USART driver
 
-use hal::uart::{UartPort, UartConfig, DataBits, StopBits, Parity};
+use hal::uart::{UartConfig, DataBits, StopBits, Parity};
 use hal::error::{HalError, HalResult};
 use super::regs::UsartRegs;
 
@@ -26,9 +26,10 @@ impl Stm32F4Uart {
     }
 }
 
-#[allow(deprecated)]
-impl UartPort for Stm32F4Uart {
-    fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
+impl Stm32F4Uart {
+    /// Configure baud rate, framing and parity (embedded-io `Read`/`Write`
+    /// have no configure step).
+    pub fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         let mut cr1 = (1 << 3) | (1 << 2); // TE (Transmitter enable) | RE (Receiver enable)
 
         match config.data_bits {
@@ -57,44 +58,13 @@ impl UartPort for Stm32F4Uart {
         Ok(())
     }
 
-    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        for &byte in data {
-            // Wait until TXE (Transmit data register empty) is set (SR bit 7)
-            while (self.regs().sr.read() & (1 << 7)) == 0 {}
-            self.regs().dr.write(byte as u32);
-        }
-        Ok(data.len())
-    }
-
-    fn read(&mut self, buffer: &mut [u8], _timeout_ms: u32) -> HalResult<usize> {
-        let mut count = 0;
-        for i in 0..buffer.len() {
-            let mut timeout = 100_000;
-            // Wait until RXNE (Read data register not empty) is set (SR bit 5)
-            while (self.regs().sr.read() & (1 << 5)) == 0 {
-                timeout -= 1;
-                if timeout == 0 {
-                    return Ok(count);
-                }
-            }
-            buffer[i] = self.regs().dr.read() as u8;
-            count += 1;
-        }
-        Ok(count)
-    }
-
-    fn available(&self) -> usize {
+    /// Number of bytes available to read (0 or 1 for this peripheral).
+    pub fn available(&self) -> usize {
         if (self.regs().sr.read() & (1 << 5)) != 0 {
             1
         } else {
             0
         }
-    }
-
-    fn flush(&mut self) -> HalResult<()> {
-        // Wait until TC (Transmission complete) is set (SR bit 6)
-        while (self.regs().sr.read() & (1 << 6)) == 0 {}
-        Ok(())
     }
 }
 

@@ -1,6 +1,6 @@
 //! STM32F4 GPIO driver
 
-use hal::gpio::{GpioPin, Level, PinMode};
+use hal::gpio::PinMode;
 use hal::error::HalResult;
 use super::regs::GpioRegs;
 
@@ -27,9 +27,10 @@ impl Stm32F4Pin {
     }
 }
 
-#[allow(deprecated)]
-impl GpioPin for Stm32F4Pin {
-    fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
+impl Stm32F4Pin {
+    /// Configure the pin mode. Call before using the embedded-hal
+    /// `OutputPin`/`InputPin` methods, which assume a pre-configured pin.
+    pub fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let shift = (self.pin as u32) * 2;
         let moder = match mode {
             PinMode::Input | PinMode::InputPullUp | PinMode::InputPullDown => 0b00,
@@ -50,20 +51,8 @@ impl GpioPin for Stm32F4Pin {
         Ok(())
     }
 
-    fn read(&self) -> HalResult<Level> {
-        Ok(if (self.regs().idr.read() >> self.pin) & 1 != 0 { Level::High } else { Level::Low })
-    }
-
-    fn write(&mut self, level: Level) -> HalResult<()> {
-        let mask = match level {
-            Level::High => 1u32 << self.pin,
-            Level::Low  => 1u32 << (self.pin + 16),
-        };
-        self.regs().bsrr.write(mask);
-        Ok(())
-    }
-
-    fn pin_number(&self) -> u32 {
+    /// Pin number on the port.
+    pub fn pin_number(&self) -> u32 {
         self.pin as u32
     }
 }

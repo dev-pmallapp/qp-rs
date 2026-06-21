@@ -1,6 +1,6 @@
 //! LPC1768 Fast GPIO driver
 
-use hal::gpio::{GpioPin, Level, PinMode};
+use hal::gpio::PinMode;
 use hal::error::HalResult;
 use super::regs::gpio_port;
 
@@ -25,9 +25,10 @@ impl Lpc17Pin {
     }
 }
 
-#[allow(deprecated)]
-impl GpioPin for Lpc17Pin {
-    fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
+impl Lpc17Pin {
+    /// Configure the pin direction. Call before using the embedded-hal
+    /// `OutputPin`/`InputPin` methods, which assume a pre-configured pin.
+    pub fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let mask = 1u32 << self.pin;
         let regs = unsafe { gpio_port(self.port) };
         match mode {
@@ -41,26 +42,8 @@ impl GpioPin for Lpc17Pin {
         Ok(())
     }
 
-    fn read(&self) -> HalResult<Level> {
-        let regs = unsafe { gpio_port(self.port) };
-        Ok(if (regs.pin.read() & (1 << self.pin)) != 0 {
-            Level::High
-        } else {
-            Level::Low
-        })
-    }
-
-    fn write(&mut self, level: Level) -> HalResult<()> {
-        let regs = unsafe { gpio_port(self.port) };
-        let mask = 1u32 << self.pin;
-        match level {
-            Level::High => regs.set.write(mask),
-            Level::Low  => regs.clr.write(mask),
-        }
-        Ok(())
-    }
-
-    fn pin_number(&self) -> u32 {
+    /// Pin number (port * 32 + pin).
+    pub fn pin_number(&self) -> u32 {
         self.port as u32 * 32 + self.pin as u32
     }
 }

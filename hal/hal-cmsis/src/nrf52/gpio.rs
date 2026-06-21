@@ -1,6 +1,6 @@
 //! nRF52840 GPIO driver
 
-use hal::gpio::{GpioPin, Level, PinMode};
+use hal::gpio::PinMode;
 use hal::error::HalResult;
 use super::regs::GpioRegs;
 
@@ -27,9 +27,10 @@ impl Nrf52Pin {
     }
 }
 
-#[allow(deprecated)]
-impl GpioPin for Nrf52Pin {
-    fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
+impl Nrf52Pin {
+    /// Configure the pin mode. Call before using the embedded-hal
+    /// `OutputPin`/`InputPin` methods, which assume a pre-configured pin.
+    pub fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let pin_cnf = match mode {
             PinMode::Input => 0, // Input buffer connected, pull disabled, drive S0S1, sense disabled
             PinMode::InputPullUp => (1 << 2) | (3 << 4), // Input pullup
@@ -46,24 +47,8 @@ impl GpioPin for Nrf52Pin {
         Ok(())
     }
 
-    fn read(&self) -> HalResult<Level> {
-        let val = self.regs().in_.read();
-        Ok(if (val & (1 << self.pin)) != 0 {
-            Level::High
-        } else {
-            Level::Low
-        })
-    }
-
-    fn write(&mut self, level: Level) -> HalResult<()> {
-        match level {
-            Level::High => self.regs().outset.write(1 << self.pin),
-            Level::Low  => self.regs().outclr.write(1 << self.pin),
-        }
-        Ok(())
-    }
-
-    fn pin_number(&self) -> u32 {
+    /// Pin number on the port.
+    pub fn pin_number(&self) -> u32 {
         self.pin as u32
     }
 }
