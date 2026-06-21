@@ -200,6 +200,7 @@ impl<SPI: SpiBus + Send, PIN: OutputPin + InputPin + Send> RfPhy for Sx1262<SPI,
                 ];
                 self.write_cmd(CMD_SET_PKT_PARAMS, &pkt_params)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
         Ok(())
     }
@@ -236,6 +237,7 @@ impl<SPI: SpiBus + Send, PIN: OutputPin + InputPin + Send> RfPhy for Sx1262<SPI,
                 ];
                 self.write_cmd(CMD_SET_PKT_PARAMS, &pkt_params)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
         Ok(())
     }

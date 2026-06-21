@@ -60,6 +60,16 @@ pub enum PhyEvent {
 pub enum RadioParams {
     /// LoRa modulation parameters.
     LoRa(LoRaModulation),
+    /// FSK modulation parameters.
+    Fsk(FskModulation),
+}
+
+/// FSK modulation parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FskModulation {
+    pub bitrate_bps:  u32,
+    pub deviation_hz: u32,
+    pub rx_bandwidth: u32,
 }
 
 /// Radio transmit configuration.

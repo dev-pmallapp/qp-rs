@@ -155,3 +155,81 @@ pub fn compute_mic(
     mic.copy_from_slice(&mic_bytes[..4]);
     Ok(mic)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::LoRaSession;
+    use crate::buf::Frame;
+
+    #[test]
+    fn test_lorawan_mac_round_trip() {
+        let session = LoRaSession::test_abp();
+        let mut mac_up = LoRaWanMac::new(session.clone(), 1);
+
+        let original = b"hello world";
+        let mut frame = Frame::new();
+        frame.write_payload(original).unwrap();
+
+        // 1. Run down (uplink)
+        mac_up.down(&mut frame).unwrap();
+
+        // 2. Validate frame contents manually
+        assert_eq!(frame.len(), 9 + original.len() + 4);
+        let phy_bytes = frame.phy_bytes();
+        assert_eq!(phy_bytes[0], 0x40); // Unconfirmed Data Up
+        assert_eq!(&phy_bytes[1..5], &session.dev_addr); // DevAddr
+        assert_eq!(phy_bytes[5], 0x00); // FCtrl
+        assert_eq!(phy_bytes[6], 0x00); // FCnt LSB
+        assert_eq!(phy_bytes[7], 0x00); // FCnt MSB
+        assert_eq!(phy_bytes[8], 1);    // FPort
+
+        // 3. Downlink: construct a downlink frame manually using keys from the same session
+        let downlink_payload = b"downlink response";
+        let fcnt_dn = 0u32;
+
+        let mut transport_frame = Frame::new();
+        transport_frame.write_payload(downlink_payload).unwrap();
+
+        let mut frm_payload = transport_frame.payload().to_vec();
+        encrypt_frm_payload(&mut frm_payload, &session.app_skey, &session.dev_addr, fcnt_dn, 1).unwrap();
+
+        let mut msg = Vec::new();
+        msg.push(0x60); // MHDR: UnconfirmedDataDown
+        msg.extend_from_slice(&session.dev_addr);
+        msg.push(0x00); // FCtrl
+        msg.push(fcnt_dn as u8);
+        msg.push((fcnt_dn >> 8) as u8);
+        msg.push(1); // FPort
+        msg.extend_from_slice(&frm_payload);
+
+        let mic = compute_mic(&msg, &session.nwk_skey, &session.dev_addr, fcnt_dn, 1).unwrap();
+        msg.extend_from_slice(&mic);
+
+        let mut rx_frame = Frame::new();
+        rx_frame.set_received_len(msg.len());
+        rx_frame.raw_buf_for_dma()[..msg.len()].copy_from_slice(&msg);
+
+        // Run up (downlink)
+        let mut mac_dn = LoRaWanMac::new(session.clone(), 1);
+        let keep = mac_dn.up(&mut rx_frame).unwrap();
+        assert!(keep);
+        assert_eq!(rx_frame.payload(), downlink_payload);
+    }
+
+    #[test]
+    fn test_mic_known_vector() {
+        let nwk_skey = [0u8; 16];
+        let dev_addr = [0x04, 0x03, 0x02, 0x01];
+        let fcnt = 0u32;
+        let msg = b"\x40\x04\x03\x02\x01\x00\x00\x00\x01\x00"; 
+        
+        let mic = compute_mic(msg, &nwk_skey, &dev_addr, fcnt, 0).unwrap();
+        assert_eq!(mic.len(), 4);
+        
+        // Check exact MIC byte values from computed CMAC logic
+        let expected_mic = [246, 25, 1, 172];
+        assert_eq!(mic, expected_mic);
+    }
+}
+

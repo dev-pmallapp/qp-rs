@@ -1,6 +1,9 @@
 //! MAC layer implementations and legacy CommsAO.
 
 pub mod lorawan;
+pub mod noop;
+pub mod ble_l2cap;
+
 
 use qf::active::{ActiveBehavior, ActiveContext};
 use qf::event::DynEvent;

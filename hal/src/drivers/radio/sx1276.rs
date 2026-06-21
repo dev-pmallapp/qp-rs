@@ -168,6 +168,7 @@ impl<SPI: SpiBus + Send, PIN: OutputPin + Send> RfPhy for Sx1276<SPI, PIN> {
                 self.write_reg(REG_PREAMBLE_MSB, (lora.preamble >> 8) as u8)?;
                 self.write_reg(REG_PREAMBLE_LSB, lora.preamble as u8)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
 
         // PA config: PA_BOOST pin, power config (2..17 dBm)
@@ -204,6 +205,7 @@ impl<SPI: SpiBus + Send, PIN: OutputPin + Send> RfPhy for Sx1276<SPI, PIN> {
                 self.write_reg(REG_PREAMBLE_MSB, (lora.preamble >> 8) as u8)?;
                 self.write_reg(REG_PREAMBLE_LSB, lora.preamble as u8)?;
             }
+            RadioParams::Fsk(_) => return Err(HalError::NotSupported),
         }
         Ok(())
     }

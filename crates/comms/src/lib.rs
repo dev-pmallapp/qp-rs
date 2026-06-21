@@ -43,3 +43,5 @@ pub use buf::{Frame, FrameIdx, FramePool};
 pub use stack::{Layer, RfStack, RfStackAO};
 pub use transport::{ReliableTransport, UnreliableTransport, TransportAction};
 pub use net::{Network, NoopNetwork};
+pub use mac::noop::NoopMac;
+pub use mac::ble_l2cap::BleL2capMac;

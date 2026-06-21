@@ -1258,11 +1258,17 @@ dependencies = [
 [[package]]
 name = "hal"
 version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io 0.6.1",
+]
 
 [[package]]
 name = "hal-cmsis"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io 0.6.1",
  "hal",
 ]
 
@@ -1270,6 +1276,8 @@ dependencies = [
 name = "hal-lxsis"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io 0.6.1",
  "hal",
 ]
 
@@ -1277,6 +1285,8 @@ dependencies = [
 name = "hal-rvsis"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io 0.6.1",
  "hal",
 ]
 
