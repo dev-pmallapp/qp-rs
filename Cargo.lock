@@ -1780,6 +1780,8 @@ dependencies = [
 name = "qp-rs"
 version = "8.1.1"
 dependencies = [
+ "comms",
+ "hal",
  "qf",
  "qk",
  "qs",
