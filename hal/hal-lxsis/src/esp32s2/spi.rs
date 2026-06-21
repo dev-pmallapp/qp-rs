@@ -1,7 +1,7 @@
 //! ESP32-S2 SPI driver
 
-use hal::spi::{BitOrder, SpiConfig, SpiMaster, SpiMode};
-use hal::error::HalResult;
+use hal::spi::{BitOrder, SpiConfig, SpiMode};
+use hal::error::{HalError, HalResult};
 use super::regs::SpiRegs;
 
 /// ESP32-S2 SPI Master.
@@ -24,10 +24,10 @@ impl Esp32S2Spi {
     fn regs(&self) -> &SpiRegs {
         unsafe { &*self.regs }
     }
-}
 
-impl SpiMaster for Esp32S2Spi {
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
+    /// Configure SPI clock, mode and bit order. Call once before use
+    /// (embedded-hal `SpiBus` has no configure step).
+    pub fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         // Clock divider from APB (80 MHz)
         let div = (80_000_000 / config.frequency).max(1);
         let clock_val = if div <= 1 {
@@ -55,8 +55,14 @@ impl SpiMaster for Esp32S2Spi {
         self.regs().user.write(user);
         Ok(())
     }
+}
 
-    fn transfer(&mut self, tx_data: &[u8], rx_buffer: &mut [u8]) -> HalResult<()> {
+impl embedded_hal::spi::ErrorType for Esp32S2Spi {
+    type Error = HalError;
+}
+
+impl embedded_hal::spi::SpiBus<u8> for Esp32S2Spi {
+    fn transfer(&mut self, rx_buffer: &mut [u8], tx_data: &[u8]) -> HalResult<()> {
         let total_len = tx_data.len().min(rx_buffer.len());
         let mut offset = 0;
         while offset < total_len {
@@ -134,6 +140,43 @@ impl SpiMaster for Esp32S2Spi {
             }
             offset += chunk_len;
         }
+        Ok(())
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> HalResult<()> {
+        let mut offset = 0;
+        while offset < words.len() {
+            let chunk_len = (words.len() - offset).min(64);
+            let bit_len = (chunk_len * 8) as u32;
+            self.regs().mosi_dlen.write(bit_len - 1);
+            self.regs().miso_dlen.write(bit_len - 1);
+            for i in 0..((chunk_len + 3) / 4) {
+                let mut word = 0u32;
+                for b in 0..4 {
+                    let idx = offset + i * 4 + b;
+                    if idx - offset < chunk_len {
+                        word |= (words[idx] as u32) << (b * 8);
+                    }
+                }
+                self.regs().w[i].write(word);
+            }
+            self.regs().cmd.modify(|v| v | (1 << 18));
+            while (self.regs().cmd.read() & (1 << 18)) != 0 {}
+            for i in 0..((chunk_len + 3) / 4) {
+                let word = self.regs().w[i].read();
+                for b in 0..4 {
+                    let idx = offset + i * 4 + b;
+                    if idx - offset < chunk_len {
+                        words[idx] = (word >> (b * 8)) as u8;
+                    }
+                }
+            }
+            offset += chunk_len;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> HalResult<()> {
         Ok(())
     }
 }

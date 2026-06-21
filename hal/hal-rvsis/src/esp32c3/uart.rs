@@ -1,7 +1,7 @@
 //! ESP32-C3 UART driver
 
-use hal::uart::{UartPort, UartConfig, DataBits, StopBits, Parity};
-use hal::error::HalResult;
+use hal::uart::{UartConfig, DataBits, StopBits, Parity};
+use hal::error::{HalError, HalResult};
 use super::regs::UartRegs;
 
 /// ESP32-C3 UART Port
@@ -24,10 +24,10 @@ impl Esp32C3Uart {
     fn regs(&self) -> &UartRegs {
         unsafe { &*self.regs }
     }
-}
 
-impl UartPort for Esp32C3Uart {
-    fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
+    /// Configure baud rate, framing and parity. Call once before use
+    /// (embedded-io `Read`/`Write` have no configure step).
+    pub fn configure(&mut self, config: &UartConfig) -> HalResult<()> {
         // Baud rate calculation using APB clock (80 MHz)
         let clk_div = 80_000_000 / config.baud_rate;
         let clk_div_frac = ((80_000_000 % config.baud_rate) * 16) / config.baud_rate;
@@ -60,40 +60,47 @@ impl UartPort for Esp32C3Uart {
         Ok(())
     }
 
-    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        for &byte in data {
-            // Wait until TX FIFO has room (TXFIFO_CNT in status register bits 16-23 < 128)
+    /// Number of bytes currently waiting in the RX FIFO.
+    pub fn available(&self) -> usize {
+        (self.regs().status.read() & 0xFF) as usize
+    }
+}
+
+impl embedded_io::ErrorType for Esp32C3Uart {
+    type Error = HalError;
+}
+
+impl embedded_io::Write for Esp32C3Uart {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        for &byte in buf {
+            // Wait until TX FIFO has room (TXFIFO_CNT in status bits 16-23 < 128)
             while ((self.regs().status.read() >> 16) & 0xFF) >= 128 {}
             self.regs().fifo.write(byte as u32);
         }
-        Ok(data.len())
+        Ok(buf.len())
     }
 
-    fn read(&mut self, buffer: &mut [u8], timeout_ms: u32) -> HalResult<usize> {
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // Wait until TX FIFO is empty (TXFIFO_CNT in status bits 16-23 is 0)
+        while ((self.regs().status.read() >> 16) & 0xFF) != 0 {}
+        Ok(())
+    }
+}
+
+impl embedded_io::Read for Esp32C3Uart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        // embedded-io contract: block until at least one byte is available.
+        while (self.regs().status.read() & 0xFF) == 0 {
+            core::hint::spin_loop();
+        }
         let mut count = 0;
-        for i in 0..buffer.len() {
-            let mut timeout = timeout_ms * 1000;
-            // Wait until RX FIFO has data (RXFIFO_CNT in status register bits 0-7 > 0)
-            while (self.regs().status.read() & 0xFF) == 0 {
-                if timeout == 0 {
-                    return Ok(count);
-                }
-                timeout -= 1;
-                for _ in 0..10 { core::hint::spin_loop(); }
-            }
-            buffer[i] = self.regs().fifo.read() as u8;
+        while count < buf.len() && (self.regs().status.read() & 0xFF) != 0 {
+            buf[count] = self.regs().fifo.read() as u8;
             count += 1;
         }
         Ok(count)
-    }
-
-    fn available(&self) -> usize {
-        (self.regs().status.read() & 0xFF) as usize
-    }
-
-    fn flush(&mut self) -> HalResult<()> {
-        // Wait until TX FIFO is empty (TXFIFO_CNT in status register bits 16-23 is 0)
-        while ((self.regs().status.read() >> 16) & 0xFF) != 0 {}
-        Ok(())
     }
 }

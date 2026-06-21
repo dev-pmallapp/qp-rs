@@ -6,10 +6,7 @@
 //! - [`ErrorType`]    — associate an `Error` type with an impl
 //!
 //! Platform crates implement `SpiBus<u8>` (and optionally `SpiDevice`) for
-//! their concrete peripheral types.  The legacy `SpiMaster` / `SpiDevice`
-//! traits below are **deprecated** and will be removed in a future release.
-
-use crate::error::HalResult;
+//! their concrete peripheral types.
 
 // ---------------------------------------------------------------------------
 // Re-exports from embedded-hal
@@ -75,40 +72,4 @@ impl Default for SpiConfig {
             bit_order: BitOrder::MsbFirst,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy traits — DEPRECATED; use embedded_hal::spi::SpiBus / SpiDevice
-// ---------------------------------------------------------------------------
-
-/// SPI master trait
-///
-/// # Deprecated
-/// Implement [`embedded_hal::spi::SpiBus`] instead.
-#[deprecated(since = "0.2.0", note = "implement embedded_hal::spi::SpiBus instead")]
-pub trait SpiMaster: Send + Sync {
-    /// Configure SPI parameters
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()>;
-
-    /// Transfer data (full duplex)
-    fn transfer(&mut self, tx_data: &[u8], rx_buffer: &mut [u8]) -> HalResult<()>;
-
-    /// Write-only transfer
-    fn write(&mut self, data: &[u8]) -> HalResult<()>;
-
-    /// Read-only transfer
-    fn read(&mut self, buffer: &mut [u8]) -> HalResult<()>;
-}
-
-/// SPI device (master + chip select management)
-///
-/// # Deprecated
-/// Use [`embedded_hal::spi::SpiDevice`] instead.
-#[deprecated(since = "0.2.0", note = "use embedded_hal::spi::SpiDevice instead")]
-#[allow(deprecated)] // legacy trait intentionally references the legacy SpiMaster
-pub trait SpiDeviceLegacy: Send + Sync {
-    /// Execute transaction with CS assertion
-    fn transaction<F, R>(&mut self, f: F) -> HalResult<R>
-    where
-        F: FnOnce(&mut dyn SpiMaster) -> HalResult<R>;
 }

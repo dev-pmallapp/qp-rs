@@ -1,7 +1,7 @@
 //! GD32VF103 GPIO driver
 
-use hal::gpio::{GpioPin, Level, PinMode};
-use hal::error::HalResult;
+use hal::gpio::PinMode;
+use hal::error::{HalError, HalResult};
 use super::regs::GpioRegs;
 
 /// GD32VF103 GPIO Pin
@@ -25,10 +25,10 @@ impl Gd32VfPin {
     fn regs(&self) -> &GpioRegs {
         unsafe { &*self.regs }
     }
-}
 
-impl GpioPin for Gd32VfPin {
-    fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
+    /// Configure the pin direction. Call before driving/reading the pin, since
+    /// embedded-hal pins are assumed pre-configured.
+    pub fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let (md, ctl) = match mode {
             PinMode::Input => (0b00, 0b01),      // Input, floating
             PinMode::InputPullUp => {
@@ -58,20 +58,38 @@ impl GpioPin for Gd32VfPin {
         Ok(())
     }
 
-    fn read(&self) -> HalResult<Level> {
-        let val = (self.regs().istat.read() >> self.pin) & 1;
-        Ok(if val != 0 { Level::High } else { Level::Low })
+    /// Pin number on the port.
+    pub fn pin_number(&self) -> u32 {
+        self.pin as u32
     }
 
-    fn write(&mut self, level: Level) -> HalResult<()> {
-        match level {
-            Level::High => self.regs().bop.write(1 << self.pin),
-            Level::Low => self.regs().bop.write(1 << (self.pin + 16)),
-        }
+    fn is_set_high(&self) -> bool {
+        ((self.regs().istat.read() >> self.pin) & 1) != 0
+    }
+}
+
+impl embedded_hal::digital::ErrorType for Gd32VfPin {
+    type Error = HalError;
+}
+
+impl embedded_hal::digital::OutputPin for Gd32VfPin {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.regs().bop.write(1 << self.pin);
         Ok(())
     }
 
-    fn pin_number(&self) -> u32 {
-        self.pin as u32
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.regs().bop.write(1 << (self.pin + 16));
+        Ok(())
+    }
+}
+
+impl embedded_hal::digital::InputPin for Gd32VfPin {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.is_set_high())
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.is_set_high())
     }
 }

@@ -1,7 +1,7 @@
 //! GD32VF103 SPI driver
 
-use hal::spi::{SpiMaster, SpiConfig, SpiMode, BitOrder};
-use hal::error::HalResult;
+use hal::spi::{SpiConfig, SpiMode, BitOrder};
+use hal::error::{HalError, HalResult};
 use super::regs::SpiRegs;
 
 /// GD32VF103 SPI Master
@@ -24,10 +24,10 @@ impl Gd32VfSpi {
     fn regs(&self) -> &SpiRegs {
         unsafe { &*self.regs }
     }
-}
 
-impl SpiMaster for Gd32VfSpi {
-    fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
+    /// Configure SPI clock, mode and bit order. Call once before use
+    /// (embedded-hal `SpiBus` has no configure step).
+    pub fn configure(&mut self, config: &SpiConfig) -> HalResult<()> {
         let mut ctl0 = 1 << 2; // MSTMOD (Master mode)
         ctl0 |= 1 << 9; // SWNSSEN (Software NSS management)
         ctl0 |= 1 << 8; // SWNSS (Internal NSS select)
@@ -60,8 +60,14 @@ impl SpiMaster for Gd32VfSpi {
         self.regs().ctl0.modify(|v| v | (1 << 6)); // SPIEN (SPI enable)
         Ok(())
     }
+}
 
-    fn transfer(&mut self, tx_data: &[u8], rx_buffer: &mut [u8]) -> HalResult<()> {
+impl embedded_hal::spi::ErrorType for Gd32VfSpi {
+    type Error = HalError;
+}
+
+impl embedded_hal::spi::SpiBus<u8> for Gd32VfSpi {
+    fn transfer(&mut self, rx_buffer: &mut [u8], tx_data: &[u8]) -> HalResult<()> {
         let len = tx_data.len().min(rx_buffer.len());
         for i in 0..len {
             // Wait until TBE (Transmit buffer empty) is set (STAT bit 1)
@@ -98,6 +104,23 @@ impl SpiMaster for Gd32VfSpi {
             while (self.regs().stat.read() & (1 << 0)) == 0 {}
             buffer[i] = self.regs().data.read() as u8;
         }
+        Ok(())
+    }
+
+    fn transfer_in_place(&mut self, words: &mut [u8]) -> HalResult<()> {
+        for byte in words.iter_mut() {
+            // Wait until TBE (Transmit buffer empty) is set (STAT bit 1)
+            while (self.regs().stat.read() & (1 << 1)) == 0 {}
+            self.regs().data.write(*byte as u32);
+
+            // Wait until RBNE (Receive buffer not empty) is set (STAT bit 0)
+            while (self.regs().stat.read() & (1 << 0)) == 0 {}
+            *byte = self.regs().data.read() as u8;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> HalResult<()> {
         Ok(())
     }
 }
