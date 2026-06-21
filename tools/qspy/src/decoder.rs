@@ -1,5 +1,3 @@
-use thiserror::Error;
-
 const FLAG: u8 = 0x7E;
 const ESC: u8 = 0x7D;
 const ESC_XOR: u8 = 0x20;
@@ -16,13 +14,28 @@ pub struct QsFrame {
 }
 
 /// Errors produced while decoding QS HDLC frames.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
-    #[error("frame too short (len={0})")]
+    /// A candidate frame was shorter than the minimum valid length.
     FrameTooShort(usize),
-    #[error("checksum mismatch: expected {expected:#04x}, found {found:#04x}")]
+    /// The trailing checksum did not match the computed value.
     InvalidChecksum { expected: u8, found: u8 },
 }
+
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::FrameTooShort(len) => write!(f, "frame too short (len={})", len),
+            Self::InvalidChecksum { expected, found } => write!(
+                f,
+                "checksum mismatch: expected {:#04x}, found {:#04x}",
+                expected, found
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Incremental HDLC decoder that accepts arbitrary byte chunks and yields
 /// verified QS frames.
