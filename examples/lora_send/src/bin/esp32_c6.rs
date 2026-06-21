@@ -88,13 +88,18 @@ fn sending(sm: &mut LoRaSenderData, e: &DynEvent) -> QHsmResult<LoRaSenderData> 
 
 fn build_sx1262() -> Sx1262<Esp32C6Spi> {
     use hal::spi::SpiConfig;
+    use hal::gpio::PinMode;
     use hal_rvsis::esp32c6::regs::{SPI2_BASE, SpiRegs};
 
     let mut spi = unsafe { Esp32C6Spi::new(SPI2_BASE as *const SpiRegs) };
     spi.configure(&SpiConfig::default()).expect("SPI config failed");
 
-    let reset = unsafe { Esp32C6Pin::new(4) };
-    let busy  = unsafe { Esp32C6Pin::new(5) };
+    // Pins must be configured explicitly: the embedded-hal driver no longer
+    // sets pin direction (OutputPin/InputPin assume a pre-configured pin).
+    let mut reset = unsafe { Esp32C6Pin::new(4) };
+    reset.set_mode(PinMode::Output).expect("reset pin config failed");
+    let mut busy = unsafe { Esp32C6Pin::new(5) };
+    busy.set_mode(PinMode::Input).expect("busy pin config failed");
 
     Sx1262::with_busy(spi, reset, busy)
 }

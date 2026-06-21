@@ -1,7 +1,7 @@
 //! ESP32-S3 GPIO driver
 
-use hal::gpio::{GpioPin, Level, PinMode};
-use hal::error::HalResult;
+use hal::gpio::PinMode;
+use hal::error::{HalError, HalResult};
 use super::regs::gpio;
 
 /// ESP32-S3 GPIO Pin
@@ -20,15 +20,12 @@ impl Esp32S3Pin {
     pub unsafe fn new(pin: u8) -> Self {
         Self { pin }
     }
-}
 
-impl GpioPin for Esp32S3Pin {
-    fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
+    /// Configure the pin direction. Call before driving/reading the pin, since
+    /// embedded-hal pins are assumed pre-configured.
+    pub fn set_mode(&mut self, mode: PinMode) -> HalResult<()> {
         let pin = self.pin;
-        let is_output = match mode {
-            PinMode::Output | PinMode::OutputOpenDrain => true,
-            _ => false,
-        };
+        let is_output = matches!(mode, PinMode::Output | PinMode::OutputOpenDrain);
 
         if is_output {
             if pin < 32 {
@@ -36,49 +33,62 @@ impl GpioPin for Esp32S3Pin {
             } else {
                 gpio().enable1_w1ts.write(1 << (pin - 32));
             }
+        } else if pin < 32 {
+            gpio().enable_w1tc.write(1 << pin);
         } else {
-            if pin < 32 {
-                gpio().enable_w1tc.write(1 << pin);
-            } else {
-                gpio().enable1_w1tc.write(1 << (pin - 32));
-            }
+            gpio().enable1_w1tc.write(1 << (pin - 32));
         }
         Ok(())
     }
 
-    fn read(&self) -> HalResult<Level> {
+    /// Pin number on the port.
+    pub fn pin_number(&self) -> u32 {
+        self.pin as u32
+    }
+
+    fn is_set_high(&self) -> bool {
         let pin = self.pin;
         let val = if pin < 32 {
             (gpio().in_.read() >> pin) & 1
         } else {
             (gpio().in1.read() >> (pin - 32)) & 1
         };
-
-        Ok(if val != 0 { Level::High } else { Level::Low })
+        val != 0
     }
+}
 
-    fn write(&mut self, level: Level) -> HalResult<()> {
+impl embedded_hal::digital::ErrorType for Esp32S3Pin {
+    type Error = HalError;
+}
+
+impl embedded_hal::digital::OutputPin for Esp32S3Pin {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
         let pin = self.pin;
-        match level {
-            Level::High => {
-                if pin < 32 {
-                    gpio().out_w1ts.write(1 << pin);
-                } else {
-                    gpio().out1_w1ts.write(1 << (pin - 32));
-                }
-            }
-            Level::Low => {
-                if pin < 32 {
-                    gpio().out_w1tc.write(1 << pin);
-                } else {
-                    gpio().out1_w1tc.write(1 << (pin - 32));
-                }
-            }
+        if pin < 32 {
+            gpio().out_w1ts.write(1 << pin);
+        } else {
+            gpio().out1_w1ts.write(1 << (pin - 32));
         }
         Ok(())
     }
 
-    fn pin_number(&self) -> u32 {
-        self.pin as u32
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        let pin = self.pin;
+        if pin < 32 {
+            gpio().out_w1tc.write(1 << pin);
+        } else {
+            gpio().out1_w1tc.write(1 << (pin - 32));
+        }
+        Ok(())
+    }
+}
+
+impl embedded_hal::digital::InputPin for Esp32S3Pin {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.is_set_high())
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.is_set_high())
     }
 }
