@@ -234,9 +234,13 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     /// Builds the full frame (transport + network + MAC), snapshots the post-MAC
     /// bytes for potential retransmit, then hands the frame to the PHY.
     fn handle_tx_req(&mut self, _ctx: &mut ActiveContext, event: &DynEvent) {
-        if self.state != AoState::Idle {
-            // Stack is busy — drop the request.  Application must wait for
-            // RF_TX_DONE_SIG or RF_TX_FAIL_SIG before queuing another TX.
+        if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
+            // A TX is already in flight (or awaiting its ACK) — drop the request.
+            // The application must wait for RF_TX_DONE_SIG / RF_TX_FAIL_SIG before
+            // queuing another TX. From an RX/listen state, however, a TX request
+            // pre-empts the receive window: a half-duplex node (e.g. a
+            // receive-first MC, which spends its idle time in `Listening`) must
+            // be able to transmit its reply without first leaving RX.
             return;
         }
         let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() else { return };
@@ -396,6 +400,28 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         // Generic DIO fallback — no specific action; individual signals
         // (TX_DONE, RX_DONE, RX_TIMEOUT, CRC_ERROR) are dispatched directly.
     }
+
+    /// Arm continuous receive without a preceding TX (`RF_RX_START_SIG`).
+    ///
+    /// The Class-A flow only opens an RX window *after* a TX completes
+    /// ([`handle_tx_done`](Self::handle_tx_done)), so a node that must receive
+    /// before it ever transmits — e.g. an MC listening for a sensor's
+    /// `PairRequest` / telemetry — would otherwise stay in `Standby` forever.
+    /// A receive-first role posts `RF_RX_START_SIG` to enter (and, after each
+    /// frame returns the AO to `Idle`, re-enter) continuous RX.
+    ///
+    /// Only acts from `Idle` so it never disturbs an in-flight TX or an open
+    /// post-TX RX window; it is therefore safe to drive unconditionally from a
+    /// cooperative poll loop.
+    fn handle_rx_start(&mut self) {
+        if self.state != AoState::Idle {
+            return;
+        }
+        let _ = self.stack.phy.configure_rx(&self.rx_cfg);
+        if self.stack.phy.set_mode(RadioMode::Rx { timeout_ms: None }).is_ok() {
+            self.state = AoState::Listening;
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -471,6 +497,7 @@ impl<T: Layer + 'static, N: Layer + 'static, M: Layer + 'static, P: RfPhy + 'sta
     fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent) {
         match event.signal() {
             RF_TX_REQ_SIG            => self.handle_tx_req(ctx, &event),
+            RF_RX_START_SIG          => self.handle_rx_start(),
             RF_PHY_IRQ_SIG           => self.handle_phy_irq(ctx, &event),
             RF_PHY_RX_DONE_SIG       => self.handle_rx_done(ctx, &event),
             RF_PHY_TX_DONE_SIG       => self.handle_tx_done(),
@@ -607,5 +634,77 @@ mod tests {
             assert!(out.is_some());
             assert_eq!(out.unwrap().payload(), b"loopback test");
         }
+    }
+
+    // ── RfStackAO: receive-first (RF_RX_START) + TX from a listen state ───────
+
+    /// A receive-first node (e.g. the SWM MC) must be able to arm RX without a
+    /// preceding TX (`RF_RX_START_SIG`) and then transmit its reply straight
+    /// out of the `Listening` state. Drive a real `RfStackAO` through a kernel:
+    /// post `RF_RX_START`, then `RF_TX_REQ`; the loopback PHY echoes the TX, and
+    /// `pump` must deliver it back to the app AO — proving the TX was *not*
+    /// dropped while listening.
+    #[test]
+    fn ao_listens_then_transmits_from_listen_state() {
+        use crate::events::{RfTxReqPayload, RfRxFramePayload, RF_RX_FRAME_SIG, RF_RX_START_SIG};
+        use qf::active::{arc_as_runnable, ActiveObject, ActiveObjectId, ActiveBehavior, ActiveContext};
+        use qf::kernel::Kernel;
+        use alloc::sync::Arc;
+
+        struct CaptureAo {
+            rx: Vec<Vec<u8>>,
+        }
+        impl ActiveBehavior for CaptureAo {
+            fn on_start(&mut self, _c: &mut ActiveContext) {}
+            fn on_event(&mut self, _c: &mut ActiveContext, e: DynEvent) {
+                if e.signal() == RF_RX_FRAME_SIG {
+                    if let Some(p) = e.payload.as_ref().downcast_ref::<RfRxFramePayload>() {
+                        self.rx.push(p.data.iter().copied().collect());
+                    }
+                }
+            }
+        }
+
+        let tx_cfg = RfTxConfig {
+            frequency_hz: 868_100_000,
+            tx_power_dbm: 14,
+            params: hal::rf::RadioParams::LoRa(hal::lora::LoRaModulation::default()),
+        };
+        let rx_cfg = RfRxConfig {
+            frequency_hz: 868_100_000,
+            timeout_ms: None,
+            params: hal::rf::RadioParams::LoRa(hal::lora::LoRaModulation::default()),
+        };
+        let stack = RfStack::new(UnreliableTransport::new(), NoopNetwork, NoopMac, LoopbackPhy::new());
+
+        let capture = ActiveObject::new(ActiveObjectId(0), 1, CaptureAo { rx: Vec::new() });
+        let ao = ActiveObject::new(
+            ActiveObjectId(2),
+            2,
+            RfStackAO::new(stack, tx_cfg, rx_cfg, arc_as_runnable(Arc::clone(&capture))),
+        );
+
+        let kernel = Kernel::builder()
+            .register(arc_as_runnable(Arc::clone(&ao)))
+            .register(arc_as_runnable(Arc::clone(&capture)))
+            .build();
+        kernel.start();
+
+        // Arm RX without any TX (receive-first), then queue a reply.
+        arc_as_runnable(Arc::clone(&ao)).post(DynEvent::empty_dyn(RF_RX_START_SIG));
+        kernel.dispatch_once(); // RF AO: RF_RX_START -> Listening
+        let frame = vec![0xA5_u8, 0x5A, 0x10, 0x20];
+        arc_as_runnable(Arc::clone(&ao))
+            .post(DynEvent::with_arc(RF_TX_REQ_SIG, Arc::new(RfTxReqPayload::new(frame.clone(), 1))));
+        kernel.dispatch_once(); // RF AO: TX from Listening (loopback echoes)
+        // Drain the looped RxDone and let the app AO record it.
+        let mut ctx = ActiveContext::new(ActiveObjectId(2), None);
+        assert!(ao.with_behavior_mut(|rf| rf.pump(&mut ctx)), "pump should dispatch the echo");
+        kernel.dispatch_once();
+
+        capture.with_behavior(|c| {
+            assert_eq!(c.rx.len(), 1, "TX from Listening must not be dropped");
+            assert_eq!(c.rx[0], frame, "looped frame must round-trip byte-identical");
+        });
     }
 }
