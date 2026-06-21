@@ -25,13 +25,13 @@ impl<D: RfPhy + Send + 'static> ActiveBehavior for CommsAO<D> {
     fn on_start(&mut self, ctx: &mut ActiveContext) {
         self.rf.set_trace_hook(ctx.trace_hook());
 
-        println!("CommsAO: initialising RF ({})", self.rf.chip_name());
+        cprintln!("CommsAO: initialising RF ({})", self.rf.chip_name());
         match self.rf.init() {
             Ok(()) => {
                 self.initialized = true;
-                println!("CommsAO: RF ready");
+                cprintln!("CommsAO: RF ready");
             }
-            Err(e) => eprintln!("CommsAO: RF init failed: {e}"),
+            Err(e) => ceprintln!("CommsAO: RF init failed: {e}"),
         }
     }
 
@@ -39,17 +39,17 @@ impl<D: RfPhy + Send + 'static> ActiveBehavior for CommsAO<D> {
         match event.signal() {
             RF_TX_REQ_SIG => {
                 if !self.initialized {
-                    eprintln!("CommsAO: RF not initialised, dropping TX request");
+                    ceprintln!("CommsAO: RF not initialised, dropping TX request");
                     return;
                 }
                 if let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() {
                     match self.rf.send_with_fport(&req.data, req.fport) {
-                        Ok(()) => println!(
+                        Ok(()) => cprintln!(
                             "CommsAO: TX ok via {}, FCnt={}",
                             self.rf.chip_name(),
                             self.rf.session().fcnt_up,
                         ),
-                        Err(e) => eprintln!("CommsAO: TX failed: {e}"),
+                        Err(e) => ceprintln!("CommsAO: TX failed: {e}"),
                     }
                 }
             }

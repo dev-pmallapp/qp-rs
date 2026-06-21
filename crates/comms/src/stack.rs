@@ -1,5 +1,6 @@
 //! RF stack composition and Active Object runner.
 
+use alloc::sync::Arc;
 use crate::buf::Frame;
 use crate::error::CommsError;
 use hal::rf::{RfPhy, RfTxConfig, RfRxConfig, RadioMode};
@@ -79,7 +80,7 @@ where
     stack:             RfStack<T, N, M, P>,
     tx_cfg:            RfTxConfig,
     rx_cfg:            RfRxConfig,
-    retransmit_timer:  Option<std::sync::Arc<TimeEvent>>,
+    retransmit_timer:  Option<Arc<TimeEvent>>,
     rx_frame:          Frame,
     state:             AoState,
     app_ao:            ActiveObjectRef,
@@ -111,7 +112,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
 
     fn do_retransmit(&mut self, frame: Frame) {
         if let Err(e) = self.stack.phy.transmit(frame.phy_bytes()) {
-            eprintln!("RfStackAO: Retransmit failed: {e}");
+            ceprintln!("RfStackAO: Retransmit failed: {e}");
         }
     }
 
@@ -126,7 +127,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 }
             }
             Err(e) => {
-                eprintln!("RfStackAO: TX failed: {e}");
+                ceprintln!("RfStackAO: TX failed: {e}");
             }
         }
     }
@@ -163,13 +164,13 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                         rssi: meta.rssi_dbm,
                         snr: meta.snr_db_x10,
                     };
-                    self.app_ao.post(DynEvent::with_arc(rx_sig, std::sync::Arc::new(pld)));
+                    self.app_ao.post(DynEvent::with_arc(rx_sig, Arc::new(pld)));
                 }
                 let _ = ctx.emit_trace(crate::records::RF_NET_ROUTE, &[meta.rssi_dbm as u8]);
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("RfStackAO: RX stack error: {e}");
+                ceprintln!("RfStackAO: RX stack error: {e}");
             }
         }
         self.state = AoState::Idle;

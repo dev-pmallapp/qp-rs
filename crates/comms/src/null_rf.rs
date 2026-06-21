@@ -20,13 +20,13 @@ impl RfDriver for NullRf {
     fn init(&mut self) -> Result<(), HalError> { Ok(()) }
 
     fn transmit(&mut self, cfg: &LoRaTxConfig, payload: &[u8]) -> Result<(), HalError> {
-        print!("NullRf TX {:.3} MHz SF{} {} B: ",
+        cprint!("NullRf TX {:.3} MHz SF{} {} B: ",
             cfg.channel.frequency_hz as f32 / 1_000_000.0,
             cfg.modulation.sf as u8,
             payload.len(),
         );
-        for b in payload { print!("{b:02x} "); }
-        println!();
+        for b in payload { cprint!("{b:02x} "); }
+        cprintln!();
         Ok(())
     }
 }
@@ -37,9 +37,9 @@ impl RfPhy for NullRf {
     fn configure_tx(&mut self, _cfg: &RfTxConfig) -> Result<(), HalError> { Ok(()) }
     fn configure_rx(&mut self, _cfg: &RfRxConfig) -> Result<(), HalError> { Ok(()) }
     fn transmit(&mut self, payload: &[u8]) -> Result<(), HalError> {
-        print!("NullRf TX: ");
-        for b in payload { print!("{b:02x} "); }
-        println!();
+        cprint!("NullRf TX: ");
+        for b in payload { cprint!("{b:02x} "); }
+        cprintln!();
         Ok(())
     }
     fn read_rx(&mut self, _buf: &mut [u8], _meta: &RxMetadata) -> Result<(), HalError> { Ok(()) }

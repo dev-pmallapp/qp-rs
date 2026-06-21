@@ -1,6 +1,7 @@
 //! Loopback PHY driver for host-based testing.
 
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 use hal::rf::{RfPhy, RadioMode, RfTxConfig, RfRxConfig, RxMetadata, PhyEvent};
 use hal::error::HalResult;
 

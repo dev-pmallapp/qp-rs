@@ -78,7 +78,7 @@ syntax, so you never enable a feature on a crate that isn't part of your build.
 | `qs`     | Enables QS tracing; propagates to `qf`, `qk`, and `comms`.             |
 | `qk`     | Pulls in the preemptive single-stack kernel (`qp_rs::qk`).             |
 | `qxk`    | Pulls in the dual-mode kernel (`qp_rs::qxk`); implies `qk`.            |
-| `comms`  | Pulls in the LoRa/LoRaWAN + FOTA middleware (`qp_rs::comms`). Requires `std` today. |
+| `comms`  | Pulls in the LoRa/LoRaWAN + FOTA middleware (`qp_rs::comms`). `no_std` + `alloc`. |
 | `hal`    | Re-exports the framework-agnostic peripheral traits (`qp_rs::hal`, embedded-hal based). `no_std`-ready. |
 
 The platform/port contract (`qp_rs::port`: `Runtime`, `TraceSink`,
@@ -119,9 +119,9 @@ qp-rs = { path = "vendor/qp-rs/crates/qp-rs",
 ```
 
 > **`no_std`:** Build with `default-features = false` and omit `std`. The facade applies
-> `#![no_std]` automatically when the `std` feature is off, and all kernel/tracing
-> features are verified to compile in that mode. The `comms` feature currently
-> requires `std`; the `hal` traits are `no_std`-ready.
+> `#![no_std]` automatically when the `std` feature is off, and all features —
+> including `comms` (which is `no_std` + `alloc`) and the `hal` traits — are verified
+> to compile in that mode (e.g. for `thumbv7em-none-eabi`).
 
 ## Writing portable applications (the `port` contract)
 

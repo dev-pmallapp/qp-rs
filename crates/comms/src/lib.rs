@@ -1,6 +1,17 @@
 //! Comms — communication middleware for QP-RS.
 //!
 //! Provides a layered, radio-agnostic protocol stack composed at compile time.
+//!
+//! The crate is `no_std` + `alloc`: it builds for bare-metal targets when the
+//! default `std` feature is disabled. Debug logging falls back to no-ops on
+//! `no_std` (see the internal `log` macros).
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+#[macro_use]
+mod log;
 
 pub mod buf;
 pub mod error;
