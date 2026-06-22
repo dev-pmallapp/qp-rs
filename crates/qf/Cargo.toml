@@ -10,12 +10,16 @@ license = "MIT OR Apache-2.0"
 spin = { version = "0.9" }
 serde = { version = "1", features = ["derive"], optional = true }
 qs = { path = "../qs", default-features = false, optional = true }
+heapless = { version = "0.8", default-features = false, optional = true }
 
 [features]
 default = ["std", "qs"]
 std = ["qs?/std"]
 qs = ["dep:qs"]
 serde = ["dep:serde"]
+# Heap-free static-allocation primitives for the functional-safety build
+# (see docs/FUSA.md, Phase 2). Pulls in fixed-capacity, inline-storage types.
+static-alloc = ["dep:heapless"]
 
 [dev-dependencies]
 once_cell = "1"

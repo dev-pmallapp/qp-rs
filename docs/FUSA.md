@@ -88,9 +88,16 @@ immediately improves diagnosability. **Phase 1 complete.***
 
 Goal: a `no_std + static-alloc` build that links **zero heap**.
 
-- [ ] `static-alloc` cargo feature across `qf`/`qk`/`qxk`.
-- [ ] Fixed-capacity event queue (ring buffer over `QMPool` / `heapless`) as a
-      drop-in alternative to `VecDeque` in `equeue.rs`.
+- [x] `static-alloc` cargo feature across `qf`/`qk`/`qxk` (pulls in optional
+      `heapless`; off by default so the dynamic host/test path is unchanged).
+- [x] Fixed-capacity, heap-free event queue primitive — `qf::equeue::StaticEQueue<N>`
+      (inline `heapless::Deque`, `const fn new` for `static` placement, margin
+      + sticky low-water-mark, dogfoods `fusa::on_error` for the never-full
+      invariant). *Introduced as a parallel primitive; the in-place swap of the
+      per-AO `VecDeque` is deferred to avoid forcing const generics through the
+      whole kernel API in one step.*
+- [ ] Swap the per-AO `EventQueue` and `QEQueue` storage over to `StaticEQueue`
+      under the feature (the const-generic API ripple).
 - [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
       adopting QP's `QEvt` header model (pool id + ref count in the event).
 - [ ] Convert pub/sub (`pubsub.rs`) and the timer wheel (`time.rs`) to

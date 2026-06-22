@@ -1693,6 +1693,7 @@ dependencies = [
 name = "qf"
 version = "8.1.4"
 dependencies = [
+ "heapless 0.8.0",
  "once_cell",
  "qs",
  "serde",

@@ -31,6 +31,8 @@ mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef, QActive, Q};
 pub use equeue::{defer, flush_deferred, recall, QEQueue};
+#[cfg(feature = "static-alloc")]
+pub use equeue::StaticEQueue;
 pub use event::{Event, EventHeader, Signal};
 pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
 pub use fusa::{clear_error_handler, on_error, set_error_handler, ErrorHandler};

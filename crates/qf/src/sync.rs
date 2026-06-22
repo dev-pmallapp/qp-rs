@@ -28,7 +28,11 @@ pub struct Mutex<T> {
 
 impl<T> Mutex<T> {
     /// Creates a new mutex protecting the given value.
-    pub fn new(value: T) -> Self {
+    ///
+    /// `const` so that mutex-protected primitives (e.g. the `static-alloc`
+    /// event queues) can be placed in `static` storage with no runtime
+    /// initialisation or heap.
+    pub const fn new(value: T) -> Self {
         Self {
             #[cfg(feature = "std")]
             inner: std::sync::Mutex::new(value),
