@@ -3,10 +3,10 @@
 //! Active objects encapsulate state machines with event queues and execute in
 //! priority order under the control of the QP kernel.
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "static-alloc")))]
 use std::collections::VecDeque;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 use alloc::collections::VecDeque;
 
 use crate::sync::{Arc, Mutex};
@@ -95,21 +95,41 @@ pub trait ActiveRunnable: Send + Sync {
     fn has_events(&self) -> bool;
 }
 
+/// Default per-active-object queue capacity for the `static-alloc` (heap-free)
+/// build.
+///
+/// Every active object's queue shares this fixed inline capacity — size it for
+/// the deepest queue in the system. Overflowing it is a functional-safety fault
+/// (the queue was undersized for the worst case), routed through
+/// [`fusa::on_error`](crate::fusa::on_error), mirroring QP/C's queue-overflow
+/// assertion. The dynamic (default) build keeps an unbounded `VecDeque` and has
+/// no such limit.
+#[cfg(feature = "static-alloc")]
+pub const AO_QUEUE_CAPACITY: usize = 16;
+
+#[cfg(not(feature = "static-alloc"))]
+type EventBuf = VecDeque<DynEvent>;
+#[cfg(feature = "static-alloc")]
+type EventBuf = heapless::Deque<DynEvent, AO_QUEUE_CAPACITY>;
+
 /// Event queue with an occupancy high-water mark.
 ///
-/// The active-object queue is unbounded, so QP/C++'s `QActive::getQueueMin()`
-/// (minimum free slots) has no fixed-capacity analog. Instead we track the
-/// maximum number of events ever queued simultaneously, which is the meaningful
-/// portable metric for sizing a bounded queue on a constrained target.
+/// Tracks the maximum number of events ever queued simultaneously — the
+/// meaningful portable metric for sizing a bounded queue on a constrained
+/// target. Under the `static-alloc` feature the storage is a fixed-capacity,
+/// heap-free [`heapless::Deque`]; otherwise it is an unbounded `VecDeque`.
 struct EventQueue {
-    buf: VecDeque<DynEvent>,
+    buf: EventBuf,
     high_watermark: usize,
 }
 
 impl EventQueue {
     fn new() -> Self {
         Self {
+            #[cfg(not(feature = "static-alloc"))]
             buf: VecDeque::new(),
+            #[cfg(feature = "static-alloc")]
+            buf: heapless::Deque::new(),
             high_watermark: 0,
         }
     }
@@ -119,6 +139,45 @@ impl EventQueue {
         if self.buf.len() > self.high_watermark {
             self.high_watermark = self.buf.len();
         }
+    }
+
+    /// Enqueue FIFO. Updates the watermark. Faults on overflow under
+    /// `static-alloc`.
+    fn push_back(&mut self, event: DynEvent) {
+        #[cfg(not(feature = "static-alloc"))]
+        self.buf.push_back(event);
+        #[cfg(feature = "static-alloc")]
+        if self.buf.push_back(event).is_err() {
+            crate::fusa::on_error(module_path!(), line!());
+        }
+        self.touch_watermark();
+    }
+
+    /// Enqueue LIFO (front). Updates the watermark. Faults on overflow under
+    /// `static-alloc`.
+    fn push_front(&mut self, event: DynEvent) {
+        #[cfg(not(feature = "static-alloc"))]
+        self.buf.push_front(event);
+        #[cfg(feature = "static-alloc")]
+        if self.buf.push_front(event).is_err() {
+            crate::fusa::on_error(module_path!(), line!());
+        }
+        self.touch_watermark();
+    }
+
+    #[inline]
+    fn pop_front(&mut self) -> Option<DynEvent> {
+        self.buf.pop_front()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.buf.is_empty()
     }
 }
 
@@ -161,12 +220,12 @@ impl<B: ActiveBehavior> ActiveObject<B> {
 
     fn pop_event(&self) -> Option<DynEvent> {
         let mut queue = self.queue.lock();
-        queue.buf.pop_front()
+        queue.pop_front()
     }
 
     /// Number of events currently waiting in this active object's queue.
     pub fn queue_len(&self) -> usize {
-        self.queue.lock().buf.len()
+        self.queue.lock().len()
     }
 
     /// Maximum number of events ever queued simultaneously (occupancy
@@ -222,19 +281,15 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 
     fn post(&self, event: DynEvent) {
-        let mut queue = self.queue.lock();
-        queue.buf.push_back(event);
-        queue.touch_watermark();
+        self.queue.lock().push_back(event);
     }
 
     fn post_lifo(&self, event: DynEvent) {
-        let mut queue = self.queue.lock();
-        queue.buf.push_front(event);
-        queue.touch_watermark();
+        self.queue.lock().push_front(event);
     }
 
     fn has_events(&self) -> bool {
-        !self.queue.lock().buf.is_empty()
+        !self.queue.lock().is_empty()
     }
 }
 

@@ -96,8 +96,14 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       invariant). *Introduced as a parallel primitive; the in-place swap of the
       per-AO `VecDeque` is deferred to avoid forcing const generics through the
       whole kernel API in one step.*
-- [ ] Swap the per-AO `EventQueue` and `QEQueue` storage over to `StaticEQueue`
-      under the feature (the const-generic API ripple).
+- [x] Swap the per-AO `EventQueue` and `QEQueue` storage to heap-free inline
+      `heapless::Deque` under the feature. Done without leaking const generics
+      into the kernel API by using a uniform compile-time capacity
+      (`active::AO_QUEUE_CAPACITY`, `equeue::QEQUEUE_CAPACITY`, both 16) and a
+      feature-gated backend swap, so `ActiveObject<B>` and `QEQueue::new` keep
+      their signatures. Queue overflow → `fusa::on_error` (size your queues),
+      matching QP/C. *Known limitation: per-AO queue sizing is uniform for now;
+      individual sizing is a later refinement.*
 - [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
       adopting QP's `QEvt` header model (pool id + ref count in the event).
 - [ ] Convert pub/sub (`pubsub.rs`) and the timer wheel (`time.rs`) to

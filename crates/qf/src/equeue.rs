@@ -26,9 +26,9 @@
 //! }
 //! ```
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 use alloc::collections::VecDeque;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "static-alloc")))]
 use std::collections::VecDeque;
 
 use crate::active::ActiveRunnable;
@@ -37,8 +37,17 @@ use crate::sync::Mutex;
 
 // ── QEQueue ───────────────────────────────────────────────────────────────────
 
+/// Inline storage capacity for [`QEQueue`] under the `static-alloc` (heap-free)
+/// build. The runtime `capacity` passed to [`QEQueue::new`] is the *logical*
+/// limit and must not exceed this fixed inline bound.
+#[cfg(feature = "static-alloc")]
+pub const QEQUEUE_CAPACITY: usize = 16;
+
 struct QEQueueInner {
+    #[cfg(not(feature = "static-alloc"))]
     buffer: VecDeque<DynEvent>,
+    #[cfg(feature = "static-alloc")]
+    buffer: heapless::Deque<DynEvent, QEQUEUE_CAPACITY>,
     capacity: usize,
     min_free: usize,
 }
@@ -62,10 +71,21 @@ pub struct QEQueue {
 
 impl QEQueue {
     /// Create a new queue that holds at most `capacity` events.
+    ///
+    /// Under `static-alloc`, `capacity` is the logical limit over fixed inline
+    /// storage and must not exceed [`QEQUEUE_CAPACITY`]; a larger request is a
+    /// configuration fault.
     pub fn new(capacity: usize) -> Self {
+        #[cfg(feature = "static-alloc")]
+        if capacity > QEQUEUE_CAPACITY {
+            crate::fusa::on_error(module_path!(), line!());
+        }
         Self {
             inner: Mutex::new(QEQueueInner {
+                #[cfg(not(feature = "static-alloc"))]
                 buffer: VecDeque::with_capacity(capacity),
+                #[cfg(feature = "static-alloc")]
+                buffer: heapless::Deque::new(),
                 capacity,
                 min_free: capacity,
             }),
@@ -79,7 +99,14 @@ impl QEQueue {
         let mut inner = self.inner.lock();
         let free = inner.capacity.saturating_sub(inner.buffer.len());
         if free > margin {
+            #[cfg(not(feature = "static-alloc"))]
             inner.buffer.push_back(event);
+            // `free > margin >= 0` and `capacity <= QEQUEUE_CAPACITY`, so a free
+            // inline slot is guaranteed — a push failure is an integrity fault.
+            #[cfg(feature = "static-alloc")]
+            if inner.buffer.push_back(event).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
             inner.update_watermark();
             true
         } else {
@@ -91,7 +118,12 @@ impl QEQueue {
     pub fn post_lifo(&self, event: DynEvent) -> bool {
         let mut inner = self.inner.lock();
         if inner.buffer.len() < inner.capacity {
+            #[cfg(not(feature = "static-alloc"))]
             inner.buffer.push_front(event);
+            #[cfg(feature = "static-alloc")]
+            if inner.buffer.push_front(event).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
             inner.update_watermark();
             true
         } else {
