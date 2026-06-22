@@ -1,6 +1,6 @@
 [package]
 name = "qf-port-esp32-s3"
-version = "8.1.1"
+version = "8.1.4"
 edition = "2021"
 authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
 description = "ESP32-S3 hardware port for the Quantum Platform kernels"

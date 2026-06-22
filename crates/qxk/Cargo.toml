@@ -1,6 +1,6 @@
 [package]
 name = "qxk"
-version = "8.1.1"
+version = "8.1.4"
 edition = "2021"
 authors = ["Prem Mallappa <prem.mallappa@gmail.com>"]
 description = "Dual-mode preemptive kernel for the Quantum Platform (Rust port of QXK)"

@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "dpp"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "critical-section",
  "embuild",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "qf"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "once_cell",
  "qs",
@@ -1701,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-cortex-m"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "comms",
  "hal-cmsis",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-esp32-c6"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "comms",
  "critical-section",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-esp32-s3"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "critical-section",
  "hal",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-posix"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "qf",
  "qk",
@@ -1747,7 +1747,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-riscv"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "hal-rvsis",
  "qf",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "qf-port-xtensa"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "hal-lxsis",
  "qf",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "qk"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "qf",
  "qs",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "qp-rs"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "comms",
  "hal",
@@ -1790,14 +1790,14 @@ dependencies = [
 
 [[package]]
 name = "qs"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "spin",
 ]
 
 [[package]]
 name = "qspy"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "clap",
  "libc",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "qxk"
-version = "8.1.1"
+version = "8.1.4"
 dependencies = [
  "qf",
  "qs",
