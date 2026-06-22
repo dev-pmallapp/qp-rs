@@ -1,5 +1,6 @@
 //! Time event services (SRS §3.5).
 
+#[cfg(not(feature = "static-alloc"))]
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -242,10 +243,31 @@ impl TimeEvent {
     }
 }
 
+/// Maximum number of tick-rate domains in the heap-free `static-alloc` wheel.
+#[cfg(feature = "static-alloc")]
+pub const MAX_TICK_RATES: usize = 4;
+/// Maximum number of time events registered per tick-rate domain in the
+/// heap-free `static-alloc` wheel. Exceeding it is a configuration fault.
+#[cfg(feature = "static-alloc")]
+pub const MAX_TIMERS_PER_RATE: usize = 32;
+
+#[cfg(not(feature = "static-alloc"))]
+type RateBucket = Vec<Arc<TimeEvent>>;
+#[cfg(feature = "static-alloc")]
+type RateBucket = heapless::Vec<Arc<TimeEvent>, MAX_TIMERS_PER_RATE>;
+
+#[cfg(not(feature = "static-alloc"))]
+type WheelEvents = Vec<RateBucket>;
+#[cfg(feature = "static-alloc")]
+type WheelEvents = heapless::Vec<RateBucket, MAX_TICK_RATES>;
+
 /// Cooperative timer wheel that calls into the kernel every tick.
+///
+/// Under `static-alloc` the per-rate buckets are fixed-capacity, heap-free
+/// [`heapless::Vec`]s; otherwise they grow dynamically.
 pub struct TimerWheel {
     kernel: Arc<Kernel>,
-    events: Vec<Vec<Arc<TimeEvent>>>,
+    events: WheelEvents,
     trace: Option<TraceHook>,
 }
 
@@ -254,10 +276,29 @@ impl TimerWheel {
     pub fn new(kernel: Arc<Kernel>) -> Self {
         let trace = kernel.trace_hook();
         let max_rate = kernel.config().max_tick_rate as usize;
-        let mut events = Vec::with_capacity(max_rate);
-        for _ in 0..max_rate.max(1) {
-            events.push(Vec::new());
-        }
+        #[cfg(not(feature = "static-alloc"))]
+        let events = {
+            let mut events = Vec::with_capacity(max_rate);
+            for _ in 0..max_rate.max(1) {
+                events.push(Vec::new());
+            }
+            events
+        };
+        #[cfg(feature = "static-alloc")]
+        let events = {
+            if max_rate > MAX_TICK_RATES {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+            // Pre-create all MAX_TICK_RATES buckets so indexing by rate is
+            // always valid; unused rates simply stay empty.
+            let mut events: WheelEvents = heapless::Vec::new();
+            for _ in 0..MAX_TICK_RATES {
+                if events.push(RateBucket::new()).is_err() {
+                    crate::fusa::on_error(module_path!(), line!());
+                }
+            }
+            events
+        };
         Self {
             kernel,
             events,
@@ -269,6 +310,16 @@ impl TimerWheel {
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
         let rate = event.tick_rate() as usize;
+        #[cfg(feature = "static-alloc")]
+        {
+            if rate >= self.events.len() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+            if self.events[rate].push(event).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+        }
+        #[cfg(not(feature = "static-alloc"))]
         if rate < self.events.len() {
             self.events[rate].push(event);
         } else {

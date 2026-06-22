@@ -106,9 +106,18 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       individual sizing is a later refinement.*
 - [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
       adopting QP's `QEvt` header model (pool id + ref count in the event).
-- [ ] Convert pub/sub (`pubsub.rs`) and the timer wheel (`time.rs`) to
-      fixed-capacity `heapless` containers under the feature.
-- [ ] Verify with a build that has **no global allocator** linked.
+- [x] Convert pub/sub and the timer wheels to fixed-capacity `heapless`
+      containers under the feature: `PubSubTable` (`PUBSUB_MAX_SIGNALS = 256`),
+      `qf::TimerWheel` and `qk::QkTimerWheel` (`MAX_TICK_RATES = 4`,
+      `MAX_TIMERS_PER_RATE = 32`). Over-capacity registration → `fusa::on_error`.
+      *(The registered `TimeEvent`s and `DynEvent` payloads are still `Arc`-backed
+      — that heap goes away with the `QEvt` item below; this removes the
+      container/`Vec` heap.)*
+- [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
+      adopting QP's `QEvt` header model (pool id + ref count in the event) —
+      the last heap user on the event/time-event path.
+- [ ] Verify with a build that has **no global allocator** linked (only
+      meaningful once the `QEvt`/`Arc` work above is done).
 
 ### Phase 3 — Error-detecting codes
 

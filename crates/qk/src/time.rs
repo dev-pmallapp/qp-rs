@@ -1,17 +1,33 @@
+#[cfg(any(not(feature = "static-alloc"), test))]
 use alloc::vec::Vec;
 use core::fmt;
 
 use qf::time::TimeEvent;
+#[cfg(feature = "static-alloc")]
+use qf::time::{MAX_TICK_RATES, MAX_TIMERS_PER_RATE};
 use qf::TraceHook;
 
 use crate::kernel::{QkKernel, QkKernelError};
 use crate::sync::Arc;
 
+#[cfg(not(feature = "static-alloc"))]
+type RateBucket = Vec<Arc<TimeEvent>>;
+#[cfg(feature = "static-alloc")]
+type RateBucket = heapless::Vec<Arc<TimeEvent>, MAX_TIMERS_PER_RATE>;
+
+#[cfg(not(feature = "static-alloc"))]
+type WheelEvents = Vec<RateBucket>;
+#[cfg(feature = "static-alloc")]
+type WheelEvents = heapless::Vec<RateBucket, MAX_TICK_RATES>;
+
 /// Timer wheel that polls registered [`TimeEvent`]s and posts expired events to
 /// their target active objects through the [`QkKernel`].
+///
+/// Under `static-alloc` the per-rate buckets are fixed-capacity, heap-free
+/// [`heapless::Vec`]s; otherwise they grow dynamically.
 pub struct QkTimerWheel {
     kernel: Arc<QkKernel>,
-    events: Vec<Vec<Arc<TimeEvent>>>,
+    events: WheelEvents,
     trace: Option<TraceHook>,
 }
 
@@ -20,10 +36,26 @@ impl QkTimerWheel {
     pub fn new(kernel: Arc<QkKernel>) -> Self {
         let trace = kernel.trace_hook();
         // Fallback size to 1 if no registered tick rates, or use standard count
-        let mut events = Vec::with_capacity(4);
-        for _ in 0..4 {
-            events.push(Vec::new());
-        }
+        #[cfg(not(feature = "static-alloc"))]
+        let events = {
+            let mut events = Vec::with_capacity(4);
+            for _ in 0..4 {
+                events.push(Vec::new());
+            }
+            events
+        };
+        #[cfg(feature = "static-alloc")]
+        let events = {
+            // Pre-create all MAX_TICK_RATES buckets so indexing by rate is
+            // always valid; unused rates simply stay empty.
+            let mut events: WheelEvents = heapless::Vec::new();
+            for _ in 0..MAX_TICK_RATES {
+                if events.push(RateBucket::new()).is_err() {
+                    qf::fusa::on_error(module_path!(), line!());
+                }
+            }
+            events
+        };
         Self {
             kernel,
             events,
@@ -35,6 +67,16 @@ impl QkTimerWheel {
     pub fn register(&mut self, event: Arc<TimeEvent>) {
         event.set_trace(self.trace.clone());
         let rate = event.tick_rate() as usize;
+        #[cfg(feature = "static-alloc")]
+        {
+            if rate >= self.events.len() {
+                qf::fusa::on_error(module_path!(), line!());
+            }
+            if self.events[rate].push(event).is_err() {
+                qf::fusa::on_error(module_path!(), line!());
+            }
+        }
+        #[cfg(not(feature = "static-alloc"))]
         if rate < self.events.len() {
             self.events[rate].push(event);
         } else {
