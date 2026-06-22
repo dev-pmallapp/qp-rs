@@ -45,8 +45,8 @@ codes.
 | Semi-formal HFSM | ✅ `qf::hsm`, `qf::qmsm`, `q_tran!`/`qm_*` macros | Foundation in place |
 | Static block pool | ✅ `qf::pool::QMPool` (O(1), `&'static mut` storage) | Present, not used everywhere |
 | **Static allocation only** | ❌ `Arc`, `Box`, `Vec`, `VecDeque` across `active.rs`, `equeue.rs`, `time.rs`, `pubsub.rs`, `event.rs` | **Largest gap** |
-| Failure-assertion programming | ❌ No central asserts; scattered `unwrap()/expect()/panic!` (e.g. ~49 sites in `qk/kernel.rs`) | No fault model |
-| Crash-only fault handler (`Q_onError`) | ❌ None | Required |
+| Failure-assertion programming | ✅ `qf::fusa` macros (`q_require!`/`q_ensure!`/`q_invariant!`/`q_assert!`/`q_error!`); scattered `unwrap()/expect()` not yet migrated | Macros done; migration pending |
+| Crash-only fault handler (`Q_onError`) | ✅ `qf::fusa::on_error` + `set_error_handler` | Done; ports to install safe-stop handler |
 | Error-detecting codes (Duplicate Inverse Storage) | ❌ None | New work |
 | Event-queue safety margins | ⚠️ Counters exist; not formalized | Formalize |
 | Safe language subset | ⚠️ `no_std`-capable; `unsafe` in `pool.rs` not lint-bounded | Lint policy + qualified toolchain |
@@ -59,19 +59,24 @@ codes.
 
 The single highest-leverage change: give every failure one well-defined path.
 
-- [ ] Add a `qf::fusa` module with assertion macros that carry a module id +
+- [x] Add a `qf::fusa` module with assertion macros that carry a module id +
       line, mirroring QP/C's `Q_DEFINE_THIS_MODULE`:
   - `q_require!` — **precondition** (caller fault)
   - `q_ensure!` — **postcondition** (callee fault)
   - `q_invariant!` — **data-integrity** invariant
   - `q_assert!` — general assertion
-- [ ] Central `q_on_error(module: &str, id: u32) -> !` hook, overridable per
-      port, implementing the **crash-only** model: enter critical section,
-      emit a QS fault record, then halt/reset.
-  - `std` default: log + `panic!` (test-friendly).
-  - `no_std`/`hw`: emit QS frame, then `cortex_m::asm::udf()` / reset.
+  - `q_error!` — unconditional / unreachable-path fault
+
+  *Implemented in `crates/qf/src/fusa.rs`. Module id = `module_path!()`,
+  fault id = `line!()` by default (explicit id form also provided). Assertions
+  are always-on (not gated on debug).*
+- [x] Central `on_error(module: &'static str, id: u32) -> !` hook, overridable
+      per port via `set_error_handler`, implementing the **crash-only** model.
+  - `std` default: `panic!` with fault location (test-friendly).
+  - `no_std` default: busy-halt; a port installs a handler that emits a QS
+    frame then resets via watchdog / `cortex_m::asm::udf()`.
 - [ ] Migrate `unwrap()/expect()/panic!` in `qf`, `qk`, `qxk` **core paths**
-      to the assertion macros so all faults route through `q_on_error`.
+      to the assertion macros so all faults route through `on_error`.
 
 *Deliverable: small, self-contained first PR. Unlocks every later phase and
 immediately improves diagnosability.*
