@@ -270,7 +270,7 @@ impl QxkKernel {
             .ok_or(QxkKernelError::AoNotFound(target))?;
         let slot = self.ao_slots[prio as usize]
             .as_ref()
-            .expect("kernel registry invariant broken");
+            .unwrap_or_else(|| qf::fusa::on_error(module_path!(), line!()));
         let was_empty = !slot.object.has_events();
         slot.object.post(event);
         if was_empty {

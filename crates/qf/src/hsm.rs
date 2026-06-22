@@ -251,7 +251,10 @@ impl<S: Send + 'static> QHsm<S> {
         // Call the initial pseudo-state handler.
         let target = match (self.temp)(&mut self.sm, &init_e) {
             QHsmResult::Tran(t) => t,
-            _ => panic!("QHsm: initial pseudo-state must return Tran(target)"),
+            // Precondition on the application's state machine: the initial
+            // pseudo-state handler must request a transition to a concrete
+            // state. Anything else is a contract violation — fault out.
+            _ => crate::fusa::on_error(module_path!(), line!()),
         };
 
         // Build entry path from target up to (not including) top.

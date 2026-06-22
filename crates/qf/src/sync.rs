@@ -46,7 +46,14 @@ impl<T> Mutex<T> {
     pub fn lock(&self) -> MutexGuard<'_, T> {
         #[cfg(feature = "std")]
         {
-            self.inner.lock().expect("mutex poisoned")
+            // A poisoned mutex means a thread panicked inside the critical
+            // section, so the protected state may be corrupt. Per the
+            // crash-only model this is an unrecoverable functional-safety
+            // fault — route it through the central fault handler.
+            match self.inner.lock() {
+                Ok(guard) => guard,
+                Err(_) => crate::fusa::on_error(module_path!(), line!()),
+            }
         }
         #[cfg(not(feature = "std"))]
         {

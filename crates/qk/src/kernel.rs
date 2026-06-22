@@ -344,7 +344,7 @@ impl QkKernel {
             .ok_or(QkKernelError::NotFound(target))?;
         let slot = self.slots[prio as usize]
             .as_ref()
-            .expect("kernel registry invariant broken");
+            .unwrap_or_else(|| qf::fusa::on_error(module_path!(), line!()));
         let was_empty = !slot.object.has_events();
         slot.object.post(event);
         if was_empty {
@@ -435,7 +435,7 @@ impl QkKernel {
             let (object, threshold) = {
                 let slot = self.slots[decision.next_prio as usize]
                     .as_ref()
-                    .expect("scheduled priority not registered");
+                    .unwrap_or_else(|| qf::fusa::on_error(module_path!(), line!()));
                 (Arc::clone(&slot.object), slot.threshold)
             };
 
@@ -468,7 +468,7 @@ impl QkKernel {
             self.slots[prio as usize]
                 .as_ref()
                 .map(|slot| slot.threshold)
-                .expect("missing preemption threshold for registered AO")
+                .unwrap_or_else(|| qf::fusa::on_error(module_path!(), line!()))
         }
     }
 }

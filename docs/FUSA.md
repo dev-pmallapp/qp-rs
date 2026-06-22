@@ -45,7 +45,7 @@ codes.
 | Semi-formal HFSM | ✅ `qf::hsm`, `qf::qmsm`, `q_tran!`/`qm_*` macros | Foundation in place |
 | Static block pool | ✅ `qf::pool::QMPool` (O(1), `&'static mut` storage) | Present, not used everywhere |
 | **Static allocation only** | ❌ `Arc`, `Box`, `Vec`, `VecDeque` across `active.rs`, `equeue.rs`, `time.rs`, `pubsub.rs`, `event.rs` | **Largest gap** |
-| Failure-assertion programming | ✅ `qf::fusa` macros (`q_require!`/`q_ensure!`/`q_invariant!`/`q_assert!`/`q_error!`); scattered `unwrap()/expect()` not yet migrated | Macros done; migration pending |
+| Failure-assertion programming | ✅ `qf::fusa` macros (`q_require!`/`q_ensure!`/`q_invariant!`/`q_assert!`/`q_error!`); core-path `unwrap()/expect()/panic!` migrated to `on_error` | Phase 1 complete |
 | Crash-only fault handler (`Q_onError`) | ✅ `qf::fusa::on_error` + `set_error_handler` | Done; ports to install safe-stop handler |
 | Error-detecting codes (Duplicate Inverse Storage) | ❌ None | New work |
 | Event-queue safety margins | ⚠️ Counters exist; not formalized | Formalize |
@@ -75,11 +75,14 @@ The single highest-leverage change: give every failure one well-defined path.
   - `std` default: `panic!` with fault location (test-friendly).
   - `no_std` default: busy-halt; a port installs a handler that emits a QS
     frame then resets via watchdog / `cortex_m::asm::udf()`.
-- [ ] Migrate `unwrap()/expect()/panic!` in `qf`, `qk`, `qxk` **core paths**
-      to the assertion macros so all faults route through `on_error`.
+- [x] Migrate `unwrap()/expect()/panic!` in `qf`, `qk`, `qxk` **core paths**
+      to route through `on_error`. Migrated sites: the `std` mutex-poison path
+      in each crate's `sync.rs`, the `QHsm` initial-transition contract in
+      `hsm.rs`, and the registry/scheduler invariants in `qk`/`qxk` `kernel.rs`.
+      *(Remaining `unwrap()/expect()` live only in `#[cfg(test)]` modules.)*
 
 *Deliverable: small, self-contained first PR. Unlocks every later phase and
-immediately improves diagnosability.*
+immediately improves diagnosability. **Phase 1 complete.***
 
 ### Phase 2 — Static allocation path *(largest SIL impact)*
 
