@@ -132,10 +132,14 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
 
 ### Phase 3 — Error-detecting codes
 
-- [ ] **Duplicate Inverse Storage (DIS)** wrapper: store value + bitwise
-      inverse, verify on read, route mismatch to `q_on_error`. Apply to:
-      event ref-counts, queue head/tail indices, pool free-list links, AO
-      priority and current state.
+- [x] **Duplicate Inverse Storage (DIS)** wrapper: `qf::dis::Dis<T>` stores a
+      scalar with its bitwise complement, verifies on every read, and routes a
+      mismatch (bit flip / SEU) to `fusa::on_error`. Sealed `DisInt` trait for
+      the primitive integer types; `Copy` drop-in for a plain field. **Applied
+      to the active-object scheduling priority** (`ActiveObject::priority`), a
+      correctness-critical field. *(Remaining application sites: PoolArc/event
+      ref-counts — these are atomics, needing a DIS-over-atomic variant — queue
+      indices, pool free-list links, and AO current state.)*
 - [ ] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
 - [x] Event-queue **safety-margin** API: a persistent per-queue margin reserves
       free slots for critical traffic. `post_normal` sheds normal-priority events

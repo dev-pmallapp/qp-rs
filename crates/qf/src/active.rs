@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 #[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 use alloc::collections::VecDeque;
 
+use crate::dis::Dis;
 use crate::sync::{Arc, Mutex};
 use crate::trace::{TraceError, TraceHook};
 
@@ -184,7 +185,9 @@ impl EventQueue {
 /// Concrete active object implementation for a specific behavior.
 pub struct ActiveObject<B: ActiveBehavior> {
     id: ActiveObjectId,
-    priority: u8,
+    /// Scheduling priority, protected by Duplicate Inverse Storage: a bit flip
+    /// here would corrupt scheduling, so reads are integrity-checked.
+    priority: Dis<u8>,
     queue: Mutex<EventQueue>,
     behavior: Mutex<B>,
     trace_hook: Mutex<Option<TraceHook>>,
@@ -196,7 +199,7 @@ impl<B: ActiveBehavior> ActiveObject<B> {
     pub fn new(id: ActiveObjectId, priority: u8, behavior: B) -> Arc<Self> {
         Arc::new(Self {
             id,
-            priority,
+            priority: Dis::new(priority),
             queue: Mutex::new(EventQueue::new()),
             behavior: Mutex::new(behavior),
             trace_hook: Mutex::new(None),
@@ -259,7 +262,7 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 
     fn priority(&self) -> u8 {
-        self.priority
+        self.priority.get()
     }
 
     fn start(&self, trace: Option<TraceHook>) {

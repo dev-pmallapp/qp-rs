@@ -15,6 +15,7 @@ The crate keeps modules loosely coupled so that alternative front-ends can reuse
 extern crate alloc;
 
 pub mod active;
+pub mod dis;
 pub mod equeue;
 pub mod event;
 pub mod event_pool;
@@ -32,6 +33,7 @@ pub mod priospec;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef, QActive, Q};
+pub use dis::{Dis, DisInt};
 pub use equeue::{defer, flush_deferred, recall, PostStatus, QEQueue};
 #[cfg(feature = "static-alloc")]
 pub use equeue::StaticEQueue;
