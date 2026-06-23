@@ -146,6 +146,40 @@ impl ThreadReadyQueue {
     }
 }
 
+#[cfg(feature = "smp")]
+#[derive(Default, Clone, Copy)]
+struct CoreState {
+    active_prio: u8,
+    active_thread: Option<ThreadId>,
+    next_prio: u8,
+    next_thread: Option<ThreadId>,
+}
+
+#[cfg(feature = "smp")]
+struct State {
+    lock_ceiling: u8,
+    ao_ready: ReadySet,
+    thread_ready: ThreadReadyQueue,
+    cores: [CoreState; 8],
+    executing_aos: [u8; 64],
+    executing_threads: [u8; 256],
+}
+
+#[cfg(feature = "smp")]
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            lock_ceiling: 0,
+            ao_ready: Default::default(),
+            thread_ready: Default::default(),
+            cores: [CoreState::default(); 8],
+            executing_aos: [0xFF; 64],
+            executing_threads: [0xFF; 256],
+        }
+    }
+}
+
+#[cfg(not(feature = "smp"))]
 #[derive(Default)]
 struct State {
     /// Lock ceiling for critical sections.
@@ -253,6 +287,7 @@ impl QxkScheduler {
     /// Plans the next scheduling decision using dual-mode policy.
     ///
     /// Active objects have priority over extended threads.
+    #[cfg(not(feature = "smp"))]
     pub fn plan_next(&self) -> ScheduleMode {
         let state = self.state.lock();
 
@@ -278,13 +313,106 @@ impl QxkScheduler {
         ScheduleMode::Idle
     }
 
+    /// Plans the next scheduling decision using dual-mode policy.
+    ///
+    /// Active objects have priority over extended threads.
+    #[cfg(feature = "smp")]
+    pub fn plan_next(&self) -> ScheduleMode {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+
+        // 1. First check for ready active objects above lock ceiling and not executing on any core
+        let mut found_ao = None;
+        for prio in (1..64).rev() {
+            if state.ao_ready.contains(prio) {
+                if prio > state.lock_ceiling {
+                    let already_running = (0..8).any(|c| {
+                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                    }) || state.executing_aos[prio as usize] != 0xFF;
+                    if !already_running {
+                        found_ao = Some(prio);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(ao_prio) = found_ao {
+            state.cores[core_id].next_prio = ao_prio;
+            state.cores[core_id].next_thread = None;
+            self.emit_trace(sched::NEXT, &[ao_prio]);
+            return ScheduleMode::ActiveObject { priority: ao_prio };
+        }
+
+        // 2. No active objects ready, check for threads
+        let mut found_thread = None;
+        for &(tid, tprio) in &state.thread_ready.ready_threads {
+            let already_running = (0..8).any(|c| {
+                c != core_id && (state.cores[c].active_thread == Some(tid) || state.cores[c].next_thread == Some(tid))
+            }) || state.executing_threads[tid.0 as usize] != 0xFF;
+            if !already_running {
+                found_thread = Some((tid, tprio));
+                break;
+            }
+        }
+
+        if let Some((thread_id, thread_prio)) = found_thread {
+            state.cores[core_id].next_prio = 0;
+            state.cores[core_id].next_thread = Some(thread_id);
+            self.emit_trace(THREAD_NEXT, &[thread_id.0, thread_prio.0]);
+            return ScheduleMode::ExtendedThread {
+                id: thread_id,
+                priority: thread_prio,
+            };
+        }
+
+        // 3. Nothing ready, idle
+        state.cores[core_id].next_prio = 0;
+        state.cores[core_id].next_thread = None;
+        self.emit_trace(sched::IDLE, &[]);
+        ScheduleMode::Idle
+    }
+
     /// Checks if there is any work ready to run.
+    #[cfg(not(feature = "smp"))]
     pub fn has_work(&self) -> bool {
         let state = self.state.lock();
         state.ao_ready.max().is_some() || !state.thread_ready.is_empty()
     }
 
+    /// Checks if there is any work ready to run.
+    #[cfg(feature = "smp")]
+    pub fn has_work(&self) -> bool {
+        let core_id = qf::port::current_core_id() as usize;
+        let state = self.state.lock();
+        
+        for prio in (1..64).rev() {
+            if state.ao_ready.contains(prio) {
+                if prio > state.lock_ceiling {
+                    let already_running = (0..8).any(|c| {
+                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                    }) || state.executing_aos[prio as usize] != 0xFF;
+                    if !already_running {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        for &(tid, _) in &state.thread_ready.ready_threads {
+            let already_running = (0..8).any(|c| {
+                c != core_id && (state.cores[c].active_thread == Some(tid) || state.cores[c].next_thread == Some(tid))
+            }) || state.executing_threads[tid.0 as usize] != 0xFF;
+            if !already_running {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Sets the currently active priority/thread.
+    #[cfg(not(feature = "smp"))]
     pub fn set_active(&self, mode: ScheduleMode) {
         let mut state = self.state.lock();
         match mode {
@@ -303,13 +431,83 @@ impl QxkScheduler {
         }
     }
 
+    /// Sets the currently active priority/thread.
+    #[cfg(feature = "smp")]
+    pub fn set_active(&self, mode: ScheduleMode) {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        match mode {
+            ScheduleMode::ActiveObject { priority } => {
+                state.cores[core_id].active_prio = priority;
+                state.cores[core_id].active_thread = None;
+                state.cores[core_id].next_prio = 0;
+                state.cores[core_id].next_thread = None;
+                if priority > 0 {
+                    state.executing_aos[priority as usize] = core_id as u8;
+                }
+            }
+            ScheduleMode::ExtendedThread { id, .. } => {
+                state.cores[core_id].active_prio = 0;
+                state.cores[core_id].active_thread = Some(id);
+                state.cores[core_id].next_prio = 0;
+                state.cores[core_id].next_thread = None;
+                state.executing_threads[id.0 as usize] = core_id as u8;
+            }
+            ScheduleMode::Idle => {
+                state.cores[core_id].active_prio = 0;
+                state.cores[core_id].active_thread = None;
+                state.cores[core_id].next_prio = 0;
+                state.cores[core_id].next_thread = None;
+            }
+        }
+    }
+
     /// Resets the scheduler state.
+    #[cfg(not(feature = "smp"))]
     pub fn reset(&self) {
         let mut state = self.state.lock();
         state.ao_ready.clear();
         state.thread_ready.clear();
         state.active_prio = 0;
         state.active_thread = None;
+    }
+
+    /// Resets the scheduler state.
+    #[cfg(feature = "smp")]
+    pub fn reset(&self) {
+        let mut state = self.state.lock();
+        state.ao_ready.clear();
+        state.thread_ready.clear();
+        state.cores = [CoreState::default(); 8];
+        state.executing_aos = [0xFF; 64];
+        state.executing_threads = [0xFF; 256];
+    }
+
+    #[cfg(not(feature = "smp"))]
+    #[inline(always)]
+    pub fn complete_execution(&self, _mode: ScheduleMode) {}
+
+    #[cfg(feature = "smp")]
+    pub fn complete_execution(&self, mode: ScheduleMode) {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        match mode {
+            ScheduleMode::ActiveObject { priority } => {
+                if priority > 0 && (priority as usize) < 64 {
+                    state.executing_aos[priority as usize] = 0xFF;
+                }
+                if state.cores[core_id].active_prio == priority {
+                    state.cores[core_id].active_prio = 0;
+                }
+            }
+            ScheduleMode::ExtendedThread { id, .. } => {
+                state.executing_threads[id.0 as usize] = 0xFF;
+                if state.cores[core_id].active_thread == Some(id) {
+                    state.cores[core_id].active_thread = None;
+                }
+            }
+            ScheduleMode::Idle => {}
+        }
     }
 
     // Thread Blocking/Unblocking

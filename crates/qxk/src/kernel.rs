@@ -307,15 +307,20 @@ impl QxkKernel {
 
     /// Dispatches one unit of work (active object or thread).
     pub fn dispatch_once(&self) -> bool {
-        match self.scheduler.plan_next() {
+        let mode = self.scheduler.plan_next();
+        self.scheduler.set_active(mode);
+        match mode {
             ScheduleMode::ActiveObject { priority } => {
                 self.dispatch_ao(priority);
+                self.scheduler.complete_execution(mode);
                 true
             }
             ScheduleMode::ExtendedThread { id, priority } => {
                 if let Some(thread_arc) = self.threads.get(&id) {
                     let mut thread = thread_arc.lock();
                     let action = thread.poll(Arc::clone(&self.scheduler));
+
+                    self.scheduler.complete_execution(mode);
 
                     match action {
                         ThreadAction::Continue => {
@@ -338,11 +343,15 @@ impl QxkKernel {
                         }
                     }
                 } else {
+                    self.scheduler.complete_execution(mode);
                     self.scheduler.mark_thread_not_ready(id);
                     false
                 }
             }
-            ScheduleMode::Idle => false,
+            ScheduleMode::Idle => {
+                self.scheduler.complete_execution(mode);
+                false
+            }
         }
     }
 
@@ -442,6 +451,146 @@ mod tests {
         // Higher priority dispatched first
         assert_eq!(entries[0], (ao2_id, Signal(99)));
         assert_eq!(entries[1], (ao1_id, Signal(99)));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "smp")]
+    fn test_smp_active_object_isolation_and_rtc() -> Result<(), QxkKernelError> {
+        use std::sync::{Arc, Mutex};
+        use qf::active::ActiveContext;
+
+        #[derive(Clone)]
+        struct MockBehavior {
+            id: ActiveObjectId,
+            active_threads: Arc<Mutex<usize>>,
+            max_concurrent_threads: Arc<Mutex<usize>>,
+        }
+
+        impl SignalHandler for MockBehavior {
+            fn handle_signal(&mut self, _signal: Signal, _ctx: &mut ActiveContext) {
+                {
+                    let mut active = self.active_threads.lock().unwrap();
+                    *active += 1;
+                    let mut max = self.max_concurrent_threads.lock().unwrap();
+                    if *active > *max {
+                        *max = *active;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                {
+                    let mut active = self.active_threads.lock().unwrap();
+                    *active -= 1;
+                }
+            }
+        }
+
+        let active_threads = Arc::new(Mutex::new(0));
+        let max_concurrent_threads = Arc::new(Mutex::new(0));
+
+        let ao_id = ActiveObjectId::new(10);
+        let ao = new_active_object(
+            ao_id,
+            10,
+            MockBehavior {
+                id: ao_id,
+                active_threads: Arc::clone(&active_threads),
+                max_concurrent_threads: Arc::clone(&max_concurrent_threads),
+            },
+        );
+
+        let mut kernel = QxkKernel::builder()
+            .register_ao(ao)?
+            .build()
+            .expect("kernel build succeeded");
+
+        kernel.start();
+
+        for i in 0..30 {
+            kernel.post_ao(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+        }
+
+        let kernel_arc = Arc::new(kernel);
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let kernel_clone = Arc::clone(&kernel_arc);
+            handles.push(std::thread::spawn(move || {
+                while kernel_clone.has_pending_work() {
+                    kernel_clone.dispatch_once();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let max_concurrent = *max_concurrent_threads.lock().unwrap();
+        assert_eq!(max_concurrent, 1, "AO behavior was executed concurrently by multiple cores!");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "smp")]
+    fn test_smp_thread_isolation() -> Result<(), QxkKernelError> {
+        use std::sync::{Arc, Mutex};
+        use crate::thread::ThreadAction;
+
+        let active_threads = Arc::new(Mutex::new(0));
+        let max_concurrent_threads = Arc::new(Mutex::new(0));
+
+        let active_threads_clone = Arc::clone(&active_threads);
+        let max_concurrent_threads_clone = Arc::clone(&max_concurrent_threads);
+
+        let thread_config = ThreadConfig::new(
+            ThreadId(1),
+            crate::thread::ThreadPriority(5),
+            Box::new(move |ctx| {
+                {
+                    let mut active = active_threads_clone.lock().unwrap();
+                    *active += 1;
+                    let mut max = max_concurrent_threads_clone.lock().unwrap();
+                    if *active > *max {
+                        *max = *active;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                {
+                    let mut active = active_threads_clone.lock().unwrap();
+                    *active -= 1;
+                }
+                if ctx.iteration() < 10 {
+                    ThreadAction::Continue
+                } else {
+                    ThreadAction::Terminated
+                }
+            }),
+        );
+
+        let mut kernel = QxkKernel::builder()
+            .register_thread(thread_config)?
+            .build()
+            .expect("kernel build succeeded");
+
+        kernel.start();
+
+        let kernel_arc = Arc::new(kernel);
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let kernel_clone = Arc::clone(&kernel_arc);
+            handles.push(std::thread::spawn(move || {
+                while kernel_clone.has_pending_work() {
+                    kernel_clone.dispatch_once();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let max_concurrent = *max_concurrent_threads.lock().unwrap();
+        assert_eq!(max_concurrent, 1, "Thread was executed/polled concurrently by multiple cores!");
         Ok(())
     }
 }
