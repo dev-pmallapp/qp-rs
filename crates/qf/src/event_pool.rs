@@ -14,12 +14,14 @@
 //! Pool registration (`PoolRegistry::init_pool`) must happen before the
 //! kernel starts.
 
+#[cfg(not(feature = "static-alloc"))]
 use core::any::Any;
 use core::mem;
 use core::ptr;
 
 use crate::event::{Event, EventHeader, Signal};
 use crate::pool::QMPool;
+#[cfg(not(feature = "static-alloc"))]
 use crate::sync::Arc;
 use crate::trace::TraceHook;
 
@@ -225,6 +227,7 @@ impl<T: 'static> EventBox<T> {
     ///
     /// The pool block is released when the last reference to the `Arc` payload
     /// is dropped via the embedded [`PoolBlock`] RAII guard.
+    #[cfg(not(feature = "static-alloc"))]
     pub fn into_dyn(self) -> crate::event::DynEvent
     where
         T: Send + Sync,
@@ -236,6 +239,25 @@ impl<T: 'static> EventBox<T> {
             _value: event.payload,
             _guard: guard,
         });
+        Event { header: event.header, payload }
+    }
+
+    /// Convert into a `DynEvent` for posting to an active object.
+    ///
+    /// Heap-free `static-alloc` path: the payload is re-homed into a
+    /// reference-counted [`PoolArc`](crate::pool_arc::PoolArc) and the original
+    /// `EventBox` block is returned to its pool.
+    #[cfg(feature = "static-alloc")]
+    pub fn into_dyn(self) -> crate::event::DynEvent
+    where
+        T: Send + Sync,
+    {
+        // Move the event out of its block (bitwise), then return the now-vacated
+        // block to the pool without running any drop glue.
+        let event: Event<T> = unsafe { ptr::read(self.ptr) };
+        let (raw_ptr, pool_id) = self.into_raw();
+        unsafe { gc_raw(pool_id, raw_ptr as *mut u8, None) };
+        let payload = crate::pool_arc::PoolArc::from_value(event.payload);
         Event { header: event.header, payload }
     }
 }
@@ -260,11 +282,15 @@ impl<T: 'static> Drop for EventBox<T> {
     }
 }
 
-// ── RAII block guard inside Arc payload ──────────────────────────────────────
+// ── RAII block guard inside Arc payload (dynamic build only) ──────────────────
 
+#[cfg(not(feature = "static-alloc"))]
 struct PoolBlock { ptr: *mut u8, pool_id: u8 }
+#[cfg(not(feature = "static-alloc"))]
 unsafe impl Send for PoolBlock {}
+#[cfg(not(feature = "static-alloc"))]
 unsafe impl Sync for PoolBlock {}
+#[cfg(not(feature = "static-alloc"))]
 impl Drop for PoolBlock {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.pool_id != 0 {
@@ -273,8 +299,11 @@ impl Drop for PoolBlock {
     }
 }
 
+#[cfg(not(feature = "static-alloc"))]
 struct PoolPayload<T> { _value: T, _guard: PoolBlock }
+#[cfg(not(feature = "static-alloc"))]
 unsafe impl<T: Send> Send for PoolPayload<T> {}
+#[cfg(not(feature = "static-alloc"))]
 unsafe impl<T: Sync> Sync for PoolPayload<T> {}
 
 // ── Public allocation helpers ─────────────────────────────────────────────────

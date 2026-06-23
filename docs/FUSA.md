@@ -113,11 +113,22 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       *(The registered `TimeEvent`s and `DynEvent` payloads are still `Arc`-backed
       — that heap goes away with the `QEvt` item below; this removes the
       container/`Vec` heap.)*
-- [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
-      adopting QP's `QEvt` header model (pool id + ref count in the event) —
-      the last heap user on the event/time-event path.
-- [ ] Verify with a build that has **no global allocator** linked (only
-      meaningful once the `QEvt`/`Arc` work above is done).
+- [x] Pool-allocated, reference-counted event **payloads** replacing
+      `Arc<dyn Any>`. New `qf::pool_arc::PoolArc` is an `Arc<dyn Any>`-equivalent
+      over `POOL_REGISTRY`/`QMPool`: ref-counted control block + value inside one
+      pool block, `Clone` = atomic refcount, `Drop` = drop-glue + return block.
+      `DynPayload` switches to it under `static-alloc`; `empty_dyn` is
+      allocation-free (empty variant); `Event::with_payload` is the portable
+      typed constructor; `EventBox::into_dyn` is heap-free. **Validated under
+      Miri** (no UB; round-trip, refcount, drop-once, free-to-pool). Miri also
+      surfaced and fixed a provenance bug in the Phase-1 fault handler (now a
+      `spin::Mutex<Option<fn>>` instead of `AtomicUsize` + `transmute`).
+- [ ] Remove the remaining structural `Arc`s on the registration handles
+      (`Arc<ActiveObject>`, `Arc<Kernel>`, `Arc<TimeEvent>`, `ActiveObjectRef`)
+      — e.g. `&'static`/static storage — the last heap users outside the event
+      payload path.
+- [ ] Verify with a build that has **no global allocator** linked (blocked on
+      the `Arc` registration-handle removal above).
 
 ### Phase 3 — Error-detecting codes
 

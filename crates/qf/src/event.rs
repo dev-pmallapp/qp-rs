@@ -5,14 +5,15 @@
 //! optional payload supplied by concrete applications. This module provides an
 //! idiomatic Rust equivalent.
 
+#[cfg(not(feature = "static-alloc"))]
 use core::any::Any;
 use core::fmt;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 use alloc::sync::Arc;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "static-alloc")))]
 use std::sync::Arc;
 
 /// Identifier for a QP signal.
@@ -113,20 +114,47 @@ impl<T: Clone> Clone for Event<T> {
 }
 
 /// Type-erased event payload suitable for heterogeneous systems.
+///
+/// The dynamic (default) build uses a heap `Arc<dyn Any>`; the `static-alloc`
+/// build uses a heap-free, pool-backed [`PoolArc`](crate::pool_arc::PoolArc)
+/// with the same shared-ownership / downcast semantics (see `docs/FUSA.md`,
+/// Phase 2).
+#[cfg(not(feature = "static-alloc"))]
 pub type DynPayload = Arc<dyn Any + Send + Sync>;
+#[cfg(feature = "static-alloc")]
+pub type DynPayload = crate::pool_arc::PoolArc;
 
 /// Event envelope used by the kernel to deliver events to active objects.
 pub type DynEvent = Event<DynPayload>;
 
 impl Event<DynPayload> {
-    /// Creates a dynamic event from an already-`Arc`-wrapped type-erased payload.
+    /// Creates a dynamic event from an already type-erased payload.
     pub fn with_arc(signal: Signal, payload: DynPayload) -> Self {
         Self::new(signal, payload)
     }
 
     /// Creates a signal-only dynamic event (unit payload).
+    ///
+    /// Allocation-free under `static-alloc` (the empty [`PoolArc`] variant).
     pub fn empty_dyn(signal: Signal) -> Self {
+        #[cfg(not(feature = "static-alloc"))]
         let payload: DynPayload = Arc::new(()) as DynPayload;
+        #[cfg(feature = "static-alloc")]
+        let payload: DynPayload = crate::pool_arc::PoolArc::empty();
+        Self::with_arc(signal, payload)
+    }
+
+    /// Creates a dynamic event carrying a typed `payload`.
+    ///
+    /// Portable across both allocation models: heap `Arc` on the default build,
+    /// a pool-backed [`PoolArc`](crate::pool_arc::PoolArc) under `static-alloc`.
+    /// Prefer this over `with_arc(Arc::new(..))` in code that must build for the
+    /// functional-safety (heap-free) target.
+    pub fn with_payload<T: core::any::Any + Send + Sync>(signal: Signal, payload: T) -> Self {
+        #[cfg(not(feature = "static-alloc"))]
+        let payload: DynPayload = Arc::new(payload);
+        #[cfg(feature = "static-alloc")]
+        let payload: DynPayload = crate::pool_arc::PoolArc::from_value(payload);
         Self::with_arc(signal, payload)
     }
 }

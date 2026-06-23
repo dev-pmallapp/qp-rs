@@ -52,32 +52,30 @@
 //! fusa::set_error_handler(my_safe_stop);
 //! ```
 
-use core::sync::atomic::{AtomicUsize, Ordering};
-
 /// A functional-safety fault handler.
 ///
 /// Receives the originating module path and a fault id (the source line by
 /// default) and **must not return** — it terminates in a safe stop.
 pub type ErrorHandler = fn(module: &'static str, id: u32) -> !;
 
-/// Installed handler, stored as a `fn`-pointer-sized integer.
+/// Installed handler, or `None` to fall back to [`default_on_error`].
 ///
-/// `0` means "no handler installed" → fall back to [`default_on_error`]. Only
-/// load/store are used (no CAS), so this is portable to targets without atomic
-/// compare-exchange.
-static HANDLER: AtomicUsize = AtomicUsize::new(0);
+/// Stored directly (no integer round-trip) so the function pointer keeps its
+/// provenance. `spin::Mutex::new` is `const`, so this lives in `static` storage
+/// with no runtime init in both `std` and `no_std`.
+static HANDLER: spin::Mutex<Option<ErrorHandler>> = spin::Mutex::new(None);
 
 /// Installs the functional-safety fault handler.
 ///
 /// Replaces any previously installed handler. Typically called once during
 /// port/runtime initialisation.
 pub fn set_error_handler(handler: ErrorHandler) {
-    HANDLER.store(handler as usize, Ordering::Release);
+    *HANDLER.lock() = Some(handler);
 }
 
 /// Clears any installed handler, restoring the built-in default.
 pub fn clear_error_handler() {
-    HANDLER.store(0, Ordering::Release);
+    *HANDLER.lock() = None;
 }
 
 /// Routes a detected fault to the installed handler, or the default.
@@ -87,13 +85,10 @@ pub fn clear_error_handler() {
 #[cold]
 #[inline(never)]
 pub fn on_error(module: &'static str, id: u32) -> ! {
-    let raw = HANDLER.load(Ordering::Acquire);
-    if raw != 0 {
-        // SAFETY: `HANDLER` is only ever written by `set_error_handler` from a
-        // valid `ErrorHandler` (= `fn(&'static str, u32) -> !`) pointer, or set
-        // to 0 (handled above). A `usize` and a `fn` pointer are the same size,
-        // so the transmute is layout-valid.
-        let handler: ErrorHandler = unsafe { core::mem::transmute::<usize, ErrorHandler>(raw) };
+    // Copy the handler out and release the lock *before* calling it, so a
+    // handler that itself faults cannot deadlock on re-entry.
+    let handler = *HANDLER.lock();
+    if let Some(handler) = handler {
         handler(module, id);
     }
     default_on_error(module, id)

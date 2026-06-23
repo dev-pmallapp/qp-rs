@@ -24,6 +24,8 @@ pub mod qmsm;
 pub mod isr;
 pub mod kernel;
 pub mod pool;
+#[cfg(feature = "static-alloc")]
+pub mod pool_arc;
 pub mod port;
 pub mod pubsub;
 pub mod priospec;
