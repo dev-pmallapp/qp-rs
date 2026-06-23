@@ -65,10 +65,25 @@ fn main() -> ! {
 
     kernel.start();
 
+    #[cfg(feature = "smp")]
+    {
+        for i in 0..2 {
+            let kernel_clone = Arc::clone(&kernel);
+            thread::spawn(move || {
+                println!("Worker thread {} started on ESP32-S3", i);
+                loop {
+                    kernel_clone.run_until_idle();
+                    thread::sleep(Duration::from_millis(10));
+                }
+            });
+        }
+    }
+
     loop {
         runtime
             .tick()
             .expect("timer wheel should tick successfully");
+        #[cfg(not(feature = "smp"))]
         runtime.run_until_idle();
         thread::sleep(Duration::from_millis(10));
     }

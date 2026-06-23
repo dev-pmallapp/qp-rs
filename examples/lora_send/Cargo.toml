@@ -22,6 +22,7 @@ esp32c6 = [
     "dep:hal-rvsis",
     "hal-rvsis/esp32c6",
 ]
+smp = ["qf/smp", "qk/smp"]
 
 [dependencies]
 comms          = { path = "../../crates/comms" }

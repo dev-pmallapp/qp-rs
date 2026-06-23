@@ -660,11 +660,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         panic!("kernel already initialised");
     }
 
+    #[cfg(feature = "smp")]
+    let (running, worker_handles) = {
+        let running = Arc::new(core::sync::atomic::AtomicBool::new(true));
+        let mut handles = Vec::new();
+        for i in 0..4 {
+            let kernel_clone = Arc::clone(&kernel);
+            let running_clone = Arc::clone(&running);
+            handles.push(thread::spawn(move || {
+                println!("Worker thread {} started", i);
+                while running_clone.load(core::sync::atomic::Ordering::Relaxed) {
+                    kernel_clone.run_until_idle();
+                    thread::sleep(Duration::from_millis(10));
+                }
+                println!("Worker thread {} finished", i);
+            }));
+        }
+        (running, handles)
+    };
+
     const TICKS: usize = 60;
     for _ in 0..TICKS {
         runtime.tick()?;
+        #[cfg(not(feature = "smp"))]
         runtime.run_until_idle();
         thread::sleep(Duration::from_millis(200));
+    }
+
+    #[cfg(feature = "smp")]
+    {
+        running.store(false, core::sync::atomic::Ordering::Relaxed);
+        for handle in worker_handles {
+            handle.join().unwrap();
+        }
     }
 
     Ok(())
