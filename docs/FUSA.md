@@ -137,8 +137,14 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       event ref-counts, queue head/tail indices, pool free-list links, AO
       priority and current state.
 - [ ] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
-- [ ] Event-queue **safety-margin** API: high-water mark + configurable margin
-      → graceful-degradation signal instead of silent overflow.
+- [x] Event-queue **safety-margin** API: a persistent per-queue margin reserves
+      free slots for critical traffic. `post_normal` sheds normal-priority events
+      (counted, `shed_count`) instead of overflowing, returning a `PostStatus`
+      (`Accepted` / `AcceptedDegraded` / `Shed`); `post_critical` may consume the
+      margin; `is_degraded()` exposes the degraded state. On `QEQueue` and
+      `StaticEQueue` (`with_safety_margin`, `const` on the latter). *(Per-AO
+      `ActiveObject` queue degradation is a later refinement; today it faults on
+      overflow under `static-alloc`.)*
 
 ### Phase 4 — Toolchain, lints & verification
 

@@ -32,7 +32,7 @@ pub mod priospec;
 mod sync;
 pub mod time;
 pub use active::{ActiveObject, ActiveObjectId, ActiveObjectRef, QActive, Q};
-pub use equeue::{defer, flush_deferred, recall, QEQueue};
+pub use equeue::{defer, flush_deferred, recall, PostStatus, QEQueue};
 #[cfg(feature = "static-alloc")]
 pub use equeue::StaticEQueue;
 pub use event::{Event, EventHeader, Signal};

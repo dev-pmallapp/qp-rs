@@ -35,6 +35,28 @@ use crate::active::ActiveRunnable;
 use crate::event::DynEvent;
 use crate::sync::Mutex;
 
+// ── Safety-margin / graceful-degradation policy ───────────────────────────────
+
+/// Outcome of a safety-margin-aware post (the graceful-degradation policy of
+/// `docs/FUSA.md`, Phase 3).
+///
+/// A *safety margin* reserves a number of free slots for critical traffic. When
+/// the queue fills into that margin, normal-priority posts are **shed** (dropped
+/// in a controlled, counted way) rather than silently overflowing — keeping
+/// headroom for critical events and signalling that the system is degraded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostStatus {
+    /// Accepted with healthy headroom (free slots remain above the margin).
+    Accepted,
+    /// Accepted, but the queue is now within its safety margin: the queue is
+    /// **degraded** and subsequent normal-priority posts will be shed.
+    AcceptedDegraded,
+    /// Refused to preserve the safety margin — a graceful drop of
+    /// normal-priority traffic. Critical traffic may still be posted via
+    /// [`post`](QEQueue::post) / [`post_critical`](QEQueue::post_critical).
+    Shed,
+}
+
 // ── QEQueue ───────────────────────────────────────────────────────────────────
 
 /// Inline storage capacity for [`QEQueue`] under the `static-alloc` (heap-free)
@@ -50,6 +72,10 @@ struct QEQueueInner {
     buffer: heapless::Deque<DynEvent, QEQUEUE_CAPACITY>,
     capacity: usize,
     min_free: usize,
+    /// Reserved free slots for critical traffic (graceful-degradation policy).
+    safety_margin: usize,
+    /// Sticky count of normal-priority posts shed to preserve the margin.
+    shed_count: usize,
 }
 
 impl QEQueueInner {
@@ -59,6 +85,11 @@ impl QEQueueInner {
         if free < self.min_free {
             self.min_free = free;
         }
+    }
+
+    #[inline]
+    fn free(&self) -> usize {
+        self.capacity.saturating_sub(self.buffer.len())
     }
 }
 
@@ -76,6 +107,13 @@ impl QEQueue {
     /// storage and must not exceed [`QEQUEUE_CAPACITY`]; a larger request is a
     /// configuration fault.
     pub fn new(capacity: usize) -> Self {
+        Self::with_safety_margin(capacity, 0)
+    }
+
+    /// Create a queue with a [safety margin](PostStatus): `margin` free slots
+    /// are reserved for critical traffic and shed normal-priority posts (see
+    /// [`post_normal`](Self::post_normal)).
+    pub fn with_safety_margin(capacity: usize, margin: usize) -> Self {
         #[cfg(feature = "static-alloc")]
         if capacity > QEQUEUE_CAPACITY {
             crate::fusa::on_error(module_path!(), line!());
@@ -88,8 +126,67 @@ impl QEQueue {
                 buffer: heapless::Deque::new(),
                 capacity,
                 min_free: capacity,
+                safety_margin: margin.min(capacity),
+                shed_count: 0,
             }),
         }
+    }
+
+    /// The configured safety margin (reserved free slots for critical traffic).
+    pub fn safety_margin(&self) -> usize {
+        self.inner.lock().safety_margin
+    }
+
+    /// Set the safety margin (clamped to the queue capacity).
+    pub fn set_safety_margin(&self, margin: usize) {
+        let mut inner = self.inner.lock();
+        inner.safety_margin = margin.min(inner.capacity);
+    }
+
+    /// `true` when free slots have fallen to/within the safety margin — i.e.
+    /// normal-priority traffic is now being shed (the queue is degraded).
+    pub fn is_degraded(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.free() <= inner.safety_margin
+    }
+
+    /// Sticky count of normal-priority posts shed to preserve the margin —
+    /// a graceful-degradation diagnostic.
+    pub fn shed_count(&self) -> usize {
+        self.inner.lock().shed_count
+    }
+
+    /// Post normal-priority `event`, honoring the configured safety margin.
+    ///
+    /// Reserves the margin for critical traffic: if accepting would consume it,
+    /// the event is **shed** (dropped, counted) and [`PostStatus::Shed`] is
+    /// returned instead of overflowing. Otherwise the event is enqueued and the
+    /// status reports whether the queue has now entered the degraded band.
+    pub fn post_normal(&self, event: DynEvent) -> PostStatus {
+        let mut inner = self.inner.lock();
+        if inner.free() > inner.safety_margin {
+            #[cfg(not(feature = "static-alloc"))]
+            inner.buffer.push_back(event);
+            #[cfg(feature = "static-alloc")]
+            if inner.buffer.push_back(event).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+            inner.update_watermark();
+            if inner.free() <= inner.safety_margin {
+                PostStatus::AcceptedDegraded
+            } else {
+                PostStatus::Accepted
+            }
+        } else {
+            inner.shed_count += 1;
+            PostStatus::Shed
+        }
+    }
+
+    /// Post critical-priority `event`, permitted to consume the safety margin
+    /// (uses the full capacity). Returns `false` only if the queue is full.
+    pub fn post_critical(&self, event: DynEvent) -> bool {
+        self.post(event, 0)
     }
 
     /// Post `event` FIFO. Returns `false` if `free_slots <= margin`.
@@ -174,6 +271,8 @@ impl QEQueue {
 struct StaticEQueueInner<const N: usize> {
     buffer: heapless::Deque<DynEvent, N>,
     min_free: usize,
+    safety_margin: usize,
+    shed_count: usize,
 }
 
 #[cfg(feature = "static-alloc")]
@@ -184,6 +283,11 @@ impl<const N: usize> StaticEQueueInner<N> {
         if free < self.min_free {
             self.min_free = free;
         }
+    }
+
+    #[inline]
+    fn free(&self) -> usize {
+        N.saturating_sub(self.buffer.len())
     }
 }
 
@@ -219,12 +323,77 @@ impl<const N: usize> Default for StaticEQueue<N> {
 impl<const N: usize> StaticEQueue<N> {
     /// Create an empty queue with inline capacity `N`.
     pub const fn new() -> Self {
+        Self::with_safety_margin(0)
+    }
+
+    /// Create an empty queue with a [safety margin](PostStatus): `margin` free
+    /// slots are reserved for critical traffic (see [`post_normal`](Self::post_normal)).
+    ///
+    /// `const`, so a margin-configured queue can live in `static` storage.
+    pub const fn with_safety_margin(margin: usize) -> Self {
+        // `margin` is clamped to `N` lazily at use; storing it raw keeps this
+        // `const`. (A margin >= N simply sheds all normal-priority traffic.)
         Self {
             inner: Mutex::new(StaticEQueueInner {
                 buffer: heapless::Deque::new(),
                 min_free: N,
+                safety_margin: margin,
+                shed_count: 0,
             }),
         }
+    }
+
+    /// The configured safety margin (reserved free slots for critical traffic).
+    pub fn safety_margin(&self) -> usize {
+        self.inner.lock().safety_margin
+    }
+
+    /// Set the safety margin (clamped to `N`).
+    pub fn set_safety_margin(&self, margin: usize) {
+        self.inner.lock().safety_margin = if margin > N { N } else { margin };
+    }
+
+    /// `true` when free slots have fallen to/within the safety margin — i.e.
+    /// normal-priority traffic is now being shed (the queue is degraded).
+    pub fn is_degraded(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.free() <= inner.safety_margin
+    }
+
+    /// Sticky count of normal-priority posts shed to preserve the margin —
+    /// a graceful-degradation diagnostic.
+    pub fn shed_count(&self) -> usize {
+        self.inner.lock().shed_count
+    }
+
+    /// Post normal-priority `event`, honoring the configured safety margin.
+    ///
+    /// Reserves the margin for critical traffic: if accepting would consume it,
+    /// the event is **shed** (dropped, counted) and [`PostStatus::Shed`] is
+    /// returned instead of overflowing. Otherwise the event is enqueued and the
+    /// status reports whether the queue has now entered the degraded band.
+    pub fn post_normal(&self, event: DynEvent) -> PostStatus {
+        let mut inner = self.inner.lock();
+        if inner.free() > inner.safety_margin {
+            if inner.buffer.push_back(event).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+            inner.update_watermark();
+            if inner.free() <= inner.safety_margin {
+                PostStatus::AcceptedDegraded
+            } else {
+                PostStatus::Accepted
+            }
+        } else {
+            inner.shed_count += 1;
+            PostStatus::Shed
+        }
+    }
+
+    /// Post critical-priority `event`, permitted to consume the safety margin
+    /// (uses the full capacity). Returns `false` only if the queue is full.
+    pub fn post_critical(&self, event: DynEvent) -> bool {
+        self.post(event, 0)
     }
 
     /// Post `event` FIFO. Returns `false` if `free_slots <= margin`.
@@ -343,13 +512,66 @@ pub fn flush_deferred(eq: &QEQueue, num: usize) -> usize {
     count
 }
 
-#[cfg(all(test, feature = "static-alloc"))]
-mod static_tests {
-    use super::StaticEQueue;
+#[cfg(test)]
+mod safety_margin_tests {
+    use super::{PostStatus, QEQueue};
     use crate::event::{DynEvent, Signal};
 
     fn ev(sig: u16) -> DynEvent {
         DynEvent::empty_dyn(Signal(sig))
+    }
+
+    #[test]
+    fn margin_sheds_normal_but_reserves_room_for_critical() {
+        let q = QEQueue::with_safety_margin(4, 2); // cap 4, reserve 2 for critical
+        assert_eq!(q.safety_margin(), 2);
+        assert!(!q.is_degraded());
+
+        assert_eq!(q.post_normal(ev(1)), PostStatus::Accepted); // free 4->3
+        assert_eq!(q.post_normal(ev(2)), PostStatus::AcceptedDegraded); // free 3->2 (== margin)
+        assert!(q.is_degraded());
+        assert_eq!(q.post_normal(ev(3)), PostStatus::Shed); // free 2, not > margin
+        assert_eq!(q.shed_count(), 1);
+
+        // Critical traffic may consume the reserved margin.
+        assert!(q.post_critical(ev(10)));
+        assert!(q.post_critical(ev(11)));
+        assert!(!q.post_critical(ev(12))); // now genuinely full
+        assert_eq!(q.len(), 4);
+    }
+
+    #[test]
+    fn zero_margin_matches_plain_queue() {
+        let q = QEQueue::new(2); // margin 0
+        assert_eq!(q.post_normal(ev(1)), PostStatus::Accepted);
+        assert_eq!(q.post_normal(ev(2)), PostStatus::AcceptedDegraded);
+        assert_eq!(q.post_normal(ev(3)), PostStatus::Shed);
+        assert_eq!(q.shed_count(), 1);
+    }
+}
+
+#[cfg(all(test, feature = "static-alloc"))]
+mod static_tests {
+    use super::{PostStatus, StaticEQueue};
+    use crate::event::{DynEvent, Signal};
+
+    fn ev(sig: u16) -> DynEvent {
+        DynEvent::empty_dyn(Signal(sig))
+    }
+
+    #[test]
+    fn safety_margin_sheds_normal_traffic() {
+        let q: StaticEQueue<4> = StaticEQueue::with_safety_margin(2);
+        assert_eq!(q.safety_margin(), 2);
+        assert_eq!(q.post_normal(ev(1)), PostStatus::Accepted);
+        assert_eq!(q.post_normal(ev(2)), PostStatus::AcceptedDegraded);
+        assert!(q.is_degraded());
+        assert_eq!(q.post_normal(ev(3)), PostStatus::Shed);
+        assert_eq!(q.shed_count(), 1);
+        // Critical traffic still reaches the reserved slots.
+        assert!(q.post_critical(ev(10)));
+        assert!(q.post_critical(ev(11)));
+        assert!(!q.post_critical(ev(12)));
     }
 
     #[test]
