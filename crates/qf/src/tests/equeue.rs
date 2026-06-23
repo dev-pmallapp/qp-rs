@@ -1,6 +1,6 @@
 //! Unit tests for QEQueue and defer/recall.
 
-use crate::active::{ActiveBehavior, ActiveContext, ActiveObject, ActiveObjectId, ActiveRunnable};
+use crate::active::{new_active_object, ActiveBehavior, ActiveContext, ActiveObjectId};
 use crate::equeue::{defer, flush_deferred, recall, QEQueue};
 use crate::event::{DynEvent, Signal};
 
@@ -120,7 +120,7 @@ impl ActiveBehavior for Noop {
 
 #[test]
 fn defer_moves_event_to_eq() {
-    let ao = ActiveObject::new(ActiveObjectId(1), 1, Noop);
+    let ao = new_active_object(ActiveObjectId(1), 1, Noop);
     let eq = QEQueue::new(4);
 
     assert!(defer(&*ao, &eq, ev(10)));
@@ -130,7 +130,7 @@ fn defer_moves_event_to_eq() {
 
 #[test]
 fn recall_reinjects_lifo() {
-    let ao = ActiveObject::new(ActiveObjectId(1), 1, Noop);
+    let ao = new_active_object(ActiveObjectId(1), 1, Noop);
     let eq = QEQueue::new(4);
 
     // Post a "normal" event to the AO first.
@@ -150,7 +150,7 @@ fn recall_reinjects_lifo() {
         }
     }
     let log = alloc::sync::Arc::new(crate::sync::Mutex::new(alloc::vec::Vec::new()));
-    let ao2 = ActiveObject::new(ActiveObjectId(2), 2, Capture(log.clone()));
+    let ao2 = new_active_object(ActiveObjectId(2), 2, Capture(log.clone()));
     ao2.post(ev(1));
     ao2.post_lifo(ev(2)); // simulate what recall does
     ao2.dispatch_one();
@@ -161,7 +161,7 @@ fn recall_reinjects_lifo() {
 
 #[test]
 fn recall_returns_false_when_eq_empty() {
-    let ao = ActiveObject::new(ActiveObjectId(1), 1, Noop);
+    let ao = new_active_object(ActiveObjectId(1), 1, Noop);
     let eq = QEQueue::new(4);
     assert!(!recall(&*ao, &eq));
 }
@@ -190,7 +190,7 @@ fn flush_deferred_respects_limit() {
 
 #[test]
 fn defer_full_queue_returns_false() {
-    let ao = ActiveObject::new(ActiveObjectId(1), 1, Noop);
+    let ao = new_active_object(ActiveObjectId(1), 1, Noop);
     let eq = QEQueue::new(2);
     assert!(defer(&*ao, &eq, ev(1)));
     assert!(defer(&*ao, &eq, ev(2)));

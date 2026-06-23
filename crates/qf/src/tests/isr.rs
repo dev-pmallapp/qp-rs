@@ -7,7 +7,7 @@ use crate::active::{new_active_object, ActiveContext, ActiveObjectId, SignalHand
 use crate::event::Signal;
 use crate::isr;
 use crate::kernel::Kernel;
-use crate::time::{TimeEvent, TimeEventConfig, TimerWheel};
+use crate::time::{new_time_event, share_kernel, TimeEventConfig, TimerWheel};
 
 // ── ISR nesting counter ───────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ fn kernel_run_processes_events_and_stop_exits_loop() {
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(1);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
 
     // Post 3 events before starting run.
     kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal(1))).unwrap();
@@ -73,7 +73,7 @@ fn kernel_run_processes_events_and_stop_exits_loop() {
 fn has_pending_work_reflects_queue_state() {
     let ao_id = ActiveObjectId::new(2);
     let ao = new_active_object(ao_id, 1, Counter(Arc::new(Mutex::new(0))));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
     assert!(!kernel.has_pending_work());
@@ -90,7 +90,7 @@ fn post_from_isr_delivers_event() {
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(3);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
     crate::qk_isr_entry!();
@@ -127,10 +127,10 @@ fn publish_from_isr_broadcasts_to_all_aos() {
 fn rearm_updates_counter_without_disarm_cycle() {
     let ao_id = ActiveObjectId::new(6);
     let ao = new_active_object(ao_id, 1, Counter(Arc::new(Mutex::new(0))));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = TimeEvent::new(ao_id, TimeEventConfig::new(Signal(0x20)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x20)));
     te.arm(5, None);
     assert!(te.is_armed());
 
@@ -150,10 +150,10 @@ fn rearm_updates_counter_without_disarm_cycle() {
 fn was_disarmed_set_on_explicit_disarm() {
     let ao_id = ActiveObjectId::new(7);
     let ao = new_active_object(ao_id, 1, Counter(Arc::new(Mutex::new(0))));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = TimeEvent::new(ao_id, TimeEventConfig::new(Signal(0x21)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x21)));
     te.arm(5, None);
     assert!(!te.was_disarmed(), "not yet disarmed");
     te.disarm();
@@ -166,10 +166,10 @@ fn was_disarmed_set_when_oneshot_fires() {
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(8);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = TimeEvent::new(ao_id, TimeEventConfig::new(Signal(0x22)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x22)));
     let mut wheel = TimerWheel::new(kernel.clone());
     wheel.register(te.clone());
 
@@ -189,10 +189,10 @@ fn tick_from_isr_advances_timer_wheel() {
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(9);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = TimeEvent::new(ao_id, TimeEventConfig::new(Signal(0x30)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x30)));
     let mut wheel = TimerWheel::new(kernel.clone());
     wheel.register(te.clone());
 

@@ -7,8 +7,54 @@ use core::fmt;
 use crate::active::ActiveObjectId;
 use crate::event::{DynEvent, Signal};
 use crate::kernel::{Kernel, KernelError};
-use crate::sync::{Arc, Mutex};
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
+use crate::sync::Mutex;
 use crate::trace::TraceHook;
+
+/// Shared handle to a [`TimeEvent`] held by the timer wheel. Dynamic:
+/// `Arc<TimeEvent>`; heap-free `static-alloc`: `&'static TimeEvent` (the time
+/// event lives in application-owned `static` storage).
+#[cfg(not(feature = "static-alloc"))]
+pub type TimeEventRef = Arc<TimeEvent>;
+/// Heap-free time-event handle: a `&'static` reference. See the dynamic variant.
+#[cfg(feature = "static-alloc")]
+pub type TimeEventRef = &'static TimeEvent;
+
+/// The timer wheel's back-reference to its kernel. Dynamic: `Arc<Kernel>`;
+/// heap-free `static-alloc`: `&'static Kernel`.
+#[cfg(not(feature = "static-alloc"))]
+type KernelRef = Arc<Kernel>;
+#[cfg(feature = "static-alloc")]
+type KernelRef = &'static Kernel;
+
+/// Wrap a built [`Kernel`] into the shareable handle the timer wheel expects:
+/// an `Arc` on the dynamic build, a leaked `&'static` on `static-alloc` + `std`
+/// (host tests). Heap-free targets place the kernel in their own `static`
+/// storage instead, so this helper is absent there.
+#[cfg(not(feature = "static-alloc"))]
+pub fn share_kernel(kernel: Kernel) -> KernelRef {
+    Arc::new(kernel)
+}
+#[cfg(all(feature = "static-alloc", feature = "std"))]
+pub fn share_kernel(kernel: Kernel) -> KernelRef {
+    alloc::boxed::Box::leak(alloc::boxed::Box::new(kernel))
+}
+
+/// Build a [`TimeEventRef`] in one step.
+///
+/// Dynamic build: wraps the time event in an `Arc`. On `static-alloc` + `std`
+/// (host tests) it leaks to obtain a `&'static`. Genuine heap-free targets (no
+/// `std`) instead place the [`TimeEvent`] in their own `static`/`StaticCell`
+/// storage and pass a `&'static` reference — so this helper is absent there.
+#[cfg(not(feature = "static-alloc"))]
+pub fn new_time_event(target: ActiveObjectId, config: TimeEventConfig) -> TimeEventRef {
+    TimeEvent::new(target, config)
+}
+#[cfg(all(feature = "static-alloc", feature = "std"))]
+pub fn new_time_event(target: ActiveObjectId, config: TimeEventConfig) -> TimeEventRef {
+    alloc::boxed::Box::leak(alloc::boxed::Box::new(TimeEvent::new(target, config)))
+}
 
 /// QS record: Time event armed with timeout and optional interval.
 const QS_QF_TIMEEVT_ARM: u8 = 32;
@@ -112,8 +158,24 @@ pub struct TimeEventTraceInfo {
 
 impl TimeEvent {
     /// Creates a (disarmed) time event targeting `target`, returned in an [`Arc`].
+    ///
+    /// Under the heap-free `static-alloc` build this returns the [`TimeEvent`] by
+    /// value instead, for placement in `static` storage (see `docs/FUSA.md`,
+    /// Phase 2); register a `&'static` reference with the timer wheel.
+    #[cfg(not(feature = "static-alloc"))]
     pub fn new(target: ActiveObjectId, config: TimeEventConfig) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::new_inner(target, config))
+    }
+
+    /// Heap-free constructor: returns the time event by value. See [`new`](Self::new).
+    #[cfg(feature = "static-alloc")]
+    pub fn new(target: ActiveObjectId, config: TimeEventConfig) -> Self {
+        Self::new_inner(target, config)
+    }
+
+    #[inline]
+    fn new_inner(target: ActiveObjectId, config: TimeEventConfig) -> Self {
+        Self {
             inner: Mutex::new(TimeEventInner {
                 target,
                 cfg: config,
@@ -123,7 +185,7 @@ impl TimeEvent {
             }),
             trace: Mutex::new(None),
             meta: Mutex::new(None),
-        })
+        }
     }
 
     /// Arms the event to fire after `timeout_ticks`, optionally re-arming every
@@ -252,9 +314,9 @@ pub const MAX_TICK_RATES: usize = 4;
 pub const MAX_TIMERS_PER_RATE: usize = 32;
 
 #[cfg(not(feature = "static-alloc"))]
-type RateBucket = Vec<Arc<TimeEvent>>;
+type RateBucket = Vec<TimeEventRef>;
 #[cfg(feature = "static-alloc")]
-type RateBucket = heapless::Vec<Arc<TimeEvent>, MAX_TIMERS_PER_RATE>;
+type RateBucket = heapless::Vec<TimeEventRef, MAX_TIMERS_PER_RATE>;
 
 #[cfg(not(feature = "static-alloc"))]
 type WheelEvents = Vec<RateBucket>;
@@ -266,14 +328,14 @@ type WheelEvents = heapless::Vec<RateBucket, MAX_TICK_RATES>;
 /// Under `static-alloc` the per-rate buckets are fixed-capacity, heap-free
 /// [`heapless::Vec`]s; otherwise they grow dynamically.
 pub struct TimerWheel {
-    kernel: Arc<Kernel>,
+    kernel: KernelRef,
     events: WheelEvents,
     trace: Option<TraceHook>,
 }
 
 impl TimerWheel {
     /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
-    pub fn new(kernel: Arc<Kernel>) -> Self {
+    pub fn new(kernel: KernelRef) -> Self {
         let trace = kernel.trace_hook();
         let max_rate = kernel.config().max_tick_rate as usize;
         #[cfg(not(feature = "static-alloc"))]
@@ -307,7 +369,7 @@ impl TimerWheel {
     }
 
     /// Registers a time event with the wheel, wiring up the wheel's trace hook.
-    pub fn register(&mut self, event: Arc<TimeEvent>) {
+    pub fn register(&mut self, event: TimeEventRef) {
         event.set_trace(self.trace.clone());
         let rate = event.tick_rate() as usize;
         #[cfg(feature = "static-alloc")]

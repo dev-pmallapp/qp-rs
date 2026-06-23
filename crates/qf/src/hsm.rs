@@ -43,12 +43,25 @@
 //! hsm.init();
 //! ```
 
+#[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
 
 use crate::active::{ActiveBehavior, ActiveContext};
 use crate::dis::Dup;
 use crate::event::{DynEvent, Event, Signal};
 use crate::trace::TraceHook;
+
+/// Shallow-history table type. Dynamic: a heap [`BTreeMap`]; `static-alloc`: a
+/// fixed-capacity, heap-free [`heapless::FnvIndexMap`] (capacity must be a power
+/// of two). Keyed by parent-state fn-pointer address.
+#[cfg(not(feature = "static-alloc"))]
+type HistoryMap<S> = BTreeMap<usize, StateHandler<S>>;
+/// Maximum number of composite states with remembered shallow history under the
+/// heap-free build; exceeding it is a configuration fault.
+#[cfg(feature = "static-alloc")]
+pub const HSM_HISTORY_CAP: usize = 16;
+#[cfg(feature = "static-alloc")]
+type HistoryMap<S> = heapless::FnvIndexMap<usize, StateHandler<S>, HSM_HISTORY_CAP>;
 
 // ── QS record IDs for QEP events ────────────────────────────────────────────
 // Matches QP/C++ v8.x canonical values.
@@ -177,7 +190,7 @@ pub struct QHsm<S> {
     sm: S,
     /// Shallow history table.  Key = parent state fn-pointer as `usize`,
     /// value = last active direct child state handler.
-    history: BTreeMap<usize, StateHandler<S>>,
+    history: HistoryMap<S>,
 }
 
 impl<S: Send + 'static> QAsm for QHsm<S> {
@@ -202,7 +215,7 @@ impl<S: Send + 'static> QHsm<S> {
             state: Dup::new(Self::top_state as StateHandler<S>),
             temp: initial,
             sm,
-            history: BTreeMap::new(),
+            history: HistoryMap::new(),
         }
     }
 
@@ -461,7 +474,14 @@ impl<S: Send + 'static> QHsm<S> {
 
             // Record: `s` was the last active direct child of `parent`.
             if !same_state(parent, Self::top_state) {
+                #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as usize, s);
+                // Heap-free map is fixed-capacity: a full history table is a
+                // configuration fault (too many composite states with history).
+                #[cfg(feature = "static-alloc")]
+                if self.history.insert(parent as usize, s).is_err() {
+                    crate::fusa::on_error(module_path!(), line!());
+                }
             }
 
             self.call_exit(s);

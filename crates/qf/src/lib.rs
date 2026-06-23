@@ -12,6 +12,12 @@ The crate keeps modules loosely coupled so that alternative front-ends can reuse
 "#]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// The heap-free functional-safety build (`--no-default-features --features
+// static-alloc`) links NO global allocator: `alloc` is pulled in only off the
+// `static-alloc` path, or when `std` is present (host tests). Any stray heap use
+// on the heap-free path is then a hard compile error — the forcing function that
+// keeps the safety build allocation-free (see `docs/FUSA.md`, Phase 2).
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
 extern crate alloc;
 
 pub mod active;

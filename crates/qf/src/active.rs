@@ -10,7 +10,9 @@ use std::collections::VecDeque;
 use alloc::collections::VecDeque;
 
 use crate::dis::Dis;
-use crate::sync::{Arc, Mutex};
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
+use crate::sync::Mutex;
 use crate::trace::{TraceError, TraceHook};
 
 use crate::event::{DynEvent, Signal};
@@ -197,14 +199,32 @@ pub struct ActiveObject<B: ActiveBehavior> {
 impl<B: ActiveBehavior> ActiveObject<B> {
     /// Creates an active object with the given id, priority, and behavior,
     /// returning it wrapped in an [`Arc`] ready for kernel registration.
+    ///
+    /// Under the heap-free `static-alloc` build this returns the bare
+    /// [`ActiveObject`] by value instead — the application places it in `static`
+    /// storage (e.g. a `StaticCell`) and registers a `&'static` reference, so no
+    /// allocator is involved (see `docs/FUSA.md`, Phase 2).
+    #[cfg(not(feature = "static-alloc"))]
     pub fn new(id: ActiveObjectId, priority: u8, behavior: B) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::new_inner(id, priority, behavior))
+    }
+
+    /// Heap-free constructor: returns the active object by value for placement
+    /// in `static` storage. See [`new`](Self::new).
+    #[cfg(feature = "static-alloc")]
+    pub fn new(id: ActiveObjectId, priority: u8, behavior: B) -> Self {
+        Self::new_inner(id, priority, behavior)
+    }
+
+    #[inline]
+    fn new_inner(id: ActiveObjectId, priority: u8, behavior: B) -> Self {
+        Self {
             id,
             priority: Dis::new(priority),
             queue: Mutex::new(EventQueue::new()),
             behavior: Mutex::new(behavior),
             trace_hook: Mutex::new(None),
-        })
+        }
     }
 
     /// Borrow the behavior under its lock and apply `f`.
@@ -253,6 +273,11 @@ impl<B: ActiveBehavior> ActiveObject<B> {
 /// `Arc<ActiveObject<B>> as Arc<dyn ActiveRunnable>`.  It exists because
 /// some `Arc` backends (e.g. `portable_atomic_util::Arc`) do not implement
 /// `CoerceUnsized` on stable Rust.
+///
+/// Only available on the dynamic (`Arc`-backed) build; under `static-alloc`
+/// erase a `&'static ActiveObject<B>` directly (it coerces to
+/// [`ActiveObjectRef`]).
+#[cfg(not(feature = "static-alloc"))]
 pub fn arc_as_runnable<B: ActiveBehavior>(ao: Arc<ActiveObject<B>>) -> ActiveObjectRef {
     ao as ActiveObjectRef
 }
@@ -297,16 +322,45 @@ impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
     }
 }
 
-/// Type-erased, shareable handle to an active object used by the kernel registry.
+/// Type-erased handle to an active object used by the kernel registry.
+///
+/// On the dynamic build this is a reference-counted `Arc<dyn ActiveRunnable>`.
+/// Under the heap-free `static-alloc` build it is a `&'static dyn ActiveRunnable`
+/// — the active object lives in application-owned `static` storage, so the
+/// registry holds no allocation (see `docs/FUSA.md`, Phase 2). Both are `Clone`
+/// (`Arc` bumps the refcount; `&'static` is `Copy`), so kernel code is uniform.
+#[cfg(not(feature = "static-alloc"))]
 pub type ActiveObjectRef = Arc<dyn ActiveRunnable>;
+/// Heap-free active-object handle: a `&'static` trait object. See the dynamic
+/// variant above.
+#[cfg(feature = "static-alloc")]
+pub type ActiveObjectRef = &'static dyn ActiveRunnable;
 
-/// Helper builder for typed active objects.
+/// Helper builder for typed active objects (dynamic build): allocates an `Arc`
+/// and erases it to [`ActiveObjectRef`].
+#[cfg(not(feature = "static-alloc"))]
 pub fn new_active_object<B: ActiveBehavior>(
     id: ActiveObjectId,
     priority: u8,
     behavior: B,
 ) -> ActiveObjectRef {
     ActiveObject::new(id, priority, behavior) as ActiveObjectRef
+}
+
+/// Helper builder for typed active objects (`static-alloc` + `std`): leaks the
+/// active object to obtain a `&'static` handle.
+///
+/// This convenience exists for host tests, which have `std`; it deliberately
+/// uses the heap (`Box::leak`). Genuine heap-free targets (no `std`) instead
+/// place the [`ActiveObject`] in their own `static`/`StaticCell` storage and
+/// pass a `&'static` reference to the kernel — so this helper is absent there.
+#[cfg(all(feature = "static-alloc", feature = "std"))]
+pub fn new_active_object<B: ActiveBehavior>(
+    id: ActiveObjectId,
+    priority: u8,
+    behavior: B,
+) -> ActiveObjectRef {
+    alloc::boxed::Box::leak(alloc::boxed::Box::new(ActiveObject::new(id, priority, behavior)))
 }
 
 /// Convenience behavior for static state machines that only react to signals.

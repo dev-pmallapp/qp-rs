@@ -4,9 +4,17 @@
 //! environments. With the `std` feature enabled, uses standard library types.
 //! Without it, uses `spin::Mutex` for locking.
 
-#[cfg(not(feature = "std"))]
+// The heap-free `static-alloc` build links no allocator, so `alloc::sync::Arc`
+// is unavailable there; framework code on that path uses `&'static` handles
+// instead (see `docs/FUSA.md`, Phase 2). `std` builds always re-export `Arc`
+// (host tests still use it).
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 pub use alloc::sync::Arc;
+// On the `static-alloc` lib build no framework code uses `Arc` (handles are
+// `&'static`); it is still re-exported for `std` host tests, so suppress the
+// expected unused-import lint there only.
 #[cfg(feature = "std")]
+#[cfg_attr(feature = "static-alloc", allow(unused_imports))]
 pub use std::sync::Arc;
 
 #[cfg(feature = "std")]

@@ -3,13 +3,35 @@
 //! Provides a static, data-driven QMsm hierarchical state machine compatible with
 //! QP/C++ v8.x conventions.
 
+#[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
+#[cfg(not(feature = "static-alloc"))]
 use alloc::vec::Vec;
 
 use crate::active::{ActiveBehavior, ActiveContext};
 use crate::event::{DynEvent, Signal};
 use crate::hsm::QAsm;
 use crate::trace::TraceHook;
+
+/// Shallow-history table. Dynamic: heap [`BTreeMap`]; `static-alloc`: heap-free
+/// [`heapless::FnvIndexMap`] (power-of-two capacity).
+#[cfg(not(feature = "static-alloc"))]
+type QmHistoryMap<S> = BTreeMap<usize, &'static QMState<S>>;
+/// Max composite states with remembered history under the heap-free build.
+#[cfg(feature = "static-alloc")]
+pub const QM_HISTORY_CAP: usize = 16;
+#[cfg(feature = "static-alloc")]
+type QmHistoryMap<S> = heapless::FnvIndexMap<usize, &'static QMState<S>, QM_HISTORY_CAP>;
+
+/// Maximum state-nesting depth for the heap-free ancestry path.
+#[cfg(feature = "static-alloc")]
+pub const QM_MAX_NEST: usize = 16;
+/// Ancestry path type. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
+/// [`heapless::Vec`] bounded by [`QM_MAX_NEST`].
+#[cfg(not(feature = "static-alloc"))]
+type QmPath<S> = Vec<&'static QMState<S>>;
+#[cfg(feature = "static-alloc")]
+type QmPath<S> = heapless::Vec<&'static QMState<S>, QM_MAX_NEST>;
 
 // ── QS record IDs for QEP events ────────────────────────────────────────────
 const QS_QEP_STATE_ENTRY:  u8 = 1;
@@ -78,7 +100,7 @@ pub struct QMsm<S: 'static> {
     state: &'static QMState<S>,
     temp: &'static QMState<S>,
     sm: S,
-    history: BTreeMap<usize, &'static QMState<S>>,
+    history: QmHistoryMap<S>,
 }
 
 impl<S: Send + 'static> QMsm<S> {
@@ -88,7 +110,7 @@ impl<S: Send + 'static> QMsm<S> {
             state: initial, // Will be set to target during init
             temp: initial,
             sm,
-            history: BTreeMap::new(),
+            history: QmHistoryMap::new(),
         }
     }
 
@@ -240,7 +262,12 @@ impl<S: Send + 'static> QMsm<S> {
         let mut s = current;
         while !same_qmstate(s, lca.unwrap_or(s)) {
             if let Some(parent) = s.superstate {
+                #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as *const _ as usize, s);
+                #[cfg(feature = "static-alloc")]
+                if self.history.insert(parent as *const _ as usize, s).is_err() {
+                    crate::fusa::on_error(module_path!(), line!());
+                }
             }
 
             if let Some(exit_act) = s.exit_action {
@@ -333,11 +360,18 @@ impl<S: Send + 'static> ActiveBehavior for QMsm<S> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn path_to_top<S: 'static>(s: &'static QMState<S>) -> Vec<&'static QMState<S>> {
-    let mut path = Vec::new();
+fn path_to_top<S: 'static>(s: &'static QMState<S>) -> QmPath<S> {
+    let mut path = QmPath::new();
     let mut cur = Some(s);
     while let Some(state) = cur {
+        #[cfg(not(feature = "static-alloc"))]
         path.push(state);
+        // Heap-free ancestry path is bounded by `QM_MAX_NEST`; deeper nesting is
+        // a configuration fault.
+        #[cfg(feature = "static-alloc")]
+        if path.push(state).is_err() {
+            crate::fusa::on_error(module_path!(), line!());
+        }
         cur = state.superstate;
     }
     path

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::active::{new_active_object, ActiveContext, SignalHandler};
 use crate::kernel::Kernel;
-use crate::time::{TimeEvent, TimeEventConfig, TimerWheel};
+use crate::time::{new_time_event, share_kernel, TimeEventConfig, TimerWheel};
 use crate::{ActiveObjectId, Signal};
 
 #[derive(Clone, Default)]
@@ -23,11 +23,11 @@ fn time_event_fires_after_tick() {
     let collector = Collector::default();
     let probe = collector.clone();
     let ao = new_active_object(ActiveObjectId::new(1), 1, collector);
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
     let mut wheel = TimerWheel::new(kernel.clone());
-    let time_evt = TimeEvent::new(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)));
+    let time_evt = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)));
     time_evt.arm(1, None);
     wheel.register(time_evt);
 
@@ -44,18 +44,18 @@ fn multi_tick_rate_domains() {
     let collector = Collector::default();
     let probe = collector.clone();
     let ao = new_active_object(ActiveObjectId::new(1), 1, collector);
-    let kernel = Arc::new(Kernel::builder().register(ao).build());
+    let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
     let mut wheel = TimerWheel::new(kernel.clone());
 
     // Event on domain 0
-    let time_evt0 = TimeEvent::new(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)).with_tick_rate(0));
+    let time_evt0 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)).with_tick_rate(0));
     time_evt0.arm(1, None);
     wheel.register(time_evt0);
 
     // Event on domain 1
-    let time_evt1 = TimeEvent::new(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x20)).with_tick_rate(1));
+    let time_evt1 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x20)).with_tick_rate(1));
     time_evt1.arm(1, None);
     wheel.register(time_evt1);
 

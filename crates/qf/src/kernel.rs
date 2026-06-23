@@ -3,11 +3,17 @@
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
-use alloc::vec;
+#[cfg(not(feature = "static-alloc"))]
 use alloc::vec::Vec;
 
-use crate::sync::{Arc, Mutex};
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
+// `Mutex` guards the cooperative scheduler state; the SMP kernel uses lock-free
+// atomics instead, so it is only needed off the `smp` path.
+#[cfg(not(feature = "smp"))]
+use crate::sync::Mutex;
 use crate::trace::{TraceError, TraceHook};
 
 use crate::active::{ActiveObjectId, ActiveObjectRef};
@@ -18,6 +24,45 @@ const QS_SCHED_LOCK: u8 = 50;
 const QS_SCHED_UNLOCK: u8 = 51;
 const QS_SCHED_NEXT: u8 = 52;
 const QS_SCHED_IDLE: u8 = 53;
+
+/// Maximum active objects in the heap-free registry (idle priority 0 plus the
+/// 1..=63 application range that the preemptive kernels permit).
+#[cfg(feature = "static-alloc")]
+pub const MAX_ACTIVE: usize = 64;
+
+/// The registry vector for active-object handles. Dynamic: a heap [`Vec`];
+/// `static-alloc`: a fixed-capacity, heap-free [`heapless::Vec`].
+#[cfg(not(feature = "static-alloc"))]
+type ObjVec = Vec<ActiveObjectRef>;
+#[cfg(feature = "static-alloc")]
+type ObjVec = heapless::Vec<ActiveObjectRef, MAX_ACTIVE>;
+
+/// Push an active-object handle into a registry vector, faulting (crash-only)
+/// if the fixed-capacity heap-free vector is full.
+#[inline]
+fn push_obj(v: &mut ObjVec, o: ActiveObjectRef) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(o);
+    #[cfg(feature = "static-alloc")]
+    if v.push(o).is_err() {
+        crate::fusa::on_error(module_path!(), line!());
+    }
+}
+
+/// Clone a registry handle: an `Arc` refcount bump on the dynamic build, a
+/// trivial pointer copy under `static-alloc`.
+#[cfg(feature = "smp")]
+#[inline]
+fn clone_ref(a: &ActiveObjectRef) -> ActiveObjectRef {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        Arc::clone(a)
+    }
+    #[cfg(feature = "static-alloc")]
+    {
+        *a
+    }
+}
 
 #[derive(Default)]
 struct SchedulerState {
@@ -177,7 +222,7 @@ impl KernelConfigBuilder {
 /// trace hook, then [`build`](Self::build).
 pub struct KernelBuilder {
     config: KernelConfig,
-    objects: Vec<ActiveObjectRef>,
+    objects: ObjVec,
     trace: Option<TraceHook>,
     pubsub: Option<PubSubTable>,
 }
@@ -187,7 +232,7 @@ impl KernelBuilder {
     pub fn new(config: KernelConfig) -> Self {
         Self {
             config,
-            objects: Vec::new(),
+            objects: ObjVec::new(),
             trace: None,
             pubsub: None,
         }
@@ -201,7 +246,7 @@ impl KernelBuilder {
 
     /// Registers an active object with the kernel.
     pub fn register(mut self, object: ActiveObjectRef) -> Self {
-        self.objects.push(object);
+        push_obj(&mut self.objects, object);
         self
     }
 
@@ -213,7 +258,9 @@ impl KernelBuilder {
 
     /// Sorts the registered objects by priority and constructs the [`QvKernel`].
     pub fn build(mut self) -> QvKernel {
-        self.objects.sort_by_key(|ao| ao.priority());
+        // `sort_unstable_by_key` is in `core` (no alloc) and is fine here:
+        // active-object priorities are unique, so stability is irrelevant.
+        self.objects.sort_unstable_by_key(|ao| ao.priority());
         QvKernel::new(self.config, self.objects, self.trace, self.pubsub)
     }
 }
@@ -254,6 +301,13 @@ pub struct MpsActiveSlot {
     pub executing_core: core::sync::atomic::AtomicU8,
 }
 
+/// SMP registry vector. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
+/// [`heapless::Vec`].
+#[cfg(all(feature = "smp", not(feature = "static-alloc")))]
+type SlotVec = Vec<MpsActiveSlot>;
+#[cfg(all(feature = "smp", feature = "static-alloc"))]
+type SlotVec = heapless::Vec<MpsActiveSlot, MAX_ACTIVE>;
+
 
 /// Cooperative, priority-based QF kernel: dispatches registered active objects
 /// run-to-completion, highest priority first, with scheduler-ceiling locking.
@@ -263,9 +317,12 @@ pub struct MpsActiveSlot {
 pub struct QvKernel {
     config: KernelConfig,
     #[cfg(not(feature = "smp"))]
-    objects: Vec<ActiveObjectRef>,
+    objects: ObjVec,
     #[cfg(feature = "smp")]
-    slots: Vec<MpsActiveSlot>,
+    slots: SlotVec,
+    /// Id → handle index for O(log n) `post`. Heap-free builds drop this map and
+    /// scan the registry instead (small, fixed AO counts).
+    #[cfg(not(feature = "static-alloc"))]
     by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
     #[cfg(not(feature = "smp"))]
@@ -294,12 +351,27 @@ impl QvKernel {
 
     /// Posts an event to the target active object's queue.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), KernelError> {
+        // Dynamic build: O(log n) id→handle map. Heap-free build: linear scan of
+        // the (small, fixed) registry — no `BTreeMap` allocation.
+        #[cfg(not(feature = "static-alloc"))]
         if let Some(ao) = self.by_id.get(&target) {
             ao.post(event);
-            Ok(())
-        } else {
-            Err(KernelError::NotFound(target))
+            return Ok(());
         }
+        #[cfg(feature = "static-alloc")]
+        {
+            #[cfg(not(feature = "smp"))]
+            let iter = self.objects.iter();
+            #[cfg(feature = "smp")]
+            let iter = self.slots.iter().map(|s| &s.object);
+            for ao in iter {
+                if ao.id() == target {
+                    ao.post(event);
+                    return Ok(());
+                }
+            }
+        }
+        Err(KernelError::NotFound(target))
     }
 
     /// Broadcasts or multicasts an event (with `signal`) to registered active objects.
@@ -433,7 +505,9 @@ impl QvKernel {
             .cloned();
 
         if let Some(ao) = candidate {
-            let mut note = None;
+            // (record, payload buffer, payload length) — a fixed stack buffer so
+            // the trace record carries no heap allocation.
+            let mut note: Option<(u8, [u8; 2], usize)> = None;
             let mut should_dispatch = true;
 
             {
@@ -444,19 +518,19 @@ impl QvKernel {
                     if scheduler.prev_prio != 0 {
                         let prev = scheduler.prev_prio;
                         scheduler.prev_prio = 0;
-                        note = Some((QS_SCHED_IDLE, vec![prev]));
+                        note = Some((QS_SCHED_IDLE, [prev, 0], 1));
                     }
                 } else {
                     let prev = scheduler.prev_prio;
                     if prio != prev {
-                        note = Some((QS_SCHED_NEXT, vec![prio, prev]));
+                        note = Some((QS_SCHED_NEXT, [prio, prev], 2));
                     }
                     scheduler.prev_prio = prio;
                 }
             }
 
-            if let Some((record, payload)) = note {
-                self.emit_scheduler_record(record, payload);
+            if let Some((record, buf, len)) = note {
+                self.emit_scheduler_record(record, &buf[..len]);
             }
 
             if !should_dispatch {
@@ -465,18 +539,18 @@ impl QvKernel {
 
             ao.dispatch_one()
         } else {
-            let mut note = None;
+            let mut note: Option<(u8, [u8; 2], usize)> = None;
             {
                 let mut scheduler = self.scheduler.lock();
                 if scheduler.prev_prio != 0 {
                     let prev = scheduler.prev_prio;
                     scheduler.prev_prio = 0;
-                    note = Some((QS_SCHED_IDLE, vec![prev]));
+                    note = Some((QS_SCHED_IDLE, [prev, 0], 1));
                 }
             }
 
-            if let Some((record, payload)) = note {
-                self.emit_scheduler_record(record, payload);
+            if let Some((record, buf, len)) = note {
+                self.emit_scheduler_record(record, &buf[..len]);
             }
 
             false
@@ -513,7 +587,7 @@ impl QvKernel {
                 let mut dispatched = false;
                 if slot.object.has_events() {
                     let prio = slot.object.priority();
-                    self.emit_scheduler_record(QS_SCHED_NEXT, vec![prio, 0]);
+                    self.emit_scheduler_record(QS_SCHED_NEXT, &[prio, 0]);
                     dispatched = slot.object.dispatch_one();
                 }
                 slot.executing_core.store(CORE_ID_NONE, Ordering::Release);
@@ -531,14 +605,19 @@ impl QvKernel {
 
 impl QvKernel {
     #[cfg(not(feature = "smp"))]
-    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
-        let mut by_id = BTreeMap::new();
-        for ao in &objects {
-            by_id.insert(ao.id(), Arc::clone(ao));
-        }
+    fn new(config: KernelConfig, objects: ObjVec, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
+        #[cfg(not(feature = "static-alloc"))]
+        let by_id = {
+            let mut by_id = BTreeMap::new();
+            for ao in &objects {
+                by_id.insert(ao.id(), Arc::clone(ao));
+            }
+            by_id
+        };
         Self {
             config,
             objects,
+            #[cfg(not(feature = "static-alloc"))]
             by_id,
             trace,
             scheduler: Mutex::new(SchedulerState::default()),
@@ -548,19 +627,28 @@ impl QvKernel {
     }
 
     #[cfg(feature = "smp")]
-    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
+    fn new(config: KernelConfig, objects: ObjVec, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
+        #[cfg(not(feature = "static-alloc"))]
         let mut by_id = BTreeMap::new();
-        let mut slots = Vec::new();
+        let mut slots = SlotVec::new();
         for ao in &objects {
-            by_id.insert(ao.id(), Arc::clone(ao));
-            slots.push(MpsActiveSlot {
-                object: Arc::clone(ao),
+            #[cfg(not(feature = "static-alloc"))]
+            by_id.insert(ao.id(), clone_ref(ao));
+            let slot = MpsActiveSlot {
+                object: clone_ref(ao),
                 executing_core: core::sync::atomic::AtomicU8::new(CORE_ID_NONE),
-            });
+            };
+            #[cfg(not(feature = "static-alloc"))]
+            slots.push(slot);
+            #[cfg(feature = "static-alloc")]
+            if slots.push(slot).is_err() {
+                crate::fusa::on_error(module_path!(), line!());
+            }
         }
         Self {
             config,
             slots,
+            #[cfg(not(feature = "static-alloc"))]
             by_id,
             trace,
             sched_ceiling: core::sync::atomic::AtomicU8::new(0),
@@ -592,9 +680,9 @@ impl QvKernel {
         }
     }
 
-    fn emit_scheduler_record(&self, record_type: u8, payload: Vec<u8>) {
+    fn emit_scheduler_record(&self, record_type: u8, payload: &[u8]) {
         if let Some(trace) = &self.trace {
-            let _ = trace(record_type, &payload, true);
+            let _ = trace(record_type, payload, true);
         }
     }
 
@@ -625,36 +713,36 @@ impl QvKernel {
     /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
     #[cfg(not(feature = "smp"))]
     pub fn lock_scheduler(&self, ceiling: u8) {
-        let mut note = None;
+        let mut note: Option<[u8; 2]> = None;
         {
             let mut scheduler = self.scheduler.lock();
             if ceiling > scheduler.sched_ceiling {
                 let prev = scheduler.sched_ceiling;
                 scheduler.sched_ceiling = ceiling;
-                note = Some(vec![prev, ceiling]);
+                note = Some([prev, ceiling]);
             }
         }
 
         if let Some(payload) = note {
-            self.emit_scheduler_record(QS_SCHED_LOCK, payload);
+            self.emit_scheduler_record(QS_SCHED_LOCK, &payload);
         }
     }
 
     /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
     #[cfg(not(feature = "smp"))]
     pub fn unlock_scheduler(&self) {
-        let mut note = None;
+        let mut note: Option<[u8; 2]> = None;
         {
             let mut scheduler = self.scheduler.lock();
             if scheduler.sched_ceiling != 0 {
                 let prev = scheduler.sched_ceiling;
                 scheduler.sched_ceiling = 0;
-                note = Some(vec![prev, 0]);
+                note = Some([prev, 0]);
             }
         }
 
         if let Some(payload) = note {
-            self.emit_scheduler_record(QS_SCHED_UNLOCK, payload);
+            self.emit_scheduler_record(QS_SCHED_UNLOCK, &payload);
         }
     }
 
@@ -662,7 +750,7 @@ impl QvKernel {
     /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
     #[cfg(feature = "smp")]
     pub fn lock_scheduler(&self, ceiling: u8) {
-        let mut note = None;
+        let mut note: Option<[u8; 2]> = None;
         loop {
             let current = self.sched_ceiling.load(Ordering::Acquire);
             if ceiling <= current {
@@ -674,20 +762,20 @@ impl QvKernel {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ).is_ok() {
-                note = Some(vec![current, ceiling]);
+                note = Some([current, ceiling]);
                 break;
             }
         }
 
         if let Some(payload) = note {
-            self.emit_scheduler_record(QS_SCHED_LOCK, payload);
+            self.emit_scheduler_record(QS_SCHED_LOCK, &payload);
         }
     }
 
     /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
     #[cfg(feature = "smp")]
     pub fn unlock_scheduler(&self) {
-        let mut note = None;
+        let mut note: Option<[u8; 2]> = None;
         loop {
             let current = self.sched_ceiling.load(Ordering::Acquire);
             if current == 0 {
@@ -699,13 +787,13 @@ impl QvKernel {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ).is_ok() {
-                note = Some(vec![current, 0]);
+                note = Some([current, 0]);
                 break;
             }
         }
 
         if let Some(payload) = note {
-            self.emit_scheduler_record(QS_SCHED_UNLOCK, payload);
+            self.emit_scheduler_record(QS_SCHED_UNLOCK, &payload);
         }
     }
 }

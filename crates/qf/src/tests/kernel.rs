@@ -21,16 +21,24 @@ impl SignalHandler for Collector {
 #[test]
 fn queue_high_watermark_is_sticky() {
     let ao = ActiveObject::new(ActiveObjectId::new(9), 1, Collector::default());
+    // `queue_len`/`queue_high_watermark` are inherent methods, so this test
+    // keeps the concrete object. `ActiveObject::new` yields an `Arc` on the
+    // dynamic build and a bare value under `static-alloc`; borrow a `&dyn`
+    // uniformly for the trait-method calls.
+    #[cfg(not(feature = "static-alloc"))]
+    let r: &dyn ActiveRunnable = &*ao;
+    #[cfg(feature = "static-alloc")]
+    let r: &dyn ActiveRunnable = &ao;
     assert_eq!(ao.queue_len(), 0);
     assert_eq!(ao.queue_high_watermark(), 0);
 
-    ActiveRunnable::post(&*ao, DynEvent::empty_dyn(Signal(1)));
-    ActiveRunnable::post(&*ao, DynEvent::empty_dyn(Signal(2)));
+    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal(1)));
+    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal(2)));
     assert_eq!(ao.queue_len(), 2);
     assert_eq!(ao.queue_high_watermark(), 2);
 
     // Draining the queue must not lower the high-water mark.
-    assert!(ActiveRunnable::dispatch_one(&*ao));
+    assert!(ActiveRunnable::dispatch_one(r));
     assert_eq!(ao.queue_len(), 1);
     assert_eq!(ao.queue_high_watermark(), 2);
 }
