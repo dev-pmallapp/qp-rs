@@ -99,15 +99,51 @@ fn pool_small_block_size_rounded_up() {
     let storage: &'static mut [u8] = unsafe { &mut *(&mut storage as *mut _) };
 
     let mut pool = QMPool::uninit();
-    // Request blocks of 1 byte — should be rounded up to usize size.
+    // Request blocks of 1 byte — rounded up to the 2-word minimum (the
+    // free-list link plus its Duplicate Storage copy).
     let n = pool.init(storage, 1);
-    assert_eq!(pool.block_size(), core::mem::size_of::<usize>());
+    assert_eq!(pool.block_size(), 2 * core::mem::size_of::<usize>());
     assert!(n > 0);
 
     let b = pool.get(0).expect("alloc from tiny-block pool");
     // Block must be aligned to usize.
     assert_eq!((b as usize) % core::mem::size_of::<usize>(), 0);
     unsafe { pool.put(b) };
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn pool_corrupted_freelist_link_faults() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mut storage = [0u8; 128];
+    let storage: &'static mut [u8] = unsafe { &mut *(&mut storage as *mut _) };
+
+    let mut pool = QMPool::uninit();
+    pool.init(storage, 16);
+
+    // Flip one half of the head block's duplicated next-link so the two copies
+    // disagree; the next allocation must detect it and fault (crash-only).
+    let word = core::mem::size_of::<usize>();
+    let dup = unsafe { pool_storage_ptr(&pool).add(word) as *mut usize };
+    unsafe { *dup = !*dup };
+
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(std::boxed::Box::new(|_| {}));
+    let caught = catch_unwind(AssertUnwindSafe(|| pool.get(0)));
+    std::panic::set_hook(prev);
+    assert!(caught.is_err(), "a corrupted free-list link must fault on alloc");
+}
+
+// Test-only helper: the base pointer of the pool's storage region.
+#[cfg(feature = "std")]
+fn pool_storage_ptr(pool: &QMPool) -> *mut u8 {
+    // The first free block sits at the start of storage; `get()` would return
+    // exactly this pointer, so round-trip a get/put to recover the base without
+    // reaching into private fields.
+    let p = pool.get(0).expect("one block");
+    unsafe { pool.put(p) };
+    p
 }
 
 #[test]

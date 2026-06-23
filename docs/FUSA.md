@@ -144,9 +144,19 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       with its inverse into one `AtomicU32` (CAS-loop updates verify the halves;
       overflow/underflow fault, giving built-in double-free detection).
       Miri-validated, including a 4-thread concurrent stress test (no data
-      races). *(Remaining sites: queue indices, pool free-list links, and AO
-      current state.)*
-- [ ] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
+      races). The **pool free-list head/counters** (`QMPool::free_head`,
+      `free_cnt`, `free_min`) are DIS-protected indices, and the **HSM current
+      state** (`QHsm::state`) uses [`Dup`](#) Duplicate Storage (a function
+      pointer has no meaningful inverse, so `Dup` rather than `Dis` is used).
+      All Miri-revalidated.
+- [x] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
+      `qf::dis::Dup<T>` keeps two identical copies and verifies them on read —
+      the companion to `Dis` for values with no bitwise inverse. Each free
+      block stores its next-link **twice**; `QMPool::get` verifies the copies
+      agree before trusting the link (corrupt link → `fusa::on_error`), so a
+      bit flip in the free list cannot hand out an out-of-range block. The
+      minimum block size is now `2 * size_of::<usize>()` to hold the duplicated
+      link. Miri-validated (incl. a corrupted-link fault test).
 - [x] Event-queue **safety-margin** API: a persistent per-queue margin reserves
       free slots for critical traffic. `post_normal` sheds normal-priority events
       (counted, `shed_count`) instead of overflowing, returning a `PostStatus`

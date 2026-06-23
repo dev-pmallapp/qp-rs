@@ -46,6 +46,7 @@
 use alloc::collections::BTreeMap;
 
 use crate::active::{ActiveBehavior, ActiveContext};
+use crate::dis::Dup;
 use crate::event::{DynEvent, Event, Signal};
 use crate::trace::TraceHook;
 
@@ -162,8 +163,11 @@ pub trait QAsm: Send + 'static {
 /// It implements [`ActiveBehavior`] so it can be registered directly with the
 /// QF kernel.
 pub struct QHsm<S> {
-    /// Current stable state handler (leaf of the active configuration).
-    state: StateHandler<S>,
+    /// Current stable state handler (leaf of the active configuration),
+    /// protected by Duplicate Storage: a corrupted state pointer would dispatch
+    /// to the wrong handler, so the two copies are verified on every read (see
+    /// `docs/FUSA.md`, Phase 3).
+    state: Dup<StateHandler<S>>,
     /// Temporary: initial pseudo-state before `init()`, unused afterwards.
     temp: StateHandler<S>,
     /// User-defined state machine data.
@@ -192,7 +196,7 @@ impl<S: Send + 'static> QHsm<S> {
     /// `QHsmResult::Tran(first_real_state)` when called with `Q_INIT_SIG`.
     pub fn new(sm: S, initial: StateHandler<S>) -> Self {
         Self {
-            state: Self::top_state,
+            state: Dup::new(Self::top_state as StateHandler<S>),
             temp: initial,
             sm,
             history: BTreeMap::new(),
@@ -201,7 +205,7 @@ impl<S: Send + 'static> QHsm<S> {
 
     /// Returns `true` if the state machine is in the given state (or any of its substates).
     pub fn is_in(&mut self, state: StateHandler<S>) -> bool {
-        let mut cur = self.state;
+        let mut cur = self.state.get();
         loop {
             if same_state(cur, state) {
                 return true;
@@ -223,7 +227,7 @@ impl<S: Send + 'static> QHsm<S> {
     /// 8.1.1, which made `getStateHandler()` unconditionally virtual). Compare
     /// results with [`same_state`] rather than `==`.
     pub fn state_handler(&self) -> StateHandler<S> {
-        self.state
+        self.state.get()
     }
 
     /// Returns a shared reference to the user state machine data.
@@ -268,7 +272,7 @@ impl<S: Send + 'static> QHsm<S> {
             }
         }
 
-        self.state = target;
+        self.state.set(target);
 
         if let Some(ref hook) = trace {
             emit_init_tran(hook, target as usize);
@@ -288,11 +292,11 @@ impl<S: Send + 'static> QHsm<S> {
     /// Dispatch an event with optional QS tracing.
     pub fn dispatch_traced(&mut self, event: &DynEvent, trace: Option<TraceHook>) {
         if let Some(ref hook) = trace {
-            emit_dispatch(hook, event.signal(), self.state as usize);
+            emit_dispatch(hook, event.signal(), self.state.get() as usize);
         }
 
         // Walk the hierarchy upward until an event handler is found.
-        let mut s = self.state;
+        let mut s = self.state.get();
         let source: StateHandler<S>;
         let result: QHsmResult<S>;
 
@@ -422,7 +426,7 @@ impl<S: Send + 'static> QHsm<S> {
         target: StateHandler<S>,
         trace: &Option<TraceHook>,
     ) {
-        let current = self.state;
+        let current = self.state.get();
 
         // Build ancestry paths.
         let (target_path, target_len) = self.path_to_top(target);
@@ -482,7 +486,7 @@ impl<S: Send + 'static> QHsm<S> {
             }
         }
 
-        self.state = target;
+        self.state.set(target);
 
         // Resolve nested initial transitions in the new state.
         self.handle_nested_init(trace);
@@ -497,13 +501,13 @@ impl<S: Send + 'static> QHsm<S> {
     fn handle_nested_init(&mut self, trace: &Option<TraceHook>) {
         let init_e = Event::empty_dyn(Q_INIT_SIG);
         loop {
-            match (self.state)(&mut self.sm, &init_e) {
+            match (self.state.get())(&mut self.sm, &init_e) {
                 QHsmResult::Tran(next) => {
                     // Build path from `next` up to `self.state` (the current composite state).
                     let (next_path, next_len) = self.path_to_top(next);
 
                     // Find where `self.state` sits in that path.
-                    let current = self.state;
+                    let current = self.state.get();
                     let current_idx = next_path[..next_len]
                         .iter()
                         .position(|&t| same_state(t, current))
@@ -518,10 +522,10 @@ impl<S: Send + 'static> QHsm<S> {
                     }
 
                     if let Some(ref hook) = trace {
-                        emit_state_init(hook, self.state as usize);
+                        emit_state_init(hook, self.state.get() as usize);
                     }
 
-                    self.state = next;
+                    self.state.set(next);
                 }
                 _ => break,
             }

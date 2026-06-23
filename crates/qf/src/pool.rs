@@ -7,9 +7,14 @@
 //! # Layout
 //!
 //! The storage slice is divided into `(total_size / block_size)` blocks.  Each
-//! free block's first `size_of::<usize>()` bytes hold the index of the next
-//! free block (or `SENTINEL` for the tail).  In-use blocks have opaque
-//! content owned by the caller.
+//! free block's first two `usize` words hold the index of the next free block
+//! (or `SENTINEL` for the tail), stored **twice** as Duplicate Storage: the
+//! link is read back from both words and a mismatch (bit flip / SEU) is routed
+//! to [`crate::fusa::on_error`] (see `docs/FUSA.md`, Phase 3). The free-list
+//! head and counters are likewise protected with Duplicate Inverse Storage
+//! ([`crate::dis::Dis`]).  Because of the duplicated link, the minimum block
+//! size is `2 * size_of::<usize>()`.  In-use blocks have opaque content owned by
+//! the caller.
 //!
 //! # Safety
 //!
@@ -23,6 +28,8 @@
 use core::cell::UnsafeCell;
 use core::mem;
 use core::ptr;
+
+use crate::dis::Dis;
 
 // Block-index sentinel meaning "end of free list".
 const SENTINEL: usize = usize::MAX;
@@ -41,12 +48,13 @@ pub struct QMPool {
     block_size: usize,
     /// Total number of blocks carved from the storage.
     num_blocks: usize,
-    /// Index of the head of the free list (`SENTINEL` = empty).
-    free_head: UnsafeCell<usize>,
-    /// Current number of free blocks.
-    free_cnt: UnsafeCell<usize>,
-    /// Minimum free count ever seen (high-water-mark complement).
-    free_min: UnsafeCell<usize>,
+    /// Index of the head of the free list (`SENTINEL` = empty), DIS-protected:
+    /// a corrupted head would hand out a block from the wrong offset.
+    free_head: UnsafeCell<Dis<usize>>,
+    /// Current number of free blocks, DIS-protected.
+    free_cnt: UnsafeCell<Dis<usize>>,
+    /// Minimum free count ever seen (high-water-mark complement), DIS-protected.
+    free_min: UnsafeCell<Dis<usize>>,
 }
 
 // SAFETY: `QMPool` is `Send` because it owns its storage exclusively and all
@@ -64,9 +72,9 @@ impl QMPool {
             storage_len: 0,
             block_size: 0,
             num_blocks: 0,
-            free_head: UnsafeCell::new(SENTINEL),
-            free_cnt: UnsafeCell::new(0),
-            free_min: UnsafeCell::new(0),
+            free_head: UnsafeCell::new(Dis::new_usize(SENTINEL)),
+            free_cnt: UnsafeCell::new(Dis::new_usize(0)),
+            free_min: UnsafeCell::new(Dis::new_usize(0)),
         }
     }
 
@@ -86,7 +94,9 @@ impl QMPool {
         // Round up block_size to usize alignment so embedded next-pointers fit.
         let align = mem::size_of::<usize>();
         let blk = ((block_size + align - 1) / align) * align;
-        let blk = blk.max(align); // at minimum one pointer fits
+        // At minimum two pointers fit: the free-list link plus its Duplicate
+        // Storage copy (see module docs).
+        let blk = blk.max(2 * align);
 
         // Align the start of storage to usize so free-list pointer writes are
         // always aligned (static [u8; N] only guarantees 1-byte alignment).
@@ -106,19 +116,25 @@ impl QMPool {
         self.block_size = blk;
         self.num_blocks = n;
 
-        // Build the initial free list: each block[i] → block[i+1].
+        // Build the initial free list: each block[i] → block[i+1].  The link is
+        // written twice (Duplicate Storage) so a corrupted next-index is caught
+        // when the block is later allocated.
+        // SAFETY: each `ptr` is the `usize`-aligned start of block `i`, which is
+        // ≥ `2 * align` bytes, so both `*ptr` and `*ptr.add(1)` are in-bounds.
         unsafe {
             for i in 0..n {
                 let ptr = self.storage.add(i * blk) as *mut usize;
-                *ptr = if i + 1 < n { i + 1 } else { SENTINEL };
+                let next = if i + 1 < n { i + 1 } else { SENTINEL };
+                *ptr = next;
+                *ptr.add(1) = next;
             }
         }
 
         // SAFETY: we are the only accessor at init time.
         unsafe {
-            *self.free_head.get() = 0;
-            *self.free_cnt.get() = n;
-            *self.free_min.get() = n;
+            *self.free_head.get() = Dis::new(0);
+            *self.free_cnt.get() = Dis::new(n);
+            *self.free_min.get() = Dis::new(n);
         }
 
         n
@@ -139,28 +155,32 @@ impl QMPool {
     pub fn get(&self, margin: usize) -> Option<*mut u8> {
         // SAFETY: Single-threaded access guaranteed by caller's mutex.
         unsafe {
-            let free_cnt = *self.free_cnt.get();
+            let free_cnt = (*self.free_cnt.get()).get();
             if free_cnt == 0 || free_cnt.saturating_sub(1) < margin {
                 return None;
             }
 
-            let head = *self.free_head.get();
+            let head = (*self.free_head.get()).get();
             if head == SENTINEL {
                 return None;
             }
 
-            // Advance free-list head.
+            // Advance free-list head, verifying the duplicated next-link first:
+            // both copies must agree or the free list has been corrupted.
             let ptr = self.storage.add(head * self.block_size) as *mut usize;
             let next = *ptr;
-            *self.free_head.get() = next;
+            if next != *ptr.add(1) {
+                crate::fusa::on_error(module_path!(), line!());
+            }
+            *self.free_head.get() = Dis::new(next);
 
             let new_free = free_cnt - 1;
-            *self.free_cnt.get() = new_free;
+            *self.free_cnt.get() = Dis::new(new_free);
 
             // Update low-watermark.
-            let free_min = *self.free_min.get();
+            let free_min = (*self.free_min.get()).get();
             if new_free < free_min {
-                *self.free_min.get() = new_free;
+                *self.free_min.get() = Dis::new(new_free);
             }
 
             Some(self.storage.add(head * self.block_size))
@@ -184,13 +204,17 @@ impl QMPool {
             "QMPool::put: misaligned pointer"
         );
 
-        // Push block onto free-list head.
+        // Push block onto free-list head, writing the next-link in both words
+        // (Duplicate Storage) so the link can be integrity-checked on the next
+        // allocation.
         let ptr = block as *mut usize;
-        let old_head = *self.free_head.get();
+        let old_head = (*self.free_head.get()).get();
         *ptr = old_head;
-        *self.free_head.get() = idx;
+        *ptr.add(1) = old_head;
+        *self.free_head.get() = Dis::new(idx);
 
-        *self.free_cnt.get() += 1;
+        let new_cnt = (*self.free_cnt.get()).get() + 1;
+        *self.free_cnt.get() = Dis::new(new_cnt);
     }
 
     // ── Diagnostics ──────────────────────────────────────────────────────────
@@ -207,7 +231,8 @@ impl QMPool {
 
     /// Current number of free (available) blocks.
     pub fn get_free(&self) -> usize {
-        unsafe { *self.free_cnt.get() }
+        // SAFETY: caller-serialised access; DIS read verifies integrity.
+        unsafe { (*self.free_cnt.get()).get() }
     }
 
     /// Current number of allocated (in-use) blocks.
@@ -217,7 +242,8 @@ impl QMPool {
 
     /// Minimum number of free blocks ever recorded (low watermark).
     pub fn get_min(&self) -> usize {
-        unsafe { *self.free_min.get() }
+        // SAFETY: caller-serialised access; DIS read verifies integrity.
+        unsafe { (*self.free_min.get()).get() }
     }
 
     /// Returns `true` if this pool can service a block of `size` bytes

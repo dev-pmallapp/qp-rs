@@ -93,6 +93,20 @@ impl<T: DisInt> Dis<T> {
     }
 }
 
+impl Dis<usize> {
+    /// `const` constructor for the `usize` specialisation, so a [`Dis`]-protected
+    /// index can live in a `const fn` / `static` initialiser (e.g. a pool
+    /// free-list head). The generic [`Dis::new`] cannot be `const` because the
+    /// `Not` bound is not callable in a generic `const` context.
+    #[inline]
+    pub const fn new_usize(value: usize) -> Self {
+        Self {
+            value,
+            inverse: !value,
+        }
+    }
+}
+
 impl<T: DisInt + core::fmt::Debug> core::fmt::Debug for Dis<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Avoid faulting inside Debug; report integrity instead.
@@ -100,6 +114,63 @@ impl<T: DisInt + core::fmt::Debug> core::fmt::Debug for Dis<T> {
             .field("value", &self.value)
             .field("intact", &self.is_intact())
             .finish()
+    }
+}
+
+/// Duplicate Storage (non-inverted): keeps two identical copies of a value and
+/// verifies they still agree on every read.
+///
+/// This is the companion to [`Dis`] for values that have **no meaningful
+/// bitwise inverse** — function pointers (e.g. HSM state handlers) and opaque
+/// links — where DIS's complement encoding does not apply. A mismatch between
+/// the two copies signals corruption (bit flip / SEU) and is routed to
+/// [`crate::fusa::on_error`]. This is the QP/C "Duplicate Storage" redundancy
+/// (see `docs/FUSA.md`, Phase 3), as distinct from the inverse-encoded [`Dis`].
+///
+/// `Copy` when `T: Copy`, so it drops into a struct field in place of a plain
+/// `T`.
+#[derive(Clone, Copy)]
+pub struct Dup<T: Copy + PartialEq> {
+    a: T,
+    b: T,
+}
+
+impl<T: Copy + PartialEq> Dup<T> {
+    /// Wrap `value`, storing it in both copies.
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self { a: value, b: value }
+    }
+
+    /// Read the protected value, verifying the redundant copy first.
+    ///
+    /// Faults via [`crate::fusa::on_error`] (does not return) if the two copies
+    /// disagree — i.e. the storage has been corrupted.
+    #[inline]
+    pub fn get(&self) -> T {
+        if self.a != self.b {
+            crate::fusa::on_error(module_path!(), line!());
+        }
+        self.a
+    }
+
+    /// Overwrite both copies of the protected value.
+    #[inline]
+    pub fn set(&mut self, value: T) {
+        self.a = value;
+        self.b = value;
+    }
+
+    /// Non-faulting integrity check: `true` if the two copies are consistent.
+    #[inline]
+    pub fn is_intact(&self) -> bool {
+        self.a == self.b
+    }
+
+    /// Corrupt the redundant copy without updating the value — test only.
+    #[cfg(test)]
+    fn corrupt_with(&mut self, other: T) {
+        self.b = other;
     }
 }
 
@@ -240,6 +311,48 @@ mod tests {
         let caught = std::panic::catch_unwind(move || d.get());
         std::panic::set_hook(prev);
         assert!(caught.is_err(), "a corrupted DIS read must fault");
+    }
+
+    #[test]
+    fn dup_roundtrip_and_update() {
+        let mut d = Dup::new(0xDEAD_BEEFu32);
+        assert!(d.is_intact());
+        assert_eq!(d.get(), 0xDEAD_BEEF);
+        d.set(0);
+        assert_eq!(d.get(), 0);
+        assert!(d.is_intact());
+
+        // Works for non-integer `Copy + PartialEq` values (e.g. fn pointers).
+        fn a() {}
+        fn b() {}
+        let mut f: Dup<fn()> = Dup::new(a);
+        assert!(f.is_intact());
+        f.set(b);
+        // Compare by address rather than the fn pointers directly (the latter
+        // is not a meaningful comparison per clippy); the read must still be
+        // intact.
+        assert!(f.is_intact());
+        assert_eq!(f.get() as usize, b as usize);
+    }
+
+    #[test]
+    fn dup_corruption_is_detected_without_faulting() {
+        let mut d = Dup::new(7u32);
+        assert!(d.is_intact());
+        d.corrupt_with(8);
+        assert!(!d.is_intact());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn dup_corrupted_read_faults() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(std::boxed::Box::new(|_| {}));
+        let mut d = Dup::new(7u32);
+        d.corrupt_with(9);
+        let caught = std::panic::catch_unwind(move || d.get());
+        std::panic::set_hook(prev);
+        assert!(caught.is_err(), "a corrupted Dup read must fault");
     }
 
     #[test]
