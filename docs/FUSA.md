@@ -180,9 +180,13 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       `deny.toml` — the "trusted/verified elements only" supply-chain gate.
       *(Remaining: broaden the clippy gate as `qf`/`qs` warnings are cleared.)*
 - [x] Reference toolchain documented — see [§8 Reference toolchain](#8-reference-toolchain).
-- [ ] **Traceability**: tag each Assumed Safety Requirement (ASR) in
-      doc-comments and generate a forward/backward trace matrix (analog to
-      QP's Spexygen).
+- [x] **Traceability**: Assumed Safety Requirements (ASR-001…ASR-007) are
+      catalogued in [`docs/traceability.md`](traceability.md) and tagged at their
+      implementing code sites with `ASR-NNN` markers.
+      [`tools/trace-matrix.sh`](../tools/trace-matrix.sh) generates the
+      forward/backward matrix and (`--check`, gated in CI) fails on any ASR with
+      no implementing tag or any code tag referencing an undefined ASR — the
+      Spexygen analog.
 
 ### Phase 5 — Port-level memory isolation
 

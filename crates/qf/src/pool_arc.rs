@@ -15,6 +15,9 @@
 //!
 //! A signal-only event (`()` payload) uses the allocation-free
 //! [`PoolArc::empty`] variant, so the common case needs no pool at all.
+//!
+//! Traceability: ASR-003 (static allocation), ASR-004 (DIS-protected refcount /
+//! pool id); see `docs/traceability.md`.
 
 use core::any::Any;
 use core::ptr::{self, NonNull};

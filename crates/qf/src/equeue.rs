@@ -44,6 +44,8 @@ use crate::sync::Mutex;
 /// the queue fills into that margin, normal-priority posts are **shed** (dropped
 /// in a controlled, counted way) rather than silently overflowing — keeping
 /// headroom for critical events and signalling that the system is degraded.
+///
+/// Traceability: ASR-005 (graceful degradation); see `docs/traceability.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostStatus {
     /// Accepted with healthy headroom (free slots remain above the margin).
@@ -297,6 +299,8 @@ impl<const N: usize> StaticEQueueInner<N> {
 /// `VecDeque`, no heap — making it suitable for the `no_std` + `static-alloc`
 /// functional-safety build (see `docs/FUSA.md`, Phase 2). Capacity is fixed at
 /// the type level by the const generic `N`.
+///
+/// Traceability: ASR-003 (static allocation); see `docs/traceability.md`.
 ///
 /// Because [`new`](Self::new) is `const`, an instance can live in `static`
 /// storage with no runtime initialisation:

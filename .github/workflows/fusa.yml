@@ -59,6 +59,17 @@ jobs:
         with:
           command: check advisories licenses sources
 
+  traceability:
+    name: Traceability (ASR matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Forward/backward trace check (docs/FUSA.md, Phase 4): every Assumed
+      # Safety Requirement in docs/traceability.md must have >=1 implementing
+      # code tag, and no code tag may reference an undefined ASR.
+      - name: Verify ASR traceability matrix
+        run: ./tools/trace-matrix.sh --check
+
   miri:
     name: Miri (unsafe pool / payload)
     # Function-pointer-equality in the HSM is unreliable under Miri, so Miri is

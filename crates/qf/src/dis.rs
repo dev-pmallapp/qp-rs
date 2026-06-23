@@ -10,6 +10,8 @@
 //! This is the QP/C `Q_DIS`-style redundancy applied to scalar fields such as
 //! active-object priorities, queue indices, and pool free-list links.
 //!
+//! Traceability: ASR-004 (error-detecting codes); see `docs/traceability.md`.
+//!
 //! ```
 //! use qf::dis::Dis;
 //!

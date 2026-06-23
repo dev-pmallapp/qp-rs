@@ -33,6 +33,7 @@ preemption threshold must be `>=` the AO's own priority.
 #![cfg_attr(not(feature = "std"), no_std)]
 // Functional safety (docs/FUSA.md, Phase 4): the preemptive-kernel layer is
 // memory-safe by construction — all unsafe lives below it in `qf`.
+// Traceability: ASR-006 (memory-safe language subset / trusted elements).
 #![forbid(unsafe_code)]
 
 extern crate alloc;

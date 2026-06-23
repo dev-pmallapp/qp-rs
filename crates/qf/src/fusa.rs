@@ -4,6 +4,9 @@
 //! well-defined path for every detected fault, mirroring QP/C's
 //! `Q_ASSERT` / `Q_onError()` design.
 //!
+//! Traceability: ASR-001 (single crash-only fault path), ASR-002
+//! (failure-assertion programming); see `docs/traceability.md`.
+//!
 //! # Crash-only model
 //!
 //! Rather than attempting complex recovery, qp-rs follows the **crash-only**

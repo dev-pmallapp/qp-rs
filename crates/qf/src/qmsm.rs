@@ -71,6 +71,9 @@ pub fn same_qmstate<S: 'static>(a: &'static QMState<S>, b: &'static QMState<S>) 
 }
 
 /// Quantum Meta State Machine.
+///
+/// Traceability: ASR-007 (semi-formal behavioural model); see
+/// `docs/traceability.md`.
 pub struct QMsm<S: 'static> {
     state: &'static QMState<S>,
     temp: &'static QMState<S>,

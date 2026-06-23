@@ -162,6 +162,9 @@ pub trait QAsm: Send + 'static {
 ///
 /// It implements [`ActiveBehavior`] so it can be registered directly with the
 /// QF kernel.
+///
+/// Traceability: ASR-007 (semi-formal behavioural model); see
+/// `docs/traceability.md`.
 pub struct QHsm<S> {
     /// Current stable state handler (leaf of the active configuration),
     /// protected by Duplicate Storage: a corrupted state pointer would dispatch

@@ -187,6 +187,7 @@ pub struct ActiveObject<B: ActiveBehavior> {
     id: ActiveObjectId,
     /// Scheduling priority, protected by Duplicate Inverse Storage: a bit flip
     /// here would corrupt scheduling, so reads are integrity-checked.
+    /// Traceability: ASR-004 (error-detecting codes).
     priority: Dis<u8>,
     queue: Mutex<EventQueue>,
     behavior: Mutex<B>,

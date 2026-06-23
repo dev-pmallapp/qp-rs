@@ -4,6 +4,9 @@
 //! blocks.  It is the foundation for event pools in embedded targets that
 //! cannot afford heap allocation.
 //!
+//! Traceability: ASR-003 (static allocation), ASR-004 (free-list error-detecting
+//! codes); see `docs/traceability.md`.
+//!
 //! # Layout
 //!
 //! The storage slice is divided into `(total_size / block_size)` blocks.  Each

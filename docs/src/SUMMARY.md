@@ -13,5 +13,6 @@
 - [Pure Rust RVSIS Port (RISC-V)](./rvsis.md)
 - [Examples](./examples.md)
 - [Functional Safety (FuSa) Roadmap](./fusa.md)
+- [Safety Traceability (ASR matrix)](./traceability.md)
 - [Vendoring qp-rs](./vendoring.md)
 - [Porting from QP/C++](./porting.md)
