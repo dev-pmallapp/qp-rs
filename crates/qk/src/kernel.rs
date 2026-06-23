@@ -454,6 +454,8 @@ impl QkKernel {
                 self.scheduler.mark_not_ready(decision.next_prio);
             }
 
+            self.scheduler.complete_execution(decision.next_prio);
+
             match self.scheduler.next_after_dispatch(restore_threshold) {
                 Some(next) => {
                     decision = next;
@@ -748,6 +750,83 @@ mod tests {
                 &[(low_id, Signal(20)), (high_id, Signal(30))]
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "smp")]
+    fn test_smp_active_object_isolation_and_rtc() -> Result<(), QkKernelError> {
+        use std::sync::{Arc, Mutex};
+        use qf::active::ActiveContext;
+
+        #[derive(Clone)]
+        struct MockBehavior {
+            id: ActiveObjectId,
+            active_threads: Arc<Mutex<usize>>,
+            max_concurrent_threads: Arc<Mutex<usize>>,
+        }
+
+        impl SignalHandler for MockBehavior {
+            fn handle_signal(&mut self, _signal: Signal, _ctx: &mut ActiveContext) {
+                {
+                    let mut active = self.active_threads.lock().unwrap();
+                    *active += 1;
+                    let mut max = self.max_concurrent_threads.lock().unwrap();
+                    if *active > *max {
+                        *max = *active;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                {
+                    let mut active = self.active_threads.lock().unwrap();
+                    *active -= 1;
+                }
+            }
+        }
+
+        let active_threads = Arc::new(Mutex::new(0));
+        let max_concurrent_threads = Arc::new(Mutex::new(0));
+
+        let ao_id = ActiveObjectId::new(10);
+        let ao = new_active_object(
+            ao_id,
+            10,
+            MockBehavior {
+                id: ao_id,
+                active_threads: Arc::clone(&active_threads),
+                max_concurrent_threads: Arc::clone(&max_concurrent_threads),
+            },
+        );
+
+        let kernel = Arc::new(
+            QkKernel::builder()
+                .register(ao)?
+                .build()
+                .expect("kernel build succeeded")
+        );
+
+        kernel.start();
+
+        for i in 0..30 {
+            kernel.post(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+        }
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let kernel_clone = Arc::clone(&kernel);
+            handles.push(std::thread::spawn(move || {
+                while kernel_clone.has_pending_work() {
+                    kernel_clone.dispatch_once();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let max_concurrent = *max_concurrent_threads.lock().unwrap();
+        assert_eq!(max_concurrent, 1, "AO behavior was executed concurrently by multiple cores!");
         Ok(())
     }
 }

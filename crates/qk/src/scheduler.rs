@@ -98,6 +98,35 @@ impl ReadySet {
     }
 }
 
+#[cfg(feature = "smp")]
+#[derive(Default, Clone, Copy)]
+struct CoreState {
+    active_prio: u8,
+    active_threshold: u8,
+    next_prio: u8,
+}
+
+#[cfg(feature = "smp")]
+struct State {
+    lock_ceiling: u8,
+    cores: [CoreState; 8],
+    ready: ReadySet,
+    executing_cores: [u8; 64],
+}
+
+#[cfg(feature = "smp")]
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            lock_ceiling: 0,
+            cores: [CoreState::default(); 8],
+            ready: ReadySet::default(),
+            executing_cores: [0xFF; 64],
+        }
+    }
+}
+
+#[cfg(not(feature = "smp"))]
 #[derive(Default)]
 struct State {
     lock_ceiling: u8,
@@ -208,14 +237,29 @@ impl QkScheduler {
 
     /// Records the currently running active object's priority and preemption
     /// threshold, used to gate subsequent scheduling decisions.
+    #[cfg(not(feature = "smp"))]
     pub fn configure_active(&self, active_prio: u8, threshold: u8) {
         let mut state = self.state.lock();
         state.active_prio = active_prio;
         state.active_threshold = threshold;
     }
 
+    /// Records the currently running active object's priority and preemption
+    /// threshold, used to gate subsequent scheduling decisions.
+    #[cfg(feature = "smp")]
+    pub fn configure_active(&self, active_prio: u8, threshold: u8) {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        state.cores[core_id].active_prio = active_prio;
+        state.cores[core_id].active_threshold = threshold;
+        if active_prio > 0 && (active_prio as usize) < 64 {
+            state.executing_cores[active_prio as usize] = core_id as u8;
+        }
+    }
+
     /// Selects the highest-priority ready task that may preempt the current one
     /// (above both the active threshold and the lock ceiling), or `None`.
+    #[cfg(not(feature = "smp"))]
     pub fn plan_activation(&self) -> Option<ScheduleDecision> {
         let mut state = self.state.lock();
 
@@ -234,15 +278,77 @@ impl QkScheduler {
         })
     }
 
+    /// Selects the highest-priority ready task that may preempt the current one
+    /// (above both the active threshold and the lock ceiling), or `None`.
+    #[cfg(feature = "smp")]
+    pub fn plan_activation(&self) -> Option<ScheduleDecision> {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        let active_threshold = state.cores[core_id].active_threshold;
+        let lock_ceiling = state.lock_ceiling;
+
+        let mut found_candidate = None;
+        for prio in (1..64).rev() {
+            if state.ready.contains(prio) {
+                if prio > active_threshold && prio > lock_ceiling {
+                    let already_running = (0..8).any(|c| {
+                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                    }) || state.executing_cores[prio as usize] != 0xFF;
+                    if !already_running {
+                        found_candidate = Some(prio);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(candidate) = found_candidate {
+            state.cores[core_id].next_prio = candidate;
+            Some(ScheduleDecision {
+                next_prio: candidate,
+                previous_prio: state.cores[core_id].active_prio,
+            })
+        } else {
+            state.cores[core_id].next_prio = 0;
+            None
+        }
+    }
+
     /// Returns `true` if any ready task could preempt the current one under the
     /// active threshold and lock ceiling.
+    #[cfg(not(feature = "smp"))]
     pub fn has_ready_to_run(&self) -> bool {
         let state = self.state.lock();
         matches!(state.ready.max(), Some(prio) if prio > state.active_threshold && prio > state.lock_ceiling)
     }
 
+    /// Returns `true` if any ready task could preempt the current one under the
+    /// active threshold and lock ceiling.
+    #[cfg(feature = "smp")]
+    pub fn has_ready_to_run(&self) -> bool {
+        let core_id = qf::port::current_core_id() as usize;
+        let state = self.state.lock();
+        let active_threshold = state.cores[core_id].active_threshold;
+        let lock_ceiling = state.lock_ceiling;
+
+        for prio in (1..64).rev() {
+            if state.ready.contains(prio) {
+                if prio > active_threshold && prio > lock_ceiling {
+                    let already_running = (0..8).any(|c| {
+                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                    }) || state.executing_cores[prio as usize] != 0xFF;
+                    if !already_running {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Like [`plan_activation`](Self::plan_activation) but gated by an explicit
     /// initial threshold — used after a dispatch completes to pick the follow-up.
+    #[cfg(not(feature = "smp"))]
     pub fn next_after_dispatch(&self, initial_threshold: u8) -> Option<ScheduleDecision> {
         let mut state = self.state.lock();
 
@@ -261,8 +367,44 @@ impl QkScheduler {
         })
     }
 
+    /// Like [`plan_activation`](Self::plan_activation) but gated by an explicit
+    /// initial threshold — used after a dispatch completes to pick the follow-up.
+    #[cfg(feature = "smp")]
+    pub fn next_after_dispatch(&self, initial_threshold: u8) -> Option<ScheduleDecision> {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        let lock_ceiling = state.lock_ceiling;
+
+        let mut found_candidate = None;
+        for prio in (1..64).rev() {
+            if state.ready.contains(prio) {
+                if prio > initial_threshold && prio > lock_ceiling {
+                    let already_running = (0..8).any(|c| {
+                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                    }) || state.executing_cores[prio as usize] != 0xFF;
+                    if !already_running {
+                        found_candidate = Some(prio);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(candidate) = found_candidate {
+            state.cores[core_id].next_prio = candidate;
+            Some(ScheduleDecision {
+                next_prio: candidate,
+                previous_prio: state.cores[core_id].active_prio,
+            })
+        } else {
+            state.cores[core_id].next_prio = 0;
+            None
+        }
+    }
+
     /// Commits a planned [`ScheduleDecision`], making `next_prio` the active
     /// priority with the given threshold and emitting a `NEXT` trace record.
+    #[cfg(not(feature = "smp"))]
     pub fn commit_activation(&self, decision: &ScheduleDecision, next_threshold: u8) {
         let mut state = self.state.lock();
         debug_assert_eq!(state.next_prio, decision.next_prio);
@@ -279,8 +421,32 @@ impl QkScheduler {
         }
     }
 
+    /// Commits a planned [`ScheduleDecision`], making `next_prio` the active
+    /// priority with the given threshold and emitting a `NEXT` trace record.
+    #[cfg(feature = "smp")]
+    pub fn commit_activation(&self, decision: &ScheduleDecision, next_threshold: u8) {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        debug_assert_eq!(state.cores[core_id].next_prio, decision.next_prio);
+
+        let previous = state.cores[core_id].active_prio;
+        state.cores[core_id].active_prio = decision.next_prio;
+        state.cores[core_id].active_threshold = next_threshold;
+        state.cores[core_id].next_prio = 0;
+        if decision.next_prio > 0 && (decision.next_prio as usize) < 64 {
+            state.executing_cores[decision.next_prio as usize] = core_id as u8;
+        }
+        drop(state);
+
+        if decision.next_prio != previous {
+            self.emit_record(sched::NEXT, &[decision.next_prio, previous], true);
+            self.emit_context_sw(previous, decision.next_prio);
+        }
+    }
+
     /// Restores the active priority and threshold after a preemption returns,
     /// emitting a `NEXT` or `IDLE` trace record as appropriate.
+    #[cfg(not(feature = "smp"))]
     pub fn restore_active(&self, prio: u8, threshold: u8) {
         let mut state = self.state.lock();
         let previous = state.active_prio;
@@ -300,19 +466,70 @@ impl QkScheduler {
         }
     }
 
+    /// Restores the active priority and threshold after a preemption returns,
+    /// emitting a `NEXT` or `IDLE` trace record as appropriate.
+    #[cfg(feature = "smp")]
+    pub fn restore_active(&self, prio: u8, threshold: u8) {
+        let core_id = qf::port::current_core_id() as usize;
+        let mut state = self.state.lock();
+        let previous = state.cores[core_id].active_prio;
+        state.cores[core_id].active_prio = prio;
+        state.cores[core_id].active_threshold = threshold;
+        state.cores[core_id].next_prio = 0;
+        drop(state);
+
+        if prio == 0 {
+            if previous != 0 {
+                self.emit_record(sched::IDLE, &[previous], true);
+                self.emit_context_sw(previous, 0);
+            }
+        } else if prio != previous {
+            self.emit_record(sched::NEXT, &[prio, previous], true);
+            self.emit_context_sw(previous, prio);
+        }
+    }
+
     /// Returns the priority that would preempt the current task, if any.
     pub fn preemption_candidate(&self) -> Option<u8> {
         self.plan_activation().map(|decision| decision.next_prio)
     }
 
     /// Returns the priority planned to run next (0 if none is planned).
+    #[cfg(not(feature = "smp"))]
     pub fn next_priority(&self) -> u8 {
         self.state.lock().next_prio
     }
 
+    /// Returns the priority planned to run next (0 if none is planned).
+    #[cfg(feature = "smp")]
+    pub fn next_priority(&self) -> u8 {
+        let core_id = qf::port::current_core_id() as usize;
+        self.state.lock().cores[core_id].next_prio
+    }
+
     /// Returns the priority of the currently active task.
+    #[cfg(not(feature = "smp"))]
     pub fn current_priority(&self) -> u8 {
         self.state.lock().active_prio
+    }
+
+    /// Returns the priority of the currently active task.
+    #[cfg(feature = "smp")]
+    pub fn current_priority(&self) -> u8 {
+        let core_id = qf::port::current_core_id() as usize;
+        self.state.lock().cores[core_id].active_prio
+    }
+
+    #[cfg(not(feature = "smp"))]
+    #[inline(always)]
+    pub fn complete_execution(&self, _prio: u8) {}
+
+    #[cfg(feature = "smp")]
+    pub fn complete_execution(&self, prio: u8) {
+        let mut state = self.state.lock();
+        if prio > 0 && (prio as usize) < 64 {
+            state.executing_cores[prio as usize] = 0xFF;
+        }
     }
 
     fn emit_record(&self, record: u8, payload: &[u8], timestamp: bool) {
