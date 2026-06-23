@@ -2,18 +2,41 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use qf::time::TimeEvent;
+use qf::time::TimeEventRef;
 #[cfg(feature = "static-alloc")]
 use qf::time::{MAX_TICK_RATES, MAX_TIMERS_PER_RATE};
 use qf::TraceHook;
 
 use crate::kernel::{QkKernel, QkKernelError};
+// Module code uses `Arc` only on the dynamic build (the `QkKernelRef`/`Arc`
+// timer types); the test module imports it separately as needed.
+#[cfg(not(feature = "static-alloc"))]
 use crate::sync::Arc;
 
+/// The wheel's back-reference to its kernel. Dynamic: `Arc<QkKernel>`; heap-free
+/// `static-alloc`: `&'static QkKernel`.
 #[cfg(not(feature = "static-alloc"))]
-type RateBucket = Vec<Arc<TimeEvent>>;
+type QkKernelRef = Arc<QkKernel>;
 #[cfg(feature = "static-alloc")]
-type RateBucket = heapless::Vec<Arc<TimeEvent>, MAX_TIMERS_PER_RATE>;
+type QkKernelRef = &'static QkKernel;
+
+/// Wrap a built [`QkKernel`] into the shareable handle the timer wheel expects:
+/// an `Arc` on the dynamic build, a leaked `&'static` on `static-alloc` + `std`
+/// (host tests). Heap-free targets place the kernel in their own `static`
+/// storage instead, so this helper is absent there.
+#[cfg(not(feature = "static-alloc"))]
+pub fn share_kernel(kernel: QkKernel) -> QkKernelRef {
+    Arc::new(kernel)
+}
+#[cfg(all(feature = "static-alloc", feature = "std"))]
+pub fn share_kernel(kernel: QkKernel) -> QkKernelRef {
+    alloc::boxed::Box::leak(alloc::boxed::Box::new(kernel))
+}
+
+#[cfg(not(feature = "static-alloc"))]
+type RateBucket = Vec<TimeEventRef>;
+#[cfg(feature = "static-alloc")]
+type RateBucket = heapless::Vec<TimeEventRef, MAX_TIMERS_PER_RATE>;
 
 #[cfg(not(feature = "static-alloc"))]
 type WheelEvents = Vec<RateBucket>;
@@ -26,14 +49,14 @@ type WheelEvents = heapless::Vec<RateBucket, MAX_TICK_RATES>;
 /// Under `static-alloc` the per-rate buckets are fixed-capacity, heap-free
 /// [`heapless::Vec`]s; otherwise they grow dynamically.
 pub struct QkTimerWheel {
-    kernel: Arc<QkKernel>,
+    kernel: QkKernelRef,
     events: WheelEvents,
     trace: Option<TraceHook>,
 }
 
 impl QkTimerWheel {
     /// Creates a timer wheel bound to the given kernel, inheriting its trace hook.
-    pub fn new(kernel: Arc<QkKernel>) -> Self {
+    pub fn new(kernel: QkKernelRef) -> Self {
         let trace = kernel.trace_hook();
         // Fallback size to 1 if no registered tick rates, or use standard count
         #[cfg(not(feature = "static-alloc"))]
@@ -64,7 +87,7 @@ impl QkTimerWheel {
     }
 
     /// Registers a time event with the wheel, wiring up the wheel's trace hook.
-    pub fn register(&mut self, event: Arc<TimeEvent>) {
+    pub fn register(&mut self, event: TimeEventRef) {
         event.set_trace(self.trace.clone());
         let rate = event.tick_rate() as usize;
         #[cfg(feature = "static-alloc")]
@@ -169,6 +192,11 @@ impl From<QkKernelError> for QkTimeEventError {
 
 #[cfg(test)]
 mod tests {
+    // Under `static-alloc` the time-event / kernel handles are `&'static`
+    // (Copy), so `.clone()` on them is an intentional no-op (it is a real `Arc`
+    // refcount bump on the dynamic build). The uniform test code keeps the
+    // `.clone()` spelling for both.
+    #![allow(noop_method_call)]
     use super::*;
     use crate::sync::Arc;
     use std::sync::Mutex;
@@ -177,7 +205,7 @@ mod tests {
         new_active_object, ActiveContext, ActiveObjectId, ActiveObjectRef, SignalHandler,
     };
     use qf::event::Signal;
-    use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo};
+    use qf::time::{new_time_event, TimeEventConfig, TimeEventTraceInfo};
 
     #[derive(Clone)]
     struct Recorder {
@@ -197,13 +225,13 @@ mod tests {
         }
     }
 
-    fn build_kernel(object: ActiveObjectRef) -> Arc<QkKernel> {
-        QkKernel::builder()
+    fn build_kernel(object: ActiveObjectRef) -> QkKernelRef {
+        let kernel = QkKernel::builder()
             .register(object)
             .expect("register should succeed")
             .build()
-            .map(Arc::new)
-            .expect("kernel should build")
+            .expect("kernel should build");
+        super::share_kernel(kernel)
     }
 
     #[test]
@@ -214,11 +242,11 @@ mod tests {
         let kernel = build_kernel(ao);
         kernel.start();
 
-        let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(21))));
+        let event = new_time_event(ao_id, TimeEventConfig::new(Signal(21)));
         event.set_trace(kernel.trace_hook());
 
-        let mut wheel = QkTimerWheel::new(Arc::clone(&kernel));
-        wheel.register(Arc::clone(&event));
+        let mut wheel = QkTimerWheel::new(kernel.clone());
+        wheel.register(event.clone());
 
         event.arm(1, None);
 
@@ -236,7 +264,7 @@ mod tests {
         let kernel = build_kernel(ao);
         kernel.start();
 
-        let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(22))));
+        let event = new_time_event(ao_id, TimeEventConfig::new(Signal(22)));
         event.set_trace(kernel.trace_hook());
         event.set_trace_meta(TimeEventTraceInfo {
             time_event_addr: 0xAA,
@@ -244,8 +272,8 @@ mod tests {
             tick_rate: 0,
         });
 
-        let mut wheel = QkTimerWheel::new(Arc::clone(&kernel));
-        wheel.register(Arc::clone(&event));
+        let mut wheel = QkTimerWheel::new(kernel.clone());
+        wheel.register(event.clone());
 
         event.arm(1, Some(2));
 
@@ -269,16 +297,16 @@ mod tests {
         kernel.start();
 
         // Rate 0 event
-        let event0 = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(25)).with_tick_rate(0)));
+        let event0 = new_time_event(ao_id, TimeEventConfig::new(Signal(25)).with_tick_rate(0));
         event0.arm(1, None);
 
         // Rate 1 event
-        let event1 = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(26)).with_tick_rate(1)));
+        let event1 = new_time_event(ao_id, TimeEventConfig::new(Signal(26)).with_tick_rate(1));
         event1.arm(1, None);
 
-        let mut wheel = QkTimerWheel::new(Arc::clone(&kernel));
-        wheel.register(Arc::clone(&event0));
-        wheel.register(Arc::clone(&event1));
+        let mut wheel = QkTimerWheel::new(kernel.clone());
+        wheel.register(event0.clone());
+        wheel.register(event1.clone());
 
         assert!(!wheel.no_active(0));
         assert!(!wheel.no_active(1));

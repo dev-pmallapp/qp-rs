@@ -541,7 +541,13 @@ impl QkScheduler {
     }
 
     fn emit_context_sw(&self, prev: u8, next: u8) {
+        // Take a copy of the hook and release the lock before invoking it. The
+        // hook is `Arc`-cloned on the dynamic build; under `static-alloc` it is a
+        // `&'static` function object (Copy), so copy it out directly.
+        #[cfg(not(feature = "static-alloc"))]
         let hook = self.context_sw.lock().clone();
+        #[cfg(feature = "static-alloc")]
+        let hook = *self.context_sw.lock();
 
         if let Some(hook) = hook {
             hook(prev, next);
@@ -641,6 +647,10 @@ mod tests {
         assert_eq!(recorded[1], (sched::IDLE, vec![4], true));
     }
 
+    // The context-switch hook is a `&'static` function object under
+    // `static-alloc` (no allocator), so these `Arc`-closure tests are
+    // dynamic-only; the hook firing logic is identical on both builds.
+    #[cfg(not(feature = "static-alloc"))]
     #[test]
     fn context_switch_hook_fires_on_commit_and_restore() {
         let switches = Arc::new(Mutex::new(Vec::new()));
@@ -664,6 +674,7 @@ mod tests {
         assert_eq!(recorded.as_slice(), &[(0, 4), (4, 0)]);
     }
 
+    #[cfg(not(feature = "static-alloc"))]
     #[test]
     fn context_switch_hook_silent_when_priority_unchanged() {
         let switches = Arc::new(Mutex::new(Vec::new()));

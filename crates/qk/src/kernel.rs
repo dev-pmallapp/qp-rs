@@ -1,6 +1,5 @@
+#[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
-use alloc::vec;
-use alloc::vec::Vec;
 use core::fmt;
 
 use qf::active::{ActiveObjectId, ActiveObjectRef};
@@ -10,15 +9,58 @@ use qf::priospec::QPrioSpec;
 use qf::{ContextSwitchHook, TraceHook};
 
 use crate::scheduler::{QkScheduler, SchedStatus, ScheduleDecision};
+#[cfg(not(feature = "static-alloc"))]
 use crate::sync::Arc;
 
 const MAX_PRIORITY: usize = 63;
+
+/// Builder registration vector. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
+/// [`heapless::Vec`] bounded by the priority range.
+#[cfg(not(feature = "static-alloc"))]
+type RegVec = alloc::vec::Vec<Registration>;
+#[cfg(feature = "static-alloc")]
+type RegVec = heapless::Vec<Registration, { MAX_PRIORITY + 1 }>;
+
+/// Shared handle to the scheduler. Dynamic: `Arc<QkScheduler>`; `static-alloc`:
+/// the scheduler is owned inline and handed out by reference.
+#[cfg(not(feature = "static-alloc"))]
+type SchedOwned = Arc<QkScheduler>;
+#[cfg(feature = "static-alloc")]
+type SchedOwned = QkScheduler;
+
+/// Push a registration, faulting (crash-only) if the heap-free vector is full.
+#[inline]
+fn push_reg(v: &mut RegVec, r: Registration) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(r);
+    #[cfg(feature = "static-alloc")]
+    if v.push(r).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
+
+/// Clone an active-object handle: `Arc` refcount bump (dynamic) or pointer copy
+/// (`static-alloc`).
+#[inline]
+fn clone_obj(o: &ActiveObjectRef) -> ActiveObjectRef {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        Arc::clone(o)
+    }
+    #[cfg(feature = "static-alloc")]
+    {
+        *o
+    }
+}
 
 #[derive(Clone)]
 struct Registration {
     object: ActiveObjectRef,
     priority: u8,
     threshold: u8,
+    // Used to build the id→priority map on the dynamic build; the heap-free
+    // build scans `slots` by id instead, so the field is set but not read there.
+    #[cfg_attr(feature = "static-alloc", allow(dead_code))]
     id: ActiveObjectId,
 }
 
@@ -31,7 +73,7 @@ struct ActiveSlot {
 /// Builder for a [`QkKernel`]: register active objects (optionally with a
 /// preemption threshold), attach a trace hook, then [`build`](Self::build).
 pub struct QkKernelBuilder {
-    registrations: Vec<Registration>,
+    registrations: RegVec,
     trace: Option<TraceHook>,
     context_sw: Option<ContextSwitchHook>,
     pubsub: Option<PubSubTable>,
@@ -47,7 +89,7 @@ impl QkKernelBuilder {
     /// Creates an empty builder.
     pub fn new() -> Self {
         Self {
-            registrations: Vec::new(),
+            registrations: RegVec::new(),
             trace: None,
             context_sw: None,
             pubsub: None,
@@ -66,7 +108,7 @@ impl QkKernelBuilder {
         let priority = object.priority();
         self.validate_priority(priority)?;
         let id = object.id();
-        self.registrations.push(Registration {
+        push_reg(&mut self.registrations, Registration {
             threshold: priority,
             priority,
             id,
@@ -87,7 +129,7 @@ impl QkKernelBuilder {
         self.validate_priority(priority)?;
         self.validate_threshold(threshold, priority)?;
         let id = object.id();
-        self.registrations.push(Registration {
+        push_reg(&mut self.registrations, Registration {
             threshold,
             priority,
             id,
@@ -207,8 +249,12 @@ impl std::error::Error for QkKernelError {}
 /// allowing higher-priority AOs to preempt lower-priority ones subject to each
 /// AO's preemption threshold and the scheduler lock ceiling.
 pub struct QkKernel {
-    scheduler: Arc<QkScheduler>,
-    slots: Vec<Option<ActiveSlot>>,
+    scheduler: SchedOwned,
+    /// Priority-indexed registry (idle slot 0 unused). A fixed array, so it
+    /// needs no heap on either build.
+    slots: [Option<ActiveSlot>; MAX_PRIORITY + 1],
+    /// Id → priority map for `post`. Heap-free builds drop it and scan `slots`.
+    #[cfg(not(feature = "static-alloc"))]
     id_to_prio: BTreeMap<ActiveObjectId, u8>,
     trace: Option<TraceHook>,
     pubsub: Option<PubSubTable>,
@@ -221,12 +267,14 @@ impl QkKernel {
     }
 
     fn new(
-        registrations: Vec<Registration>,
+        registrations: RegVec,
         trace: Option<TraceHook>,
         context_sw: Option<ContextSwitchHook>,
         pubsub: Option<PubSubTable>,
     ) -> Result<Self, QkKernelError> {
-        let mut slots: Vec<Option<ActiveSlot>> = vec![None; MAX_PRIORITY + 1];
+        let mut slots: [Option<ActiveSlot>; MAX_PRIORITY + 1] =
+            core::array::from_fn(|_| None);
+        #[cfg(not(feature = "static-alloc"))]
         let mut id_to_prio = BTreeMap::new();
 
         for registration in registrations {
@@ -234,6 +282,7 @@ impl QkKernel {
             if slots[prio].is_some() {
                 return Err(QkKernelError::DuplicatePriority(registration.priority));
             }
+            #[cfg(not(feature = "static-alloc"))]
             id_to_prio.insert(registration.id, registration.priority);
             slots[prio] = Some(ActiveSlot {
                 object: registration.object,
@@ -241,22 +290,41 @@ impl QkKernel {
             });
         }
 
-        let scheduler = Arc::new(QkScheduler::new(trace.clone()));
+        let scheduler = Self::new_scheduler(trace.clone());
         scheduler.configure_active(0, 0);
         scheduler.set_context_switch_hook(context_sw);
 
         Ok(Self {
             scheduler,
             slots,
+            #[cfg(not(feature = "static-alloc"))]
             id_to_prio,
             trace,
             pubsub,
         })
     }
 
-    /// Returns a shared handle to the underlying scheduler.
+    #[cfg(not(feature = "static-alloc"))]
+    #[inline]
+    fn new_scheduler(trace: Option<TraceHook>) -> SchedOwned {
+        Arc::new(QkScheduler::new(trace))
+    }
+    #[cfg(feature = "static-alloc")]
+    #[inline]
+    fn new_scheduler(trace: Option<TraceHook>) -> SchedOwned {
+        QkScheduler::new(trace)
+    }
+
+    /// Returns a handle to the underlying scheduler: a shared `Arc` on the
+    /// dynamic build, a borrow under `static-alloc` (the kernel owns it inline).
+    #[cfg(not(feature = "static-alloc"))]
     pub fn scheduler(&self) -> Arc<QkScheduler> {
         Arc::clone(&self.scheduler)
+    }
+    /// See the dynamic variant above.
+    #[cfg(feature = "static-alloc")]
+    pub fn scheduler(&self) -> &QkScheduler {
+        &self.scheduler
     }
 
     /// Returns a clone of the kernel's QS trace hook, if any.
@@ -343,10 +411,20 @@ impl QkKernel {
     /// Posts an event to the target active object's queue and marks it ready.
     /// Does not itself run the scheduler.
     pub fn post(&self, target: ActiveObjectId, event: DynEvent) -> Result<(), QkKernelError> {
+        // Dynamic: O(log n) id→priority map. Heap-free: scan the fixed slot array.
+        #[cfg(not(feature = "static-alloc"))]
         let prio = self
             .id_to_prio
             .get(&target)
             .copied()
+            .ok_or(QkKernelError::NotFound(target))?;
+        #[cfg(feature = "static-alloc")]
+        let prio = self
+            .slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.object.id() == target)
+            .map(|slot| slot.object.priority())
             .ok_or(QkKernelError::NotFound(target))?;
         let slot = self.slots[prio as usize]
             .as_ref()
@@ -442,7 +520,7 @@ impl QkKernel {
                 let slot = self.slots[decision.next_prio as usize]
                     .as_ref()
                     .unwrap_or_else(|| qf::fusa::on_error(module_path!(), line!()));
-                (Arc::clone(&slot.object), slot.threshold)
+                (clone_obj(&slot.object), slot.threshold)
             };
 
             self.scheduler.commit_activation(&decision, threshold);
@@ -707,7 +785,10 @@ mod tests {
         kernel.start();
 
         // Verify that priority is 4 and slot threshold is 6
+        #[cfg(not(feature = "static-alloc"))]
         assert_eq!(kernel.id_to_prio.get(&id), Some(&4));
+        #[cfg(feature = "static-alloc")]
+        assert_eq!(kernel.slots[4].as_ref().unwrap().object.id(), id);
         assert_eq!(kernel.slots[4].as_ref().unwrap().threshold, 6);
         Ok(())
     }

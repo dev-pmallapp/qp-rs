@@ -36,6 +36,8 @@ preemption threshold must be `>=` the AO's own priority.
 // Traceability: ASR-006 (memory-safe language subset / trusted elements).
 #![forbid(unsafe_code)]
 
+// Heap-free `static-alloc` build links no allocator (see qf `lib.rs`).
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
 extern crate alloc;
 
 mod kernel;
@@ -46,4 +48,8 @@ mod time;
 pub use kernel::{QkKernel, QkKernelBuilder, QkKernelError};
 pub use scheduler::{QkScheduler, SchedStatus};
 pub use time::{QkTimeEventError, QkTimerWheel};
+/// Host helper to wrap a built kernel into the timer-wheel's shareable handle
+/// (`Arc` dynamically, leaked `&'static` under `static-alloc` + `std`).
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
+pub use time::share_kernel;
 pub use qf::{ContextSwitchHook, QPrioSpec, q_prio};

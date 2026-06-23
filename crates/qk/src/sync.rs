@@ -4,9 +4,11 @@
 //! environments. With the `std` feature enabled, uses standard library types.
 //! Without it, uses `spin::Mutex` for locking.
 
-#[cfg(not(feature = "std"))]
+// Heap-free `static-alloc` build links no allocator (see qf `sync.rs`).
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 pub use alloc::sync::Arc;
 #[cfg(feature = "std")]
+#[cfg_attr(feature = "static-alloc", allow(unused_imports))]
 pub use std::sync::Arc;
 
 #[cfg(feature = "std")]
