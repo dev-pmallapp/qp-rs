@@ -55,7 +55,13 @@ pub struct QMState<S: 'static> {
     pub init_action: Option<fn(&mut S) -> Option<&'static QMState<S>>>,
 }
 
+// SAFETY: a `QMState` is an immutable state-table node — its fields are a
+// superstate reference and bare `fn` pointers (no interior mutability, no owned
+// data). It is built once in `static`/`const` storage and only ever read, so
+// sharing and sending it across threads/ISRs cannot introduce a data race. The
+// `S` bound is purely a type marker (`QMState` holds no `S`).
 unsafe impl<S: 'static> Send for QMState<S> {}
+// SAFETY: see the `Send` impl above — `QMState` is read-only after construction.
 unsafe impl<S: 'static> Sync for QMState<S> {}
 
 /// Compare two static states by reference pointer.

@@ -1,0 +1,77 @@
+# cargo-deny configuration for the qp-rs functional-safety supply-chain gate
+# (see docs/FUSA.md, Phase 4: "Trusted/verified elements only").
+#
+# Run locally with:  cargo deny check
+# CI runs this in .github/workflows/fusa.yml (the `supply-chain` job).
+
+[graph]
+# Check the targets the framework is actually built for. `all-features` keeps
+# the optional `static-alloc` / `qs` dependency edges in view.
+all-features = true
+
+# ── Security advisories (RustSec) ─────────────────────────────────────────────
+[advisories]
+version = 2
+# Fail the build on any known vulnerability in the dependency tree. A safety
+# release must not ship a crate with an open advisory; pin/upgrade or add a
+# reviewed, justified entry here instead of silencing globally.
+#
+# A yanked transitive crate pulled in only by a vendor HAL is not directly
+# actionable by us, so it is surfaced as a warning rather than a hard failure.
+yanked = "warn"
+# Each entry below is a reviewed exclusion: the advisory crate is reachable
+# ONLY from the host examples or the vendor-HAL ESP32 ports, never from the
+# safety build (`qf`/`qk`/`qxk`, `--no-default-features --features static-alloc`,
+# which links no allocator and none of these crates). They are listed
+# explicitly so any *new* advisory still fails CI.
+ignore = [
+    # `rand` 0.8 unsound only under a custom-logger reseed race; used solely by
+    # the `dpp` host example's simulation, not by any embedded/safety build.
+    "RUSTSEC-2026-0097",
+    # `paste` unmaintained; pulled in transitively by the ESP32 vendor HAL
+    # (`esp-hal`), outside the safety perimeter.
+    "RUSTSEC-2024-0436",
+]
+
+# ── License policy ────────────────────────────────────────────────────────────
+# Only permissive, FuSa-friendly licenses. A copyleft/unknown license in the
+# tree fails the gate so it is reviewed before a safety release.
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# The allow-list below is a forward-looking policy; not every entry need match a
+# crate in the current tree, so don't warn on unused allowances.
+unused-allowed-license = "allow"
+# Our own unpublished workspace crates (examples, ports, tools — `publish =
+# false`) are first-party and need no license-expression check here.
+private = { ignore = true }
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+
+# ── Banned / duplicate crates ─────────────────────────────────────────────────
+[bans]
+# Duplicate versions bloat the trusted-element set; surface them as a warning
+# (not a hard failure) so transitive duplicates don't block CI.
+multiple-versions = "warn"
+wildcards = "warn"
+# No specific crate is banned yet; add entries here as the safety case matures
+# (e.g. crates with unvetted `unsafe` that the safety build must not pull in).
+deny = []
+
+# ── Source provenance ─────────────────────────────────────────────────────────
+[sources]
+# Every dependency must come from a known registry / git source.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -2,6 +2,7 @@
 name = "hal-cmsis"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "ARM CMSIS implementation for HAL"
 
 [dependencies]

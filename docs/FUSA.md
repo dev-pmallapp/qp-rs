@@ -170,14 +170,15 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
 
 - [x] `#![forbid(unsafe_code)]` on the kernel layers that can hold it — `qk`
       and `qxk` are memory-safe by construction (all `unsafe` lives in `qf`).
-      *(Remaining: isolate `qf`'s `unsafe` — `pool`, `pool_arc`, `event_pool`,
-      `isr`, `qmsm` — behind per-block `# Safety` proofs; `pool_arc` already
-      documents each block.)*
+      Every `unsafe` block / `unsafe fn` / `unsafe impl` in `qf`'s allocation
+      and ISR code (`pool`, `pool_arc`, `event_pool`, `isr`, `qmsm`) now carries
+      a per-site `# Safety` / `SAFETY:` proof of the invariant it relies on.
 - [x] CI gates (`.github/workflows/fusa.yml`): dynamic + `static-alloc` test
       runs, a `no_std + static-alloc` heap-free build, `clippy -D warnings` on
-      the unsafe-free `qk`/`qxk`, and **Miri** over the unsafe `pool` and
-      `pool_arc` modules. *(Remaining: `cargo deny`, broaden the clippy gate as
-      `qf`/`qs` warnings are cleared.)*
+      the unsafe-free `qk`/`qxk`, **Miri** over the unsafe `pool`/`pool_arc`
+      modules, and **`cargo deny`** (advisories / licenses / sources) via
+      `deny.toml` — the "trusted/verified elements only" supply-chain gate.
+      *(Remaining: broaden the clippy gate as `qf`/`qs` warnings are cleared.)*
 - [x] Reference toolchain documented — see [§8 Reference toolchain](#8-reference-toolchain).
 - [ ] **Traceability**: tag each Assumed Safety Requirement (ASR) in
       doc-comments and generate a forward/backward trace matrix (analog to

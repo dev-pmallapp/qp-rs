@@ -48,6 +48,17 @@ jobs:
       - name: Clippy (deny warnings) on the unsafe-free kernel layers
         run: cargo clippy -p qk -p qxk --no-deps --all-targets -- -D warnings
 
+  supply-chain:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Trusted/verified elements only (docs/FUSA.md, Phase 4): no vulnerable,
+      # yanked, or non-permissively-licensed crate may enter the safety build.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources
+
   miri:
     name: Miri (unsafe pool / payload)
     # Function-pointer-equality in the HSM is unreliable under Miri, so Miri is

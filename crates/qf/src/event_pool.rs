@@ -206,6 +206,9 @@ pub struct EventBox<T: 'static> {
     pool_id: u8,
 }
 
+// SAFETY: an `EventBox` is a unique owning pointer to an `Event<T>` inside a
+// pool block (like `Box<Event<T>>`); it is `Send`/`Sync` exactly when the owned
+// `T` is, which the bounds enforce.
 unsafe impl<T: Send + 'static> Send for EventBox<T> {}
 unsafe impl<T: Sync + 'static> Sync for EventBox<T> {}
 
@@ -232,6 +235,9 @@ impl<T: 'static> EventBox<T> {
     where
         T: Send + Sync,
     {
+        // SAFETY: `self.ptr` is a valid, initialised `Event<T>` owned by this
+        // box; `into_raw` below relinquishes ownership so the value is moved out
+        // exactly once (the block is not dropped via this box afterwards).
         let event: Event<T> = unsafe { ptr::read(self.ptr) };
         let (raw_ptr, pool_id) = self.into_raw();
         let guard = PoolBlock { ptr: raw_ptr as *mut u8, pool_id };
@@ -254,8 +260,14 @@ impl<T: 'static> EventBox<T> {
     {
         // Move the event out of its block (bitwise), then return the now-vacated
         // block to the pool without running any drop glue.
+        // SAFETY: `self.ptr` is a valid, initialised `Event<T>` owned by this
+        // box; the value is read out exactly once and `into_raw` relinquishes
+        // ownership, so the subsequent `gc_raw` frees an empty (moved-from)
+        // block — no double-drop.
         let event: Event<T> = unsafe { ptr::read(self.ptr) };
         let (raw_ptr, pool_id) = self.into_raw();
+        // SAFETY: `(pool_id, raw_ptr)` were just produced by `into_raw` from a
+        // live allocation of this pool; the block is no longer referenced.
         unsafe { gc_raw(pool_id, raw_ptr as *mut u8, None) };
         let payload = crate::pool_arc::PoolArc::from_value(event.payload);
         Event { header: event.header, payload }
@@ -264,16 +276,22 @@ impl<T: 'static> EventBox<T> {
 
 impl<T: 'static> core::ops::Deref for EventBox<T> {
     type Target = Event<T>;
+    // SAFETY: `self.ptr` points to a live `Event<T>` for the box's lifetime and
+    // the box has unique ownership, so the shared/exclusive borrow is sound.
     fn deref(&self) -> &Self::Target { unsafe { &*self.ptr } }
 }
 
 impl<T: 'static> core::ops::DerefMut for EventBox<T> {
+    // SAFETY: as `deref`, plus `&mut self` guarantees exclusive access.
     fn deref_mut(&mut self) -> &mut Self::Target { unsafe { &mut *self.ptr } }
 }
 
 impl<T: 'static> Drop for EventBox<T> {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.pool_id != 0 {
+            // SAFETY: the box uniquely owns a live `Event<T>` in pool `pool_id`;
+            // drop runs at most once, so dropping the value in place and then
+            // returning the block frees each exactly once.
             unsafe {
                 ptr::drop_in_place(self.ptr);
                 gc_raw(self.pool_id, self.ptr as *mut u8, None);
@@ -286,6 +304,9 @@ impl<T: 'static> Drop for EventBox<T> {
 
 #[cfg(not(feature = "static-alloc"))]
 struct PoolBlock { ptr: *mut u8, pool_id: u8 }
+// SAFETY: `PoolBlock` is a unique RAII owner of one pool block (a raw `*mut u8`
+// with no aliasing); moving/sharing it across threads only moves that ownership,
+// and the actual free is serialised by the pool's `spin::Mutex`.
 #[cfg(not(feature = "static-alloc"))]
 unsafe impl Send for PoolBlock {}
 #[cfg(not(feature = "static-alloc"))]
@@ -294,6 +315,8 @@ unsafe impl Sync for PoolBlock {}
 impl Drop for PoolBlock {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.pool_id != 0 {
+            // SAFETY: this guard uniquely owns `ptr`, an allocation of
+            // `pool_id`; drop runs once, returning the block exactly once.
             unsafe { gc_raw(self.pool_id, self.ptr, None); }
         }
     }
@@ -301,6 +324,8 @@ impl Drop for PoolBlock {
 
 #[cfg(not(feature = "static-alloc"))]
 struct PoolPayload<T> { _value: T, _guard: PoolBlock }
+// SAFETY: `PoolPayload` adds the `PoolBlock` guard (itself `Send`/`Sync`) to a
+// `T`, so it is `Send`/`Sync` exactly when `T` is — which the bounds enforce.
 #[cfg(not(feature = "static-alloc"))]
 unsafe impl<T: Send> Send for PoolPayload<T> {}
 #[cfg(not(feature = "static-alloc"))]
@@ -336,6 +361,10 @@ pub fn q_new_x<T: Send + Sync + 'static>(
 ) -> Option<EventBox<T>> {
     let size = mem::size_of::<Event<T>>();
     let (pool_id, raw) = POOL_REGISTRY.alloc(size, margin, trace)?;
+    // SAFETY: `alloc` returned a block of at least `size_of::<Event<T>>()` bytes,
+    // `usize`-aligned and exclusively owned; we initialise it once with
+    // `ptr::write` and immediately transfer ownership to the `EventBox`, whose
+    // `pool_id` matches so `Drop` returns it to the correct pool.
     unsafe {
         ptr::write(raw as *mut Event<T>, Event {
             header: EventHeader::new(sig).with_pool(pool_id),
@@ -359,7 +388,13 @@ pub fn gc(event: &crate::event::DynEvent, trace: Option<&TraceHook>) {
 }
 
 /// Internal raw free — called by [`EventBox::drop`] and [`PoolBlock::drop`].
+///
+/// # Safety
+///
+/// `ptr` must be a block previously returned by `POOL_REGISTRY.alloc` for
+/// `pool_id`, not already freed; ownership is consumed by this call.
 unsafe fn gc_raw(pool_id: u8, ptr: *mut u8, trace: Option<&TraceHook>) {
+    // SAFETY: forwarded from the caller's contract above.
     POOL_REGISTRY.free(pool_id, ptr, trace);
 }
 

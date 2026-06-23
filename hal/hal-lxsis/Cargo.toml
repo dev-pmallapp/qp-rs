@@ -2,6 +2,7 @@
 name = "hal-lxsis"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Xtensa LX implementation for HAL"
 
 [dependencies]
