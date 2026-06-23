@@ -136,10 +136,12 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       scalar with its bitwise complement, verifies on every read, and routes a
       mismatch (bit flip / SEU) to `fusa::on_error`. Sealed `DisInt` trait for
       the primitive integer types; `Copy` drop-in for a plain field. **Applied
-      to the active-object scheduling priority** (`ActiveObject::priority`), a
-      correctness-critical field. *(Remaining application sites: PoolArc/event
-      ref-counts — these are atomics, needing a DIS-over-atomic variant — queue
-      indices, pool free-list links, and AO current state.)*
+      to the active-object scheduling priority** (`ActiveObject::priority`) and
+      to the **pooled-payload `pool_id`** (`PoolArc` control block) — a corrupted
+      pool id would free a block into the wrong pool (heap corruption), so it is
+      DIS-verified before the free (Miri-revalidated). *(Remaining sites: the
+      PoolArc/event ref-counts — atomics, needing a DIS-over-atomic variant —
+      queue indices, pool free-list links, and AO current state.)*
 - [ ] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
 - [x] Event-queue **safety-margin** API: a persistent per-queue margin reserves
       free slots for critical traffic. `post_normal` sheds normal-priority events

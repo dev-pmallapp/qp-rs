@@ -20,6 +20,7 @@ use core::any::Any;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::dis::Dis;
 use crate::event_pool::POOL_REGISTRY;
 
 /// Control block placed at the head of each pooled allocation.
@@ -30,7 +31,10 @@ use crate::event_pool::POOL_REGISTRY;
 #[repr(C)]
 struct CtrlHeader {
     ref_count: AtomicUsize,
-    pool_id: u8,
+    /// Owning pool id, protected by Duplicate Inverse Storage: a corrupted
+    /// `pool_id` would return the block to the wrong pool (heap corruption), so
+    /// it is integrity-checked before the block is freed.
+    pool_id: Dis<u8>,
     /// Fat pointer to the trailing value, typed as `dyn Any` for downcasting
     /// and for `drop_in_place` of the concrete `T` on the last release.
     value: *mut (dyn Any + Send + Sync),
@@ -104,7 +108,7 @@ impl PoolArc {
                 Block {
                     header: CtrlHeader {
                         ref_count: AtomicUsize::new(1),
-                        pool_id,
+                        pool_id: Dis::new(pool_id),
                         value: placeholder,
                     },
                     value,
@@ -161,7 +165,9 @@ impl Drop for PoolArc {
             // value via its `dyn Any` vtable and return the block to its pool.
             core::sync::atomic::fence(Ordering::Acquire);
             let header = p.as_ptr();
-            let pool_id = (*header).pool_id;
+            // Verify the pool id (DIS) before returning the block — a corrupted
+            // id would free into the wrong pool.
+            let pool_id = (*header).pool_id.get();
             ptr::drop_in_place((*header).value);
             POOL_REGISTRY.free(pool_id, header as *mut u8, None);
         }
