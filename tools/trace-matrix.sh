@@ -16,7 +16,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT/docs/traceability.md"
-SRC="$ROOT/crates"
+# Source trees that may carry ASR tags (framework crates + platform ports).
+SRC_DIRS=("$ROOT/crates" "$ROOT/ports")
 
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
@@ -24,9 +25,9 @@ CHECK=0
 # Canonical requirement set: the `### ASR-NNN` headings in the spec.
 defined_asrs="$(grep -oE 'ASR-[0-9]{3}' "$SPEC" | sort -u)"
 
-# Code tags: `ASR-NNN` tokens anywhere under crates/ (the spec itself excluded).
+# Code tags: `ASR-NNN` tokens anywhere under the source trees (spec excluded).
 # Format: ASR-NNN<TAB>relative/path:line
-tags="$(grep -rnoE 'ASR-[0-9]{3}' "$SRC" 2>/dev/null \
+tags="$(grep -rnoE 'ASR-[0-9]{3}' "${SRC_DIRS[@]}" 2>/dev/null \
         | sed -E "s#^$ROOT/##; s#^(.*):([0-9]+):(ASR-[0-9]{3})#\3\t\1:\2#" \
         | sort || true)"
 
@@ -34,7 +35,7 @@ echo "== Backward trace (code site -> ASR) =="
 if [ -n "$tags" ]; then
     printf '%s\n' "$tags" | awk -F'\t' '{ printf "  %-9s %s\n", $1, $2 }'
 else
-    echo "  (no ASR tags found under crates/)"
+    echo "  (no ASR tags found)"
 fi
 
 echo

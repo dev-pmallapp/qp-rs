@@ -190,9 +190,16 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
 
 ### Phase 5 — Port-level memory isolation
 
-- [ ] MPU-based isolation in `ports/cortex-m`: per-AO stack guard regions,
-      read-only `.rodata` for state tables.
-- [ ] Equivalent isolation review for the ESP32 (RISC-V / Xtensa) ports.
+- [x] MPU-based isolation in `ports/cortex-m` (`src/mpu.rs`): `RegionConfig`
+      computes ARMv7-M `RBAR`/`RASR` descriptors (pure, host-unit-tested) for
+      per-task **stack guard** regions (32 B no-access at the stack limit) and
+      **read-only + execute-never** regions for `.rodata` / `const` state
+      tables (W^X); `Mpu::configure` programs them and enables the MemManage
+      fault behind the `hw` feature; `MemManage_Handler` routes any violation to
+      the crash-only `fusa::on_error` path. Traceability: ASR-008.
+- [x] Equivalent isolation review for the ESP32 (RISC-V / Xtensa) ports — see
+      [§9 ESP32 isolation review](#9-esp32-isolation-review). Implementation is
+      deferred to the per-vendor HAL; the mechanism and gaps are documented.
 
 ## 5. Mapping to upstream techniques
 
@@ -253,3 +260,33 @@ the MISRA-checked, qualified C++ toolchain upstream QP/C++ assumes.
 > Status: Ferrocene is documented as the **intended** qualified baseline. Pinning
 > a specific qualified channel (`rust-toolchain.toml`) is deferred to the first
 > tagged safety release.
+
+## 9. ESP32 isolation review
+
+The Cortex-M port enforces spatial isolation with the ARMv7-M MPU
+(`ports/cortex-m/src/mpu.rs`, Phase 5, ASR-008). The two ESP32 ports use
+different hardware mechanisms; this is the equivalence review for them.
+
+- **ESP32-C6 (`ports/esp32-c6`, RISC-V)** — the RISC-V analog of the MPU is
+  **PMP** (Physical Memory Protection): up to 16 address ranges, each with
+  R/W/X permissions and TOR/NAPOT matching. The same two uses apply: a
+  no-access PMP entry at each task's stack limit (stack-guard) and an R-only,
+  X-cleared entry over `.rodata` / state tables (W^X). The C6 additionally has
+  a **World Controller / PMS** (permission-control peripheral) usable for
+  bus-level isolation. *Gap:* esp-hal exposes PMP only partially; an
+  `esp-hal`-backed `Pmp` configurator mirroring `cortex-m::mpu::RegionConfig`
+  (pure NAPOT/TOR encoding + a `hw`-gated apply) is the implementation step.
+- **ESP32-S3 (`ports/esp32-s3`, Xtensa LX7)** — Xtensa has no MPU/PMP; isolation
+  relies on the **region-protection options** of the Xtensa configuration and
+  the chip's memory-region access controls, which are coarser (per memory
+  region, not arbitrary ranges) and largely fixed by the SoC. Per-task
+  stack-guard regions are therefore not generally available; the practical
+  mitigation is a **watermarked stack** (a known sentinel at the stack limit,
+  checked on context switch) routed to `fusa::on_error` — a software analog of
+  the MPU guard. `.rodata` is already non-writable by the SoC memory map.
+
+Shared design rule (matching the Cortex-M port): keep the permission-descriptor
+*encoding* pure and host-unit-tested, and put only the register/CSR writes
+behind the `hw` feature, so the safety logic is verified off-target. The hooks
+that route a detected violation to the crash-only path (`fusa::on_error`) are
+already in place; only the per-vendor configurators remain.

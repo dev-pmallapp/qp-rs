@@ -9,6 +9,9 @@
 //!   switch.
 //! - [`ThreadStack`] — helper that initialises a raw byte slice as a
 //!   Cortex-M initial stack frame, ready for the first `PendSV` restore.
+//! - [`mpu`] — Memory Protection Unit configuration for spatial isolation
+//!   (per-task stack guard regions, read-only state tables); see `docs/FUSA.md`,
+//!   Phase 5.
 //! - [`CortexMQxkRuntime`] — integrates [`qxk`]'s dual-mode scheduler with the
 //!   Cortex-M exception model.  The `PendSV` exception is used as the
 //!   context-switch mechanism; `SVC #0` is used as the scheduler-lock primitive.
@@ -49,12 +52,14 @@
 extern crate alloc;
 
 pub mod context;
+pub mod mpu;
 pub mod nvic_cfg;
 
 #[cfg(feature = "hw")]
 pub mod rf_isr;
 
 pub use context::{ContextFrame, ThreadStack};
+pub use mpu::{Access, RegionConfig};
 pub use nvic_cfg::{qk_lock, qk_unlock, QK_BASEPRI};
 
 use qf::kernel::Kernel;

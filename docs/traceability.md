@@ -74,6 +74,16 @@ hoc control flow.
 *Technique: Semi-formal methods / FSM (HR). Realised in `qf::hsm` (`QHsm`) and
 `qf::qmsm` (`QMsm`).*
 
+### ASR-008 — Spatial memory isolation (MPU)
+Where the target has a Memory Protection Unit, per-task stack guard regions turn
+a stack overflow into a synchronous fault (ASR-001) and state tables / `.rodata`
+are enforced read-only + execute-never (W^X), backing the language-level spatial
+safety with hardware enforcement.
+*Technique: Memory isolation (port-level, HR). Realised in
+`ports/cortex-m/src/mpu.rs` (`RegionConfig`, `Mpu`, `MemManage_Handler`); a
+review of the ESP32 RISC-V (PMP) / Xtensa equivalents is tracked in `FUSA.md`
+Phase 5.*
+
 ## Generating the backward matrix
 
 ```bash
