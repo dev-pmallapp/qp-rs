@@ -232,7 +232,7 @@ impl Semaphore {
 
             // Wake highest priority waiter
             let woken = if !inner.waiting.is_empty() {
-                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
                 let w = inner.waiting.remove(0);
                 Some((w.id, w.priority))
             } else {
@@ -438,7 +438,7 @@ impl MutexPrim {
 
             // Wake highest priority waiter
             if !inner.waiting.is_empty() {
-                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
                 let woken = inner.waiting.remove(0);
                 Some((woken.id, woken.priority))
             } else {
@@ -543,7 +543,7 @@ impl<T> MessageQueue<T> {
 
             // Wake one waiting receiver
             if !inner.waiting_receivers.is_empty() {
-                inner.waiting_receivers.sort_by(|a, b| b.priority.cmp(&a.priority));
+                inner.waiting_receivers.sort_by_key(|w| core::cmp::Reverse(w.priority));
                 let woken = inner.waiting_receivers.remove(0);
                 Some((woken.id, woken.priority))
             } else {
@@ -583,7 +583,7 @@ impl<T> MessageQueue<T> {
 
             // Wake one waiting receiver
             if !inner.waiting_receivers.is_empty() {
-                inner.waiting_receivers.sort_by(|a, b| b.priority.cmp(&a.priority));
+                inner.waiting_receivers.sort_by_key(|w| core::cmp::Reverse(w.priority));
                 let woken = inner.waiting_receivers.remove(0);
                 Some((woken.id, woken.priority))
             } else {
@@ -609,7 +609,7 @@ impl<T> MessageQueue<T> {
             if let Some(msg) = inner.queue.pop_front() {
                 // Wake one waiting sender
                 let woken = if !inner.waiting_senders.is_empty() {
-                    inner.waiting_senders.sort_by(|a, b| b.priority.cmp(&a.priority));
+                    inner.waiting_senders.sort_by_key(|w| core::cmp::Reverse(w.priority));
                     let w = inner.waiting_senders.remove(0);
                     Some((w.id, w.priority))
                 } else {
@@ -705,7 +705,7 @@ impl CondVar {
         let woken_thread = {
             let mut inner = self.inner.lock();
             if !inner.waiting.is_empty() {
-                inner.waiting.sort_by(|a, b| b.priority.cmp(&a.priority));
+                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
                 let woken = inner.waiting.remove(0);
                 Some((woken.id, woken.priority))
             } else {

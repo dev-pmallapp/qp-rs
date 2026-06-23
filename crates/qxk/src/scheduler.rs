@@ -125,7 +125,7 @@ impl ThreadReadyQueue {
         if !self.ready_threads.iter().any(|(tid, _)| *tid == id) {
             self.ready_threads.push((id, priority));
             // Keep sorted by priority (highest first)
-            self.ready_threads.sort_by(|a, b| b.1.cmp(&a.1));
+            self.ready_threads.sort_by_key(|b| core::cmp::Reverse(b.1));
         }
     }
 
