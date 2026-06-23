@@ -31,6 +31,9 @@ Priority `0` is reserved for the idle thread; application AOs use priorities `1.
 preemption threshold must be `>=` the AO's own priority.
 "#]
 #![cfg_attr(not(feature = "std"), no_std)]
+// Functional safety (docs/FUSA.md, Phase 4): the preemptive-kernel layer is
+// memory-safe by construction — all unsafe lives below it in `qf`.
+#![forbid(unsafe_code)]
 
 extern crate alloc;
 

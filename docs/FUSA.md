@@ -142,13 +142,17 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
 
 ### Phase 4 — Toolchain, lints & verification
 
-- [ ] `#![forbid(unsafe)]` on every crate that can hold it; isolate
-      unavoidable `unsafe` (`pool.rs`) into one audited module with `# Safety`
-      proofs for each block.
-- [ ] CI gates: `clippy -D warnings`, `cargo deny`, **MIRI** on the unsafe
-      pool, plus a `no_std` link check.
-- [ ] Document **Ferrocene** as the qualified reference toolchain and pin the
-      qualified channel.
+- [x] `#![forbid(unsafe_code)]` on the kernel layers that can hold it — `qk`
+      and `qxk` are memory-safe by construction (all `unsafe` lives in `qf`).
+      *(Remaining: isolate `qf`'s `unsafe` — `pool`, `pool_arc`, `event_pool`,
+      `isr`, `qmsm` — behind per-block `# Safety` proofs; `pool_arc` already
+      documents each block.)*
+- [x] CI gates (`.github/workflows/fusa.yml`): dynamic + `static-alloc` test
+      runs, a `no_std + static-alloc` heap-free build, `clippy -D warnings` on
+      the unsafe-free `qk`/`qxk`, and **Miri** over the unsafe `pool` and
+      `pool_arc` modules. *(Remaining: `cargo deny`, broaden the clippy gate as
+      `qf`/`qs` warnings are cleared.)*
+- [x] Reference toolchain documented — see [§8 Reference toolchain](#8-reference-toolchain).
 - [ ] **Traceability**: tag each Assumed Safety Requirement (ASR) in
       doc-comments and generate a forward/backward trace matrix (analog to
       QP's Spexygen).
@@ -193,3 +197,28 @@ reconfiguration — consistent with upstream.
 - Keep the dynamic (`std`, `Arc`-based) path as a first-class host/test
   configuration alongside the static path? (Recommended: yes — dynamic for
   host tests, static for the safety build.)
+
+## 8. Reference toolchain
+
+A functional-safety argument requires a **qualified compiler** — the analog of
+the MISRA-checked, qualified C++ toolchain upstream QP/C++ assumes.
+
+- **[Ferrocene](https://ferrocene.dev/)** (Ferrous Systems' qualified
+  downstream of `rustc`) is the reference toolchain for the qp-rs safety build.
+  It is qualified against **ISO 26262 (ASIL-D)** and **IEC 61508 (SIL-4)**,
+  matching the standards this viewpoint targets, and tracks specific upstream
+  `rustc` releases — so qp-rs is built and tested on stable `rustc` and pinned
+  to the corresponding **qualified Ferrocene channel** for a safety release.
+- **Edition / MSRV**: Rust 2021. Pin the exact toolchain via `rust-toolchain.toml`
+  for a safety build so the qualified compiler version is reproducible.
+- **`core`/`alloc` only**: the safety build is `#![no_std]`; under
+  `static-alloc` the event path is heap-free (see Phase 2), so the qualified
+  `core` library surface is what matters — `std` is host/test only.
+- **Verification toolchain** (CI, see `.github/workflows/fusa.yml`): stable
+  `rustc` for tests and the heap-free build, `clippy` as the lint oracle on the
+  `#![forbid(unsafe_code)]` kernel layers, and **Miri** as the dynamic
+  UB-checker for the `unsafe` allocation code (`pool`, `pool_arc`).
+
+> Status: Ferrocene is documented as the **intended** qualified baseline. Pinning
+> a specific qualified channel (`rust-toolchain.toml`) is deferred to the first
+> tagged safety release.

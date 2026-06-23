@@ -37,6 +37,12 @@ pub struct QkKernelBuilder {
     pubsub: Option<PubSubTable>,
 }
 
+impl Default for QkKernelBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QkKernelBuilder {
     /// Creates an empty builder.
     pub fn new() -> Self {

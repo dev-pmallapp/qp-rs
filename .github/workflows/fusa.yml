@@ -1,0 +1,64 @@
+name: FuSa CI
+
+# Functional-safety check matrix for qp-rs (see docs/FUSA.md, Phase 4).
+# Gates the properties the safety build relies on: dynamic + heap-free builds
+# pass their tests, the heap-free `static-alloc` configuration links without
+# std, the unsafe-free kernel layers stay unsafe-free and clippy-clean, and the
+# unsafe pool/payload code is validated under Miri.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Tests (dynamic + static-alloc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Default (dynamic, Arc-backed) workspace tests
+        run: cargo test --workspace
+      - name: Heap-free (static-alloc) core tests
+        run: cargo test -p qf -p qk -p qxk --features static-alloc
+
+  heap-free-build:
+    name: no_std + static-alloc build (heap-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build core crates with no std and the static-alloc feature
+        run: cargo build -p qf -p qk -p qxk --no-default-features --features static-alloc
+
+  lint:
+    name: Lints (clippy + forbid-unsafe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # qk and qxk are `#![forbid(unsafe_code)]` (compiler-enforced) and must
+      # stay clippy-clean. `--no-deps` scopes the deny to our own code.
+      - name: Clippy (deny warnings) on the unsafe-free kernel layers
+        run: cargo clippy -p qk -p qxk --no-deps --all-targets -- -D warnings
+
+  miri:
+    name: Miri (unsafe pool / payload)
+    # Function-pointer-equality in the HSM is unreliable under Miri, so Miri is
+    # scoped to the unsafe allocation code it is meant to validate.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Miri - QMPool block allocator
+        run: "cargo miri test -p qf pool::"
+      - name: Miri - heap-free pooled event payloads (PoolArc)
+        run: "cargo miri test -p qf --features static-alloc pool_arc::"
