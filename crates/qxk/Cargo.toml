@@ -17,3 +17,4 @@ std = ["qf/std", "qs?/std"]
 qs = ["dep:qs", "qf/qs"]
 # Heap-free static-allocation primitives (see docs/FUSA.md, Phase 2).
 static-alloc = ["qf/static-alloc"]
+smp = ["qf/smp"]

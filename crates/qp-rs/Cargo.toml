@@ -49,6 +49,13 @@ comms = ["dep:comms"]
 # Framework-agnostic peripheral traits (embedded-hal based).
 hal = ["dep:hal"]
 
+# Symmetric Multiprocessing (SMP) support across kernels.
+smp = [
+    "qf/smp",
+    "qk?/smp",
+    "qxk?/smp",
+]
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 [dependencies]

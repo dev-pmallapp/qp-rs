@@ -245,6 +245,37 @@ impl From<TraceError> for KernelError {
     }
 }
 
+#[cfg(feature = "smp")]
+const CORE_ID_NONE: u8 = 0xFF;
+
+#[cfg(feature = "smp")]
+pub struct MpsActiveSlot {
+    pub object: ActiveObjectRef,
+    pub executing_core: core::sync::atomic::AtomicU8,
+}
+
+#[cfg(all(feature = "smp", feature = "std"))]
+fn current_core_id() -> u8 {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    thread_local! {
+        static MY_CORE_ID: u8 = {
+            static CORE_COUNTER: AtomicU8 = AtomicU8::new(0);
+            CORE_COUNTER.fetch_add(1, Ordering::Relaxed) % 8
+        };
+    }
+    MY_CORE_ID.with(|&id| id)
+}
+
+#[cfg(all(feature = "smp", not(feature = "std")))]
+extern "Rust" {
+    fn qf_port_current_core_id() -> u8;
+}
+
+#[cfg(all(feature = "smp", not(feature = "std")))]
+fn current_core_id() -> u8 {
+    unsafe { qf_port_current_core_id() }
+}
+
 /// Cooperative, priority-based QF kernel: dispatches registered active objects
 /// run-to-completion, highest priority first, with scheduler-ceiling locking.
 ///
@@ -252,10 +283,16 @@ impl From<TraceError> for KernelError {
 /// single-stack). [`Kernel`] is kept as a backwards-compatible alias.
 pub struct QvKernel {
     config: KernelConfig,
+    #[cfg(not(feature = "smp"))]
     objects: Vec<ActiveObjectRef>,
+    #[cfg(feature = "smp")]
+    slots: Vec<MpsActiveSlot>,
     by_id: BTreeMap<ActiveObjectId, ActiveObjectRef>,
     trace: Option<TraceHook>,
+    #[cfg(not(feature = "smp"))]
     scheduler: Mutex<SchedulerState>,
+    #[cfg(feature = "smp")]
+    sched_ceiling: core::sync::atomic::AtomicU8,
     /// Set by `stop()` to break out of a `run()` loop.
     stop_flag: AtomicBool,
     pubsub: Option<PubSubTable>,
@@ -291,7 +328,12 @@ impl QvKernel {
         if let Some(ref pubsub) = self.pubsub {
             self.emit_publish(signal);
             let subscribers = pubsub.subscribers(signal);
-            for ao in &self.objects {
+            #[cfg(not(feature = "smp"))]
+            let iter = self.objects.iter();
+            #[cfg(feature = "smp")]
+            let iter = self.slots.iter().map(|s| &s.object);
+
+            for ao in iter {
                 let priority = ao.priority();
                 if (subscribers & (1u64 << priority)) != 0 {
                     let mut cloned = event.clone();
@@ -300,7 +342,12 @@ impl QvKernel {
                 }
             }
         } else {
-            for ao in &self.objects {
+            #[cfg(not(feature = "smp"))]
+            let iter = self.objects.iter();
+            #[cfg(feature = "smp")]
+            let iter = self.slots.iter().map(|s| &s.object);
+
+            for ao in iter {
                 // Basic publish duplicates the event header, but payload is shared via Arc.
                 let mut cloned = event.clone();
                 cloned.header.signal = signal;
@@ -311,7 +358,12 @@ impl QvKernel {
 
     /// Starts every registered active object, installing the trace hook.
     pub fn start(&self) {
-        for ao in &self.objects {
+        #[cfg(not(feature = "smp"))]
+        let iter = self.objects.iter();
+        #[cfg(feature = "smp")]
+        let iter = self.slots.iter().map(|s| &s.object);
+
+        for ao in iter {
             ao.start(self.trace.clone());
         }
     }
@@ -353,7 +405,12 @@ impl QvKernel {
 
     /// `true` if any registered AO has queued events.
     pub fn has_pending_work(&self) -> bool {
-        self.objects.iter().any(|ao| ao.has_events())
+        #[cfg(not(feature = "smp"))]
+        let mut iter = self.objects.iter();
+        #[cfg(feature = "smp")]
+        let mut iter = self.slots.iter().map(|s| &s.object);
+
+        iter.any(|ao| ao.has_events())
     }
 
     /// Post `event` to `target` from an ISR context.
@@ -387,6 +444,7 @@ impl QvKernel {
 
     /// Dispatches one event to the highest-priority ready active object that the
     /// scheduler ceiling permits; returns `true` if an event was handled.
+    #[cfg(not(feature = "smp"))]
     pub fn dispatch_once(&self) -> bool {
         let candidate = self
             .objects
@@ -446,6 +504,46 @@ impl QvKernel {
         }
     }
 
+    /// Dispatches one event to the highest-priority ready active object that the
+    /// scheduler ceiling permits; returns `true` if an event was handled.
+    #[cfg(feature = "smp")]
+    pub fn dispatch_once(&self) -> bool {
+        let core_id = current_core_id();
+        let ceiling = self.sched_ceiling.load(Ordering::Acquire);
+
+        // Find the highest priority ready and unclaimed active object
+        let candidate_slot = self
+            .slots
+            .iter()
+            .rev()
+            .find(|slot| {
+                let prio = slot.object.priority();
+                prio > ceiling
+                    && slot.object.has_events()
+                    && slot.executing_core.load(Ordering::Relaxed) == CORE_ID_NONE
+            });
+
+        if let Some(slot) = candidate_slot {
+            // Try to claim the active object atomically
+            if slot.executing_core.compare_exchange(
+                CORE_ID_NONE,
+                core_id,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                let mut dispatched = false;
+                if slot.object.has_events() {
+                    let prio = slot.object.priority();
+                    self.emit_scheduler_record(QS_SCHED_NEXT, vec![prio, 0]);
+                    dispatched = slot.object.dispatch_one();
+                }
+                slot.executing_core.store(CORE_ID_NONE, Ordering::Release);
+                return dispatched;
+            }
+        }
+        false
+    }
+
     /// Returns a clone of the kernel's QS trace hook, if any.
     pub fn trace_hook(&self) -> Option<TraceHook> {
         self.trace.clone()
@@ -453,6 +551,7 @@ impl QvKernel {
 }
 
 impl QvKernel {
+    #[cfg(not(feature = "smp"))]
     fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
         let mut by_id = BTreeMap::new();
         for ao in &objects {
@@ -464,6 +563,28 @@ impl QvKernel {
             by_id,
             trace,
             scheduler: Mutex::new(SchedulerState::default()),
+            stop_flag: AtomicBool::new(false),
+            pubsub,
+        }
+    }
+
+    #[cfg(feature = "smp")]
+    fn new(config: KernelConfig, objects: Vec<ActiveObjectRef>, trace: Option<TraceHook>, pubsub: Option<PubSubTable>) -> Self {
+        let mut by_id = BTreeMap::new();
+        let mut slots = Vec::new();
+        for ao in &objects {
+            by_id.insert(ao.id(), Arc::clone(ao));
+            slots.push(MpsActiveSlot {
+                object: Arc::clone(ao),
+                executing_core: core::sync::atomic::AtomicU8::new(CORE_ID_NONE),
+            });
+        }
+        Self {
+            config,
+            slots,
+            by_id,
+            trace,
+            sched_ceiling: core::sync::atomic::AtomicU8::new(0),
             stop_flag: AtomicBool::new(false),
             pubsub,
         }
@@ -523,6 +644,7 @@ impl QvKernel {
 impl QvKernel {
     /// Raises the scheduler ceiling to `ceiling`, suppressing dispatch of active
     /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
+    #[cfg(not(feature = "smp"))]
     pub fn lock_scheduler(&self, ceiling: u8) {
         let mut note = None;
         {
@@ -540,6 +662,7 @@ impl QvKernel {
     }
 
     /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
+    #[cfg(not(feature = "smp"))]
     pub fn unlock_scheduler(&self) {
         let mut note = None;
         {
@@ -555,4 +678,168 @@ impl QvKernel {
             self.emit_scheduler_record(QS_SCHED_UNLOCK, payload);
         }
     }
+
+    /// Raises the scheduler ceiling to `ceiling`, suppressing dispatch of active
+    /// objects at or below it until [`unlock_scheduler`](Self::unlock_scheduler).
+    #[cfg(feature = "smp")]
+    pub fn lock_scheduler(&self, ceiling: u8) {
+        let mut note = None;
+        loop {
+            let current = self.sched_ceiling.load(Ordering::Acquire);
+            if ceiling <= current {
+                break;
+            }
+            if self.sched_ceiling.compare_exchange(
+                current,
+                ceiling,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                note = Some(vec![current, ceiling]);
+                break;
+            }
+        }
+
+        if let Some(payload) = note {
+            self.emit_scheduler_record(QS_SCHED_LOCK, payload);
+        }
+    }
+
+    /// Lowers the scheduler ceiling back to zero, re-enabling normal dispatch.
+    #[cfg(feature = "smp")]
+    pub fn unlock_scheduler(&self) {
+        let mut note = None;
+        loop {
+            let current = self.sched_ceiling.load(Ordering::Acquire);
+            if current == 0 {
+                break;
+            }
+            if self.sched_ceiling.compare_exchange(
+                current,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                note = Some(vec![current, 0]);
+                break;
+            }
+        }
+
+        if let Some(payload) = note {
+            self.emit_scheduler_record(QS_SCHED_UNLOCK, payload);
+        }
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::active::{new_active_object, ActiveContext, SignalHandler};
+    use crate::event::DynEvent;
+    use crate::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct MockBehavior {
+        id: ActiveObjectId,
+        active_threads: Arc<Mutex<usize>>,
+        max_concurrent_threads: Arc<Mutex<usize>>,
+    }
+
+    impl MockBehavior {
+        fn new(id: ActiveObjectId, active_threads: Arc<Mutex<usize>>, max_concurrent_threads: Arc<Mutex<usize>>) -> Self {
+            Self { id, active_threads, max_concurrent_threads }
+        }
+    }
+
+    impl SignalHandler for MockBehavior {
+        fn handle_signal(&mut self, _signal: Signal, _ctx: &mut ActiveContext) {
+            // Track thread entry
+            {
+                let mut active = self.active_threads.lock();
+                *active += 1;
+                let mut max = self.max_concurrent_threads.lock();
+                if *active > *max {
+                    *max = *active;
+                }
+            }
+
+            // Simulate execution time
+            std::thread::sleep(std::time::Duration::from_millis(5));
+
+            // Track thread exit
+            {
+                let mut active = self.active_threads.lock();
+                *active -= 1;
+            }
+        }
+    }
+
+    #[test]
+    fn test_cooperative_dispatch() {
+        let active_threads = Arc::new(Mutex::new(0));
+        let max_concurrent_threads = Arc::new(Mutex::new(0));
+        let ao_id = ActiveObjectId::new(10);
+        let ao = new_active_object(
+            ao_id,
+            5,
+            MockBehavior::new(ao_id, Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads)),
+        );
+
+        let kernel = QvKernel::builder().register(ao).build();
+        kernel.start();
+
+        kernel.post(ao_id, DynEvent::empty_dyn(Signal(42))).unwrap();
+        assert!(kernel.has_pending_work());
+        assert!(kernel.dispatch_once());
+        assert!(!kernel.has_pending_work());
+
+        assert_eq!(*max_concurrent_threads.lock(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "smp")]
+    fn test_smp_active_object_isolation_and_rtc() {
+        let active_threads = Arc::new(Mutex::new(0));
+        let max_concurrent_threads = Arc::new(Mutex::new(0));
+
+        let ao_id = ActiveObjectId::new(1);
+        let ao = new_active_object(
+            ao_id,
+            10,
+            MockBehavior::new(ao_id, Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads))
+        );
+
+        let kernel = Arc::new(
+            QvKernel::builder()
+                .register(ao)
+                .build()
+        );
+
+        kernel.start();
+
+        // Queue multiple events to the SAME Active Object
+        for i in 0..30 {
+            kernel.post(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+        }
+
+        // Spawn multiple worker threads representing core runloops
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let kernel_clone = Arc::clone(&kernel);
+            handles.push(std::thread::spawn(move || {
+                while kernel_clone.has_pending_work() {
+                    kernel_clone.dispatch_once();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify that no two threads ever executed the behavior concurrently
+        let max_concurrent = *max_concurrent_threads.lock();
+        assert_eq!(max_concurrent, 1, "AO behavior was executed concurrently by multiple cores!");
+    }
+}
+
