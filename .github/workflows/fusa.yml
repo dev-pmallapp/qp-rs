@@ -60,5 +60,7 @@ jobs:
           components: miri
       - name: Miri - QMPool block allocator
         run: "cargo miri test -p qf pool::"
+      - name: Miri - DIS atomic refcount (incl. concurrent stress)
+        run: "cargo miri test -p qf dis::tests::atomic"
       - name: Miri - heap-free pooled event payloads (PoolArc)
         run: "cargo miri test -p qf --features static-alloc pool_arc::"

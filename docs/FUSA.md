@@ -139,9 +139,13 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       to the active-object scheduling priority** (`ActiveObject::priority`) and
       to the **pooled-payload `pool_id`** (`PoolArc` control block) — a corrupted
       pool id would free a block into the wrong pool (heap corruption), so it is
-      DIS-verified before the free (Miri-revalidated). *(Remaining sites: the
-      PoolArc/event ref-counts — atomics, needing a DIS-over-atomic variant —
-      queue indices, pool free-list links, and AO current state.)*
+      DIS-verified before the free (Miri-revalidated). The **`PoolArc` strong
+      ref-count** uses `qf::dis::DisAtomicU16` — a DIS-over-atomic count packed
+      with its inverse into one `AtomicU32` (CAS-loop updates verify the halves;
+      overflow/underflow fault, giving built-in double-free detection).
+      Miri-validated, including a 4-thread concurrent stress test (no data
+      races). *(Remaining sites: queue indices, pool free-list links, and AO
+      current state.)*
 - [ ] **Duplicate Storage** (non-inverted) for pool buffer links, per upstream.
 - [x] Event-queue **safety-margin** API: a persistent per-queue margin reserves
       free slots for critical traffic. `post_normal` sheds normal-priority events

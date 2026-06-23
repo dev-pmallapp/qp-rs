@@ -20,6 +20,7 @@
 //! ```
 
 use core::ops::Not;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 mod sealed {
     pub trait Sealed {}
@@ -102,6 +103,106 @@ impl<T: DisInt + core::fmt::Debug> core::fmt::Debug for Dis<T> {
     }
 }
 
+/// A reference count protected by Duplicate Inverse Storage, in a single
+/// atomic word so the value and its inverse always update **atomically as a
+/// pair** (a plain `Dis<T>` over two atomics could be observed mid-update).
+///
+/// Layout: the low 16 bits hold the count, the high 16 bits hold its bitwise
+/// complement. Every operation verifies the two halves and routes a mismatch
+/// to [`crate::fusa::on_error`]; increment faults on overflow and decrement
+/// faults on underflow — giving the refcount a built-in **double-free /
+/// corruption detector**.
+///
+/// The count is 16-bit (max 65 535 simultaneous references), which is ample
+/// for event payloads. Like `Arc`, this requires a target with atomic
+/// compare-exchange.
+pub struct DisAtomicU16 {
+    packed: AtomicU32,
+}
+
+impl DisAtomicU16 {
+    #[inline]
+    const fn pack(v: u16) -> u32 {
+        (v as u32) | (((!v) as u32) << 16)
+    }
+
+    /// Verify the redundant halves of `word` and return the count, faulting on
+    /// mismatch.
+    #[inline]
+    fn verify(word: u32) -> u16 {
+        let lo = word as u16;
+        let hi = (word >> 16) as u16;
+        if lo != !hi {
+            crate::fusa::on_error(module_path!(), line!());
+        }
+        lo
+    }
+
+    /// Create a count initialised to `v`.
+    pub const fn new(v: u16) -> Self {
+        Self {
+            packed: AtomicU32::new(Self::pack(v)),
+        }
+    }
+
+    /// Verified read of the current count (Acquire).
+    pub fn load(&self) -> u16 {
+        Self::verify(self.packed.load(Ordering::Acquire))
+    }
+
+    /// Atomically increment (Relaxed, as for an `Arc` clone). Faults on
+    /// corruption or overflow.
+    pub fn increment(&self) {
+        let mut cur = self.packed.load(Ordering::Relaxed);
+        loop {
+            let v = Self::verify(cur);
+            let next = match v.checked_add(1) {
+                Some(n) => n,
+                None => crate::fusa::on_error(module_path!(), line!()),
+            };
+            match self.packed.compare_exchange_weak(
+                cur,
+                Self::pack(next),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    /// Atomically decrement (Release, as for an `Arc` drop), returning the
+    /// value **before** the decrement. Faults on corruption or underflow (a
+    /// decrement at zero indicates a double-free).
+    pub fn decrement(&self) -> u16 {
+        let mut cur = self.packed.load(Ordering::Relaxed);
+        loop {
+            let v = Self::verify(cur);
+            let next = match v.checked_sub(1) {
+                Some(n) => n,
+                None => crate::fusa::on_error(module_path!(), line!()),
+            };
+            match self.packed.compare_exchange_weak(
+                cur,
+                Self::pack(next),
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return v,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    /// Store an inconsistent word to simulate corruption — test only.
+    #[cfg(test)]
+    fn corrupt_for_test(&self) {
+        // lo = 1, hi = 0 → !hi = 0xFFFF != 1, so the halves disagree.
+        self.packed.store(0x0000_0001, Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +240,64 @@ mod tests {
         let caught = std::panic::catch_unwind(move || d.get());
         std::panic::set_hook(prev);
         assert!(caught.is_err(), "a corrupted DIS read must fault");
+    }
+
+    #[test]
+    fn atomic_count_basic() {
+        let c = DisAtomicU16::new(1);
+        assert_eq!(c.load(), 1);
+        c.increment();
+        c.increment();
+        assert_eq!(c.load(), 3);
+        assert_eq!(c.decrement(), 3); // returns the pre-decrement value
+        assert_eq!(c.load(), 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn atomic_count_corruption_faults() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(std::boxed::Box::new(|_| {}));
+        let c = DisAtomicU16::new(5);
+        c.corrupt_for_test();
+        let caught = catch_unwind(AssertUnwindSafe(|| c.load()));
+        std::panic::set_hook(prev);
+        assert!(caught.is_err(), "a corrupted atomic-count read must fault");
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn atomic_count_underflow_faults() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(std::boxed::Box::new(|_| {}));
+        let c = DisAtomicU16::new(0);
+        let caught = catch_unwind(AssertUnwindSafe(|| c.decrement())); // double-free
+        std::panic::set_hook(prev);
+        assert!(caught.is_err(), "decrement at zero must fault (double-free)");
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn atomic_count_concurrent_balanced() {
+        use std::sync::Arc as StdArc;
+        let c = StdArc::new(DisAtomicU16::new(1));
+        let mut handles = std::vec::Vec::new();
+        for _ in 0..4 {
+            let c = StdArc::clone(&c);
+            handles.push(std::thread::spawn(move || {
+                // Each iteration increments before decrementing, so the count
+                // never drops below the initial 1 → no spurious underflow.
+                for _ in 0..2000 {
+                    c.increment();
+                    c.decrement();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(c.load(), 1, "balanced concurrent inc/dec must return to 1");
     }
 }

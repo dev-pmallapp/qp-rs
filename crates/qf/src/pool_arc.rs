@@ -18,9 +18,9 @@
 
 use core::any::Any;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{fence, Ordering};
 
-use crate::dis::Dis;
+use crate::dis::{Dis, DisAtomicU16};
 use crate::event_pool::POOL_REGISTRY;
 
 /// Control block placed at the head of each pooled allocation.
@@ -30,7 +30,10 @@ use crate::event_pool::POOL_REGISTRY;
 /// `dyn Any` vtable (and thus the drop glue) for the erased `T`.
 #[repr(C)]
 struct CtrlHeader {
-    ref_count: AtomicUsize,
+    /// Strong reference count, DIS-protected (atomic value + inverse) so a bit
+    /// flip can't cause a premature free or leak — and underflow is a
+    /// double-free detector.
+    ref_count: DisAtomicU16,
     /// Owning pool id, protected by Duplicate Inverse Storage: a corrupted
     /// `pool_id` would return the block to the wrong pool (heap corruption), so
     /// it is integrity-checked before the block is freed.
@@ -107,7 +110,7 @@ impl PoolArc {
                 block,
                 Block {
                     header: CtrlHeader {
-                        ref_count: AtomicUsize::new(1),
+                        ref_count: DisAtomicU16::new(1),
                         pool_id: Dis::new(pool_id),
                         value: placeholder,
                     },
@@ -144,8 +147,8 @@ impl Clone for PoolArc {
     fn clone(&self) -> Self {
         if let Repr::Pooled(p) = self.repr {
             // SAFETY: a live strong reference keeps the control block valid.
-            // Relaxed is sufficient for the increment, as in `Arc`.
-            unsafe { p.as_ref().ref_count.fetch_add(1, Ordering::Relaxed) };
+            // `increment` is Relaxed internally, as in `Arc`.
+            unsafe { p.as_ref().ref_count.increment() };
             Self { repr: Repr::Pooled(p) }
         } else {
             Self { repr: Repr::Empty }
@@ -158,12 +161,14 @@ impl Drop for PoolArc {
         let Repr::Pooled(p) = self.repr else { return };
         // SAFETY: a live strong reference keeps the control block valid.
         unsafe {
-            if p.as_ref().ref_count.fetch_sub(1, Ordering::Release) != 1 {
+            // `decrement` is Release internally (as in `Arc`) and returns the
+            // pre-decrement count; it faults on underflow (double-free).
+            if p.as_ref().ref_count.decrement() != 1 {
                 return;
             }
             // Last reference: synchronise with all prior releases, then drop the
             // value via its `dyn Any` vtable and return the block to its pool.
-            core::sync::atomic::fence(Ordering::Acquire);
+            fence(Ordering::Acquire);
             let header = p.as_ptr();
             // Verify the pool id (DIS) before returning the block — a corrupted
             // id would free into the wrong pool.
