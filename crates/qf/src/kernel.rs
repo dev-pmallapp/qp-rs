@@ -254,27 +254,6 @@ pub struct MpsActiveSlot {
     pub executing_core: core::sync::atomic::AtomicU8,
 }
 
-#[cfg(all(feature = "smp", feature = "std"))]
-fn current_core_id() -> u8 {
-    use core::sync::atomic::{AtomicU8, Ordering};
-    thread_local! {
-        static MY_CORE_ID: u8 = {
-            static CORE_COUNTER: AtomicU8 = AtomicU8::new(0);
-            CORE_COUNTER.fetch_add(1, Ordering::Relaxed) % 8
-        };
-    }
-    MY_CORE_ID.with(|&id| id)
-}
-
-#[cfg(all(feature = "smp", not(feature = "std")))]
-extern "Rust" {
-    fn qf_port_current_core_id() -> u8;
-}
-
-#[cfg(all(feature = "smp", not(feature = "std")))]
-fn current_core_id() -> u8 {
-    unsafe { qf_port_current_core_id() }
-}
 
 /// Cooperative, priority-based QF kernel: dispatches registered active objects
 /// run-to-completion, highest priority first, with scheduler-ceiling locking.
@@ -508,7 +487,7 @@ impl QvKernel {
     /// scheduler ceiling permits; returns `true` if an event was handled.
     #[cfg(feature = "smp")]
     pub fn dispatch_once(&self) -> bool {
-        let core_id = current_core_id();
+        let core_id = crate::port::current_core_id();
         let ceiling = self.sched_ceiling.load(Ordering::Acquire);
 
         // Find the highest priority ready and unclaimed active object

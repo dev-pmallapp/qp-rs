@@ -81,3 +81,28 @@ pub trait Runtime {
     /// Returns `true` if the kernel has work ready to dispatch.
     fn has_pending_work(&self) -> bool;
 }
+
+/// Helper to query the currently executing CPU core ID (0..7).
+/// Available only when the `smp` feature is enabled.
+#[cfg(feature = "smp")]
+pub fn current_core_id() -> u8 {
+    #[cfg(feature = "std")]
+    {
+        use core::sync::atomic::{AtomicU8, Ordering};
+        thread_local! {
+            static MY_CORE_ID: u8 = {
+                static CORE_COUNTER: AtomicU8 = AtomicU8::new(0);
+                CORE_COUNTER.fetch_add(1, Ordering::Relaxed) % 8
+            };
+        }
+        MY_CORE_ID.with(|&id| id)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        extern "Rust" {
+            fn qf_port_current_core_id() -> u8;
+        }
+        unsafe { qf_port_current_core_id() }
+    }
+}
+
