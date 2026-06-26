@@ -520,7 +520,7 @@ mod tests {
     use crate::mac::lorawan::{LoRaWanMac, encrypt_frm_payload, compute_mic};
     use crate::mac::noop::NoopMac;
     use crate::net::NoopNetwork;
-    use crate::transport::{UnreliableTransport, ReliableTransport};
+    use crate::transport::UnreliableTransport;
     use crate::session::LoRaSession;
 
     // ── RfStack TX → LoopbackPhy → inspect bytes ─────────────────────────────

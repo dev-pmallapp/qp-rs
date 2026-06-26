@@ -96,7 +96,7 @@ impl QMPool {
 
         // Round up block_size to usize alignment so embedded next-pointers fit.
         let align = mem::size_of::<usize>();
-        let blk = ((block_size + align - 1) / align) * align;
+        let blk = block_size.div_ceil(align) * align;
         // At minimum two pointers fit: the free-list link plus its Duplicate
         // Storage copy (see module docs).
         let blk = blk.max(2 * align);

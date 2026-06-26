@@ -25,6 +25,12 @@ pub struct PosixPort {
     backend: BackendHandle,
 }
 
+impl Default for PosixPort {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PosixPort {
     /// Creates a new POSIX port instance that streams QS records to stdout.
     pub fn new() -> Self {

@@ -18,6 +18,12 @@ pub struct Network {
     bindings: [Option<PortBinding>; MAX_PORT_BINDINGS],
 }
 
+impl Default for Network {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Network {
     pub const fn new() -> Self {
         Self { bindings: [const { None }; MAX_PORT_BINDINGS] }

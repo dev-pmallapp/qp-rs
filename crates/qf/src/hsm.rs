@@ -523,35 +523,30 @@ impl<S: Send + 'static> QHsm<S> {
     /// transition (leaf state reached).
     fn handle_nested_init(&mut self, trace: &Option<TraceHook>) {
         let init_e = Event::empty_dyn(Q_INIT_SIG);
-        loop {
-            match (self.state.get())(&mut self.sm, &init_e) {
-                QHsmResult::Tran(next) => {
-                    // Build path from `next` up to `self.state` (the current composite state).
-                    let (next_path, next_len) = self.path_to_top(next);
+        while let QHsmResult::Tran(next) = (self.state.get())(&mut self.sm, &init_e) {
+            // Build path from `next` up to `self.state` (the current composite state).
+            let (next_path, next_len) = self.path_to_top(next);
 
-                    // Find where `self.state` sits in that path.
-                    let current = self.state.get();
-                    let current_idx = next_path[..next_len]
-                        .iter()
-                        .position(|&t| same_state(t, current))
-                        .unwrap_or(next_len);
+            // Find where `self.state` sits in that path.
+            let current = self.state.get();
+            let current_idx = next_path[..next_len]
+                .iter()
+                .position(|&t| same_state(t, current))
+                .unwrap_or(next_len);
 
-                    // Enter states from (not including) current down to next.
-                    for i in (0..current_idx).rev() {
-                        self.call_entry(next_path[i]);
-                        if let Some(ref hook) = trace {
-                            emit_state_entry(hook, next_path[i] as usize);
-                        }
-                    }
-
-                    if let Some(ref hook) = trace {
-                        emit_state_init(hook, self.state.get() as usize);
-                    }
-
-                    self.state.set(next);
+            // Enter states from (not including) current down to next.
+            for i in (0..current_idx).rev() {
+                self.call_entry(next_path[i]);
+                if let Some(ref hook) = trace {
+                    emit_state_entry(hook, next_path[i] as usize);
                 }
-                _ => break,
             }
+
+            if let Some(ref hook) = trace {
+                emit_state_init(hook, self.state.get() as usize);
+            }
+
+            self.state.set(next);
         }
     }
 }

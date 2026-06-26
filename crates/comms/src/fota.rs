@@ -62,7 +62,7 @@ impl<R: Rf> FotaSession<R> {
     /// number of fixed-size chunks needed to transfer it.
     pub fn new(rf: R, image_size: u32) -> Self {
         let total_chunks =
-            (image_size + FOTA_CHUNK_BYTES as u32 - 1) / FOTA_CHUNK_BYTES as u32;
+            image_size.div_ceil(FOTA_CHUNK_BYTES as u32);
         Self { rf, image_size, total_chunks }
     }
 

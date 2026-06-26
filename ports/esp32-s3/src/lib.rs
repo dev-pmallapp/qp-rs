@@ -82,6 +82,12 @@ pub struct PortConfig {
     pub tick_hz: u32,
 }
 
+impl Default for PortConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PortConfig {
     pub const fn new() -> Self {
         Self {

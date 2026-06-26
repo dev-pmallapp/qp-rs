@@ -39,24 +39,21 @@ impl<D: RfPhy + Send + 'static> ActiveBehavior for CommsAO<D> {
     }
 
     fn on_event(&mut self, _ctx: &mut ActiveContext, event: DynEvent) {
-        match event.signal() {
-            RF_TX_REQ_SIG => {
-                if !self.initialized {
-                    ceprintln!("CommsAO: RF not initialised, dropping TX request");
-                    return;
-                }
-                if let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() {
-                    match self.rf.send_with_fport(&req.data, req.fport) {
-                        Ok(()) => cprintln!(
-                            "CommsAO: TX ok via {}, FCnt={}",
-                            self.rf.chip_name(),
-                            self.rf.session().fcnt_up,
-                        ),
-                        Err(e) => ceprintln!("CommsAO: TX failed: {e}"),
-                    }
+        if event.signal() == RF_TX_REQ_SIG {
+            if !self.initialized {
+                ceprintln!("CommsAO: RF not initialised, dropping TX request");
+                return;
+            }
+            if let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() {
+                match self.rf.send_with_fport(&req.data, req.fport) {
+                    Ok(()) => cprintln!(
+                        "CommsAO: TX ok via {}, FCnt={}",
+                        self.rf.chip_name(),
+                        self.rf.session().fcnt_up,
+                    ),
+                    Err(e) => ceprintln!("CommsAO: TX failed: {e}"),
                 }
             }
-            _ => {}
         }
     }
 }

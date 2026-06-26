@@ -201,7 +201,7 @@ pub fn timestamped_name(ext: &str) -> String {
     let rem     = rem % 1461;
     let year1   = rem / 365;
     let year    = 1970 + year400 * 400 + year100 * 100 + year4 * 4 + year1;
-    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let is_leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let mut doy = (rem % 365) as u32;
 
     let days_in_month: [u32; 12] = [31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30,

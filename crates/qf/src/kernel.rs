@@ -146,17 +146,11 @@ impl KernelConfig {
 
 /// Builder for ergonomic kernel configuration construction.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct KernelConfigBuilder {
     config: KernelConfig,
 }
 
-impl Default for KernelConfigBuilder {
-    fn default() -> Self {
-        Self {
-            config: KernelConfig::default(),
-        }
-    }
-}
 
 impl KernelConfigBuilder {
     /// Sets the kernel name.
@@ -807,14 +801,13 @@ mod tests {
 
     #[derive(Clone)]
     struct MockBehavior {
-        id: ActiveObjectId,
         active_threads: Arc<Mutex<usize>>,
         max_concurrent_threads: Arc<Mutex<usize>>,
     }
 
     impl MockBehavior {
-        fn new(id: ActiveObjectId, active_threads: Arc<Mutex<usize>>, max_concurrent_threads: Arc<Mutex<usize>>) -> Self {
-            Self { id, active_threads, max_concurrent_threads }
+        fn new(active_threads: Arc<Mutex<usize>>, max_concurrent_threads: Arc<Mutex<usize>>) -> Self {
+            Self { active_threads, max_concurrent_threads }
         }
     }
 
@@ -849,7 +842,7 @@ mod tests {
         let ao = new_active_object(
             ao_id,
             5,
-            MockBehavior::new(ao_id, Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads)),
+            MockBehavior::new(Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads)),
         );
 
         let kernel = QvKernel::builder().register(ao).build();
@@ -873,7 +866,7 @@ mod tests {
         let ao = new_active_object(
             ao_id,
             10,
-            MockBehavior::new(ao_id, Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads))
+            MockBehavior::new(Arc::clone(&active_threads), Arc::clone(&max_concurrent_threads))
         );
 
         let kernel = Arc::new(

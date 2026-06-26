@@ -6,6 +6,12 @@ pub struct SystemTimer {
     tick_hz: AtomicU32,
 }
 
+impl Default for SystemTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemTimer {
     /// Creates a timer without an active periodic configuration.
     pub const fn new() -> Self {

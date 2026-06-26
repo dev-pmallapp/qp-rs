@@ -31,6 +31,12 @@ pub struct Frame {
     end:   u8,
 }
 
+impl Default for Frame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Frame {
     /// New TX frame: payload region starts at `FRAME_HEADROOM`.
     pub const fn new() -> Self {
@@ -132,6 +138,12 @@ pub struct FramePool {
     free_mask: core::sync::atomic::AtomicU8,  // bit N = frame N is free
 }
 
+impl Default for FramePool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FramePool {
     pub const fn new() -> Self {
         Self {
@@ -165,6 +177,10 @@ impl FramePool {
     pub unsafe fn get(&self, idx: FrameIdx) -> &Frame {
         &self.frames[idx.0 as usize]
     }
+
+    /// # Safety
+    /// Caller must own the index (it must not be in the free mask) and must not
+    /// hold any other reference to the same frame for the duration of the borrow.
     pub unsafe fn get_mut(&mut self, idx: FrameIdx) -> &mut Frame {
         &mut self.frames[idx.0 as usize]
     }

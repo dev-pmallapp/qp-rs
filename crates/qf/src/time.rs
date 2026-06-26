@@ -450,7 +450,7 @@ impl TimerWheel {
 impl TimeEvent {
     fn obtain_trace(&self) -> Option<(TraceHook, TimeEventTraceInfo)> {
         let trace = self.trace.lock().clone()?;
-        let mut meta = self.meta.lock().clone()?;
+        let mut meta = (*self.meta.lock())?;
         meta.tick_rate = self.inner.lock().cfg.tick_rate;
         Some((trace, meta))
     }

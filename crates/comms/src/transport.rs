@@ -12,12 +12,14 @@ pub struct ReliableTransport {
     state:        TransportState,
 }
 
-/// Private transport state.
+/// Reliable-transport state, exposed via [`ReliableTransport::state`] so the
+/// owning active object can drive its own state machine.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum TransportState {
+pub enum TransportState {
+    /// No transfer in progress.
     Idle,
+    /// A PDU was sent and we are awaiting its ACK.
     WaitingAck,
-    Receiving { total: u8, seen_mask: u8 },
 }
 
 /// Action returned to `RfStackAO` after a transport event.
@@ -148,6 +150,12 @@ pub mod TransportFlags {
 
 pub struct UnreliableTransport {
     seq: u8,
+}
+
+impl Default for UnreliableTransport {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UnreliableTransport {

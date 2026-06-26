@@ -63,6 +63,10 @@ pub enum QMsmResult<S: 'static> {
 /// QMsm state handler function signature.
 pub type QMStateHandler<S> = fn(&mut S, &DynEvent) -> QMsmResult<S>;
 
+/// Nested initial-transition action: runs on entry to a composite state and
+/// optionally returns the substate to descend into.
+pub type QMInitAction<S> = fn(&mut S) -> Option<&'static QMState<S>>;
+
 /// Static representation of a state in QMsm.
 pub struct QMState<S: 'static> {
     /// Superstate of this state.
@@ -74,7 +78,7 @@ pub struct QMState<S: 'static> {
     /// Exit action of this state.
     pub exit_action: Option<fn(&mut S)>,
     /// Nested initial transition action.
-    pub init_action: Option<fn(&mut S) -> Option<&'static QMState<S>>>,
+    pub init_action: Option<QMInitAction<S>>,
 }
 
 // SAFETY: a `QMState` is an immutable state-table node — its fields are a
@@ -306,34 +310,29 @@ impl<S: Send + 'static> QMsm<S> {
     }
 
     fn handle_nested_init(&mut self, trace: &Option<TraceHook>) {
-        loop {
-            if let Some(init_act) = self.state.init_action {
-                if let Some(next) = init_act(&mut self.sm) {
-                    let next_path = path_to_top(next);
-                    let current = self.state;
-                    let current_idx = next_path.iter().position(|&t| same_qmstate(t, current)).unwrap_or(next_path.len());
-
-                    for i in (0..current_idx).rev() {
-                        let state = next_path[i];
-                        if let Some(entry_act) = state.entry_action {
-                            entry_act(&mut self.sm);
-                        }
-                        if let Some(ref hook) = trace {
-                            emit_state_entry(hook, state as *const _ as usize);
-                        }
-                    }
-
-                    if let Some(ref hook) = trace {
-                        emit_state_init(hook, self.state as *const _ as usize);
-                    }
-
-                    self.state = next;
-                } else {
-                    break;
-                }
-            } else {
+        while let Some(init_act) = self.state.init_action {
+            let Some(next) = init_act(&mut self.sm) else {
                 break;
+            };
+            let next_path = path_to_top(next);
+            let current = self.state;
+            let current_idx = next_path.iter().position(|&t| same_qmstate(t, current)).unwrap_or(next_path.len());
+
+            for i in (0..current_idx).rev() {
+                let state = next_path[i];
+                if let Some(entry_act) = state.entry_action {
+                    entry_act(&mut self.sm);
+                }
+                if let Some(ref hook) = trace {
+                    emit_state_entry(hook, state as *const _ as usize);
+                }
             }
+
+            if let Some(ref hook) = trace {
+                emit_state_init(hook, self.state as *const _ as usize);
+            }
+
+            self.state = next;
         }
     }
 }

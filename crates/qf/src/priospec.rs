@@ -6,7 +6,7 @@
 /// # Layout
 /// - `[7:0]`  : Base priority of the Active Object.
 /// - `[15:8]` : Preemption threshold. If `0`, threshold is implicitly set
-///              to the priority itself (meaning the Active Object is fully preemptible).
+///   to the priority itself (meaning the Active Object is fully preemptible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct QPrioSpec(pub u16);
 

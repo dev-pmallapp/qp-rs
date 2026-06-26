@@ -8,6 +8,12 @@ pub struct InterruptController {
     scheduler_locked: AtomicBool,
 }
 
+impl Default for InterruptController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InterruptController {
     /// Creates a controller with scheduler interrupts enabled.
     pub const fn new() -> Self {

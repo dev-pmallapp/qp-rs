@@ -10,6 +10,12 @@ pub struct LoopbackPhy {
     pending_rx: Option<Vec<u8>>,
 }
 
+impl Default for LoopbackPhy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LoopbackPhy {
     pub fn new() -> Self {
         Self {

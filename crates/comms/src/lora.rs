@@ -113,19 +113,17 @@ impl<P: RfPhy> Rf for LoRaRf<P> {
         }).map_err(CommsError::from)?;
         self.stack.phy.set_mode(RadioMode::Rx { timeout_ms: Some(1000) }).map_err(CommsError::from)?;
 
-        if let Some(event) = self.stack.phy.poll_irq().map_err(CommsError::from)? {
-            if let PhyEvent::RxDone(meta) = event {
-                let mut raw_frame = Frame::new();
-                let len = (meta.pkt_len as usize).min(buf.len());
-                let mut tmp_buf = [0u8; 256];
-                self.stack.phy.read_rx(&mut tmp_buf[..len], &meta).map_err(CommsError::from)?;
-                raw_frame.set_received_len(len);
-                raw_frame.raw_buf_for_dma()[..len].copy_from_slice(&tmp_buf[..len]);
-                if let Some(out_frame) = self.stack.receive_raw(&mut raw_frame)? {
-                    let out_len = out_frame.len().min(buf.len());
-                    buf[..out_len].copy_from_slice(&out_frame.payload()[..out_len]);
-                    return Ok(out_len);
-                }
+        if let Some(PhyEvent::RxDone(meta)) = self.stack.phy.poll_irq().map_err(CommsError::from)? {
+            let mut raw_frame = Frame::new();
+            let len = (meta.pkt_len as usize).min(buf.len());
+            let mut tmp_buf = [0u8; 256];
+            self.stack.phy.read_rx(&mut tmp_buf[..len], &meta).map_err(CommsError::from)?;
+            raw_frame.set_received_len(len);
+            raw_frame.raw_buf_for_dma()[..len].copy_from_slice(&tmp_buf[..len]);
+            if let Some(out_frame) = self.stack.receive_raw(&mut raw_frame)? {
+                let out_len = out_frame.len().min(buf.len());
+                buf[..out_len].copy_from_slice(&out_frame.payload()[..out_len]);
+                return Ok(out_len);
             }
         }
         Err(CommsError::NothingReceived)

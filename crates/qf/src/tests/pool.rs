@@ -1,5 +1,12 @@
 //! Unit tests for QMPool and the framework event pool infrastructure.
 
+// These tests hand `&'static mut` slices over mutable `static` storage to the
+// pool. The `&mut *(&raw mut STORAGE)` idiom is deliberate: `&raw mut` avoids
+// the `static_mut_refs` lint (no intermediate reference to the static). clippy's
+// `deref_addrof` suggests `&mut STORAGE`, which would re-introduce exactly that
+// unsound pattern — so the lint is suppressed here.
+#![allow(clippy::deref_addrof)]
+
 use crate::event_pool::PoolRegistry;
 use crate::pool::QMPool;
 
