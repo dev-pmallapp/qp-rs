@@ -1,6 +1,11 @@
 //! Unit tests for ISR nesting, run/stop lifecycle, rearm/was_disarmed,
 //! post_from_isr, and tick_from_isr.
 
+// Under `static-alloc`, the kernel / time-event handles are `Copy` `&'static`
+// references, so `.clone()` on them is a no-op (it bumps an `Arc` refcount on
+// the dynamic build). Suppress the lint only on the heap-free build.
+#![cfg_attr(feature = "static-alloc", allow(noop_method_call))]
+
 use std::sync::{Arc, Mutex};
 
 use crate::active::{new_active_object, ActiveContext, ActiveObjectId, SignalHandler};

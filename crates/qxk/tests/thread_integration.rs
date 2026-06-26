@@ -79,7 +79,7 @@ fn thread_blocks_on_semaphore() {
     assert!(!kernel.dispatch_once());
 
     // Signal the semaphore
-    sem.signal(&kernel.scheduler()).unwrap();
+    sem.signal(kernel.scheduler()).unwrap();
 
     // Thread should be unblocked and run again
     assert!(kernel.dispatch_once());
@@ -194,7 +194,7 @@ fn message_queue_blocks_receiver() {
     assert!(!kernel.dispatch_once()); // Blocked
 
     // Send a message
-    queue.try_send(42, &kernel.scheduler()).unwrap();
+    queue.try_send(42, kernel.scheduler()).unwrap();
 
     // Receiver unblocks and receives
     assert!(kernel.dispatch_once());

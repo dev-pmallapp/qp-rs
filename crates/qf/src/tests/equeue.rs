@@ -1,5 +1,10 @@
 //! Unit tests for QEQueue and defer/recall.
 
+// Under `static-alloc`, `ActiveObjectRef` is a `Copy` `&'static` handle, so the
+// `&*ao` reborrow used to pass `&dyn ActiveRunnable` is a no-op the dynamic
+// (`Arc`) build genuinely needs. Suppress the lint only on the heap-free build.
+#![cfg_attr(feature = "static-alloc", allow(clippy::borrow_deref_ref))]
+
 use crate::active::{new_active_object, ActiveBehavior, ActiveContext, ActiveObjectId};
 use crate::equeue::{defer, flush_deferred, recall, QEQueue};
 use crate::event::{DynEvent, Signal};

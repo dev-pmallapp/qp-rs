@@ -23,6 +23,8 @@ use crate::pubsub::PubSubTable;
 const QS_SCHED_LOCK: u8 = 50;
 const QS_SCHED_UNLOCK: u8 = 51;
 const QS_SCHED_NEXT: u8 = 52;
+// The SMP scheduler does not emit a per-core idle record from this path.
+#[cfg(not(feature = "smp"))]
 const QS_SCHED_IDLE: u8 = 53;
 
 /// Maximum active objects in the heap-free registry (idle priority 0 plus the
@@ -64,6 +66,9 @@ fn clone_ref(a: &ActiveObjectRef) -> ActiveObjectRef {
     }
 }
 
+// The SMP kernel keeps its scheduler state in lock-free atomics, not this
+// `Mutex`-guarded struct.
+#[cfg(not(feature = "smp"))]
 #[derive(Default)]
 struct SchedulerState {
     prev_prio: u8,

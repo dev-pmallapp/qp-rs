@@ -299,21 +299,11 @@ impl QxkKernel {
         QxkScheduler::new(trace)
     }
 
-    /// Borrows the scheduler. Works uniformly across builds: the dynamic build's
-    /// `Arc` deref-coerces to `&QxkScheduler`, the heap-free build owns it inline.
+    /// Borrows the underlying scheduler. Works uniformly across builds: the
+    /// dynamic build's `Arc` deref-coerces to `&QxkScheduler`, the heap-free
+    /// build owns the scheduler inline. (Consumers — ports and tests — only ever
+    /// call scheduler methods inline, so no owned `Arc` handle is needed.)
     #[inline]
-    fn sched(&self) -> &QxkScheduler {
-        &self.scheduler
-    }
-
-    /// Returns a handle to the underlying scheduler: a shared `Arc` on the
-    /// dynamic build, a borrow under `static-alloc` (the kernel owns it inline).
-    #[cfg(not(feature = "static-alloc"))]
-    pub fn scheduler(&self) -> Arc<QxkScheduler> {
-        Arc::clone(&self.scheduler)
-    }
-    /// See the dynamic variant above.
-    #[cfg(feature = "static-alloc")]
     pub fn scheduler(&self) -> &QxkScheduler {
         &self.scheduler
     }
@@ -455,7 +445,7 @@ impl QxkKernel {
             ScheduleMode::ExtendedThread { id, priority } => {
                 if let Some(thread_mtx) = self.find_thread(id) {
                     let mut thread = thread_mtx.lock();
-                    let action = thread.poll(self.sched());
+                    let action = thread.poll(self.scheduler());
 
                     self.scheduler.complete_execution(mode);
 
@@ -599,7 +589,6 @@ mod tests {
 
         #[derive(Clone)]
         struct MockBehavior {
-            id: ActiveObjectId,
             active_threads: Arc<Mutex<usize>>,
             max_concurrent_threads: Arc<Mutex<usize>>,
         }
@@ -630,7 +619,6 @@ mod tests {
             ao_id,
             10,
             MockBehavior {
-                id: ao_id,
                 active_threads: Arc::clone(&active_threads),
                 max_concurrent_threads: Arc::clone(&max_concurrent_threads),
             },

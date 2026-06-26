@@ -78,7 +78,10 @@ impl ReadySet {
 
     /// Returns the highest priority marked ready, or None if empty.
     ///
-    /// Uses leading_zeros for O(1) lookup.
+    /// Uses leading_zeros for O(1) lookup. The SMP scheduler scans the ready set
+    /// directly (it must skip priorities already running on other cores), so this
+    /// helper is only used by the single-core path.
+    #[cfg_attr(feature = "smp", allow(dead_code))]
     fn max(&self) -> Option<u8> {
         if self.bits == 0 {
             None
@@ -289,15 +292,13 @@ impl QkScheduler {
 
         let mut found_candidate = None;
         for prio in (1..64).rev() {
-            if state.ready.contains(prio) {
-                if prio > active_threshold && prio > lock_ceiling {
-                    let already_running = (0..8).any(|c| {
-                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
-                    }) || state.executing_cores[prio as usize] != 0xFF;
-                    if !already_running {
-                        found_candidate = Some(prio);
-                        break;
-                    }
+            if state.ready.contains(prio) && prio > active_threshold && prio > lock_ceiling {
+                let already_running = (0..8).any(|c| {
+                    c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                }) || state.executing_cores[prio as usize] != 0xFF;
+                if !already_running {
+                    found_candidate = Some(prio);
+                    break;
                 }
             }
         }
@@ -332,14 +333,12 @@ impl QkScheduler {
         let lock_ceiling = state.lock_ceiling;
 
         for prio in (1..64).rev() {
-            if state.ready.contains(prio) {
-                if prio > active_threshold && prio > lock_ceiling {
-                    let already_running = (0..8).any(|c| {
-                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
-                    }) || state.executing_cores[prio as usize] != 0xFF;
-                    if !already_running {
-                        return true;
-                    }
+            if state.ready.contains(prio) && prio > active_threshold && prio > lock_ceiling {
+                let already_running = (0..8).any(|c| {
+                    c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                }) || state.executing_cores[prio as usize] != 0xFF;
+                if !already_running {
+                    return true;
                 }
             }
         }
@@ -377,15 +376,13 @@ impl QkScheduler {
 
         let mut found_candidate = None;
         for prio in (1..64).rev() {
-            if state.ready.contains(prio) {
-                if prio > initial_threshold && prio > lock_ceiling {
-                    let already_running = (0..8).any(|c| {
-                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
-                    }) || state.executing_cores[prio as usize] != 0xFF;
-                    if !already_running {
-                        found_candidate = Some(prio);
-                        break;
-                    }
+            if state.ready.contains(prio) && prio > initial_threshold && prio > lock_ceiling {
+                let already_running = (0..8).any(|c| {
+                    c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                }) || state.executing_cores[prio as usize] != 0xFF;
+                if !already_running {
+                    found_candidate = Some(prio);
+                    break;
                 }
             }
         }

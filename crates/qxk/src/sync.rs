@@ -8,7 +8,7 @@
 // shares state via `&'static` and links no allocator (so `alloc` is absent).
 #[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 pub use alloc::sync::Arc;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "static-alloc")))]
 pub use std::sync::Arc;
 
 #[cfg(feature = "std")]

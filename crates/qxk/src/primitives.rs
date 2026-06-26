@@ -95,6 +95,10 @@ fn clone_shared<T>(s: &Shared<T>) -> Shared<T> {
     }
     #[cfg(feature = "static-alloc")]
     {
+        // Copy the `&'static` reference out. The explicit deref is required:
+        // returning `s` would deref-coerce to a shorter-lived `&Mutex<T>`, not
+        // the `&'static Mutex<T>` the return type demands.
+        #[allow(clippy::explicit_auto_deref)]
         *s
     }
 }

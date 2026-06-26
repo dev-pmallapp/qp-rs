@@ -842,7 +842,6 @@ mod tests {
 
         #[derive(Clone)]
         struct MockBehavior {
-            id: ActiveObjectId,
             active_threads: Arc<Mutex<usize>>,
             max_concurrent_threads: Arc<Mutex<usize>>,
         }
@@ -873,7 +872,6 @@ mod tests {
             ao_id,
             10,
             MockBehavior {
-                id: ao_id,
                 active_threads: Arc::clone(&active_threads),
                 max_concurrent_threads: Arc::clone(&max_concurrent_threads),
             },

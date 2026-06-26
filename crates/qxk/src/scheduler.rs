@@ -112,7 +112,10 @@ impl ReadySet {
 
     /// Returns the highest priority marked ready, or None if empty.
     ///
-    /// Uses leading_zeros for O(1) lookup.
+    /// Uses leading_zeros for O(1) lookup. The SMP planner scans the ready set
+    /// directly (skipping priorities already running on other cores), so this
+    /// helper is only used by the single-core path (and the unit tests).
+    #[cfg_attr(feature = "smp", allow(dead_code))]
     fn max(&self) -> Option<u8> {
         if self.bits == 0 {
             None
@@ -151,10 +154,14 @@ impl ThreadReadyQueue {
         self.ready_threads.retain(|(tid, _)| *tid != id);
     }
 
+    // Only the single-core planner uses these accessors directly; the SMP
+    // planner iterates `ready_threads` to skip threads running on other cores.
+    #[cfg_attr(feature = "smp", allow(dead_code))]
     fn max(&self) -> Option<(ThreadId, ThreadPriority)> {
         self.ready_threads.first().copied()
     }
 
+    #[cfg_attr(feature = "smp", allow(dead_code))]
     fn is_empty(&self) -> bool {
         self.ready_threads.is_empty()
     }
@@ -342,15 +349,13 @@ impl QxkScheduler {
         // 1. First check for ready active objects above lock ceiling and not executing on any core
         let mut found_ao = None;
         for prio in (1..64).rev() {
-            if state.ao_ready.contains(prio) {
-                if prio > state.lock_ceiling {
-                    let already_running = (0..8).any(|c| {
-                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
-                    }) || state.executing_aos[prio as usize] != 0xFF;
-                    if !already_running {
-                        found_ao = Some(prio);
-                        break;
-                    }
+            if state.ao_ready.contains(prio) && prio > state.lock_ceiling {
+                let already_running = (0..8).any(|c| {
+                    c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                }) || state.executing_aos[prio as usize] != 0xFF;
+                if !already_running {
+                    found_ao = Some(prio);
+                    break;
                 }
             }
         }
@@ -405,14 +410,12 @@ impl QxkScheduler {
         let state = self.state.lock();
         
         for prio in (1..64).rev() {
-            if state.ao_ready.contains(prio) {
-                if prio > state.lock_ceiling {
-                    let already_running = (0..8).any(|c| {
-                        c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
-                    }) || state.executing_aos[prio as usize] != 0xFF;
-                    if !already_running {
-                        return true;
-                    }
+            if state.ao_ready.contains(prio) && prio > state.lock_ceiling {
+                let already_running = (0..8).any(|c| {
+                    c != core_id && (state.cores[c].active_prio == prio || state.cores[c].next_prio == prio)
+                }) || state.executing_aos[prio as usize] != 0xFF;
+                if !already_running {
+                    return true;
                 }
             }
         }
