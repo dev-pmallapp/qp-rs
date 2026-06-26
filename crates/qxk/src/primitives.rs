@@ -9,14 +9,24 @@
 //! - **Mutex**: Mutual exclusion with optional priority inheritance
 //! - **MessageQueue**: FIFO queue for inter-thread communication
 //! - **CondVar**: Condition variable for wait/notify patterns
+//!
+//! ## Storage model (functional safety, `docs/FUSA.md` Phase 2)
+//!
+//! On the dynamic build each primitive shares its state through an
+//! `Arc<Mutex<_>>`, so cloning a handle shares the same primitive. Under the
+//! heap-free `static-alloc` build the state lives in application-owned `static`
+//! storage and the handle is a `&'static Mutex<_>` (cloning copies the
+//! reference). The convenience constructors (`new`, `binary`, …) leak on
+//! `static-alloc` + `std` for host tests; genuine no-`std` targets build the
+//! state in a `static` and use [`Semaphore::from_static`] and friends.
 
-use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 use core::fmt;
 use core::time::Duration;
 
 use crate::scheduler::{QxkScheduler, SchedStatus};
-use crate::sync::{Arc, Mutex};
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
+use crate::sync::Mutex;
 use crate::thread::{ThreadId, ThreadPriority};
 
 #[cfg(feature = "qs")]
@@ -34,6 +44,89 @@ mod rec {
     pub const MTX_LOCK:   u8 = 75;
     pub const MTX_BLOCK:  u8 = 76;
     pub const MTX_UNLOCK: u8 = 77;
+}
+
+/// Waiter list storage. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
+/// [`heapless::Vec`] bounded by [`crate::MAX_WAITERS`].
+#[cfg(not(feature = "static-alloc"))]
+type WaitVec = alloc::vec::Vec<WaitingThread>;
+#[cfg(feature = "static-alloc")]
+type WaitVec = heapless::Vec<WaitingThread, { crate::MAX_WAITERS }>;
+
+/// Shared primitive state. Dynamic: `Arc<Mutex<_>>` (cloning shares); under
+/// `static-alloc`: `&'static Mutex<_>` (the state lives in `static` storage).
+#[cfg(not(feature = "static-alloc"))]
+type Shared<T> = Arc<Mutex<T>>;
+#[cfg(feature = "static-alloc")]
+type Shared<T> = &'static Mutex<T>;
+
+/// Push a waiter, faulting (crash-only) if the heap-free wait-list is full.
+#[inline]
+fn push_waiter(v: &mut WaitVec, w: WaitingThread) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(w);
+    #[cfg(feature = "static-alloc")]
+    if v.push(w).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
+
+/// Remove and return the highest-priority waiter, if any. Build-agnostic
+/// (uses `swap_remove`, available on both `Vec` and `heapless::Vec`).
+fn take_highest(v: &mut WaitVec) -> Option<WaitingThread> {
+    if v.is_empty() {
+        return None;
+    }
+    let mut best = 0;
+    for i in 1..v.len() {
+        if v[i].priority > v[best].priority {
+            best = i;
+        }
+    }
+    Some(v.swap_remove(best))
+}
+
+/// Clone a shared handle: `Arc` refcount bump (dynamic) or pointer copy (`static-alloc`).
+#[inline]
+fn clone_shared<T>(s: &Shared<T>) -> Shared<T> {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        Arc::clone(s)
+    }
+    #[cfg(feature = "static-alloc")]
+    {
+        *s
+    }
+}
+
+/// Allocate shared state for a convenience constructor. Dynamic: `Arc`;
+/// `static-alloc` + `std`: leaked `Box` (host tests). Absent on no-`std`
+/// heap-free targets, which use the `from_static` constructors instead.
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
+#[inline]
+fn share<T>(inner: T) -> Shared<T> {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        Arc::new(Mutex::new(inner))
+    }
+    #[cfg(all(feature = "static-alloc", feature = "std"))]
+    {
+        alloc::boxed::Box::leak(alloc::boxed::Box::new(Mutex::new(inner)))
+    }
+}
+
+/// Stable address of the shared state, used as a QS object id.
+#[cfg(feature = "qs")]
+#[inline]
+fn shared_ptr<T>(s: &Shared<T>) -> u64 {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        Arc::as_ptr(s) as u64
+    }
+    #[cfg(feature = "static-alloc")]
+    {
+        (*s) as *const Mutex<T> as u64
+    }
 }
 
 /// Error types for synchronization primitives.
@@ -103,15 +196,28 @@ impl WaitingThread {
 /// sem.signal()?; // Wakes thread 1
 /// ```
 pub struct Semaphore {
-    inner: Arc<Mutex<SemaphoreInner>>,
+    inner: Shared<SemaphoreInner>,
     #[cfg(feature = "qs")]
     trace: Option<TraceHook>,
 }
 
-struct SemaphoreInner {
+/// Internal semaphore state. Public so that no-`std` heap-free targets can
+/// place it in `static` storage for [`Semaphore::from_static`].
+pub struct SemaphoreInner {
     count: usize,
     max_count: usize,
-    waiting: Vec<WaitingThread>,
+    waiting: WaitVec,
+}
+
+impl SemaphoreInner {
+    /// Creates semaphore state with the given initial and maximum counts.
+    pub const fn new(initial_count: usize, max_count: usize) -> Self {
+        Self {
+            count: initial_count,
+            max_count,
+            waiting: WaitVec::new(),
+        }
+    }
 }
 
 impl Semaphore {
@@ -119,6 +225,7 @@ impl Semaphore {
     ///
     /// # Parameters
     /// - `initial_count`: Starting value for the semaphore
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
     pub fn new(initial_count: usize) -> Self {
         Self::with_max(initial_count, usize::MAX)
     }
@@ -128,13 +235,26 @@ impl Semaphore {
     /// # Parameters
     /// - `initial_count`: Starting value for the semaphore
     /// - `max_count`: Maximum allowed value (for overflow protection)
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
     pub fn with_max(initial_count: usize, max_count: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(SemaphoreInner {
-                count: initial_count,
-                max_count,
-                waiting: Vec::new(),
-            })),
+            inner: share(SemaphoreInner::new(initial_count, max_count)),
+            #[cfg(feature = "qs")]
+            trace: None,
+        }
+    }
+
+    /// Creates a binary semaphore (max count = 1).
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
+    pub fn binary() -> Self {
+        Self::with_max(0, 1)
+    }
+
+    /// Builds a semaphore handle over caller-owned `static` state (heap-free).
+    #[cfg(feature = "static-alloc")]
+    pub fn from_static(inner: &'static Mutex<SemaphoreInner>) -> Self {
+        Self {
+            inner,
             #[cfg(feature = "qs")]
             trace: None,
         }
@@ -149,7 +269,7 @@ impl Semaphore {
     #[cfg(feature = "qs")]
     fn emit(&self, record_id: u8, thread_prio: u8, count: usize) {
         if let Some(ref hook) = self.trace {
-            let ptr = Arc::as_ptr(&self.inner) as u64;
+            let ptr = shared_ptr(&self.inner);
             let mut payload = [0u8; 11];
             payload[..8].copy_from_slice(&ptr.to_le_bytes());
             payload[8] = thread_prio;
@@ -162,11 +282,6 @@ impl Semaphore {
     #[cfg(not(feature = "qs"))]
     #[inline(always)]
     fn emit(&self, _record_id: u8, _thread_prio: u8, _count: usize) {}
-
-    /// Creates a binary semaphore (max count = 1).
-    pub fn binary() -> Self {
-        Self::with_max(0, 1)
-    }
 
     /// Waits for the semaphore to become available (non-blocking check).
     ///
@@ -193,7 +308,7 @@ impl Semaphore {
                 inner.count -= 1;
                 (true, inner.count)
             } else {
-                inner.waiting.push(WaitingThread::new(thread, priority));
+                push_waiter(&mut inner.waiting, WaitingThread::new(thread, priority));
                 (false, inner.count)
             }
         };
@@ -231,13 +346,7 @@ impl Semaphore {
             let count = inner.count;
 
             // Wake highest priority waiter
-            let woken = if !inner.waiting.is_empty() {
-                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                let w = inner.waiting.remove(0);
-                Some((w.id, w.priority))
-            } else {
-                None
-            };
+            let woken = take_highest(&mut inner.waiting).map(|w| (w.id, w.priority));
             (count, woken)
         };
 
@@ -269,14 +378,14 @@ impl Semaphore {
     /// Registers a thread as waiting (for scheduler integration).
     pub fn register_waiter(&self, thread: ThreadId, priority: u8) {
         let mut inner = self.inner.lock();
-        inner.waiting.push(WaitingThread::new(thread, priority));
+        push_waiter(&mut inner.waiting, WaitingThread::new(thread, priority));
     }
 }
 
 impl Clone for Semaphore {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: clone_shared(&self.inner),
             #[cfg(feature = "qs")]
             trace: self.trace.clone(),
         }
@@ -288,12 +397,14 @@ impl Clone for Semaphore {
 /// A mutex ensures only one thread can access protected data at a time.
 /// Optionally supports priority inheritance to prevent priority inversion.
 pub struct MutexPrim {
-    inner: Arc<Mutex<MutexInner>>,
+    inner: Shared<MutexInner>,
     #[cfg(feature = "qs")]
     trace: Option<TraceHook>,
 }
 
-struct MutexInner {
+/// Internal mutex state. Public so that no-`std` heap-free targets can place it
+/// in `static` storage for [`MutexPrim::from_static`].
+pub struct MutexInner {
     locked: bool,
     owner: Option<ThreadId>,
     original_priority: Option<u8>,
@@ -302,21 +413,47 @@ struct MutexInner {
     ceiling: Option<u8>,
     /// Saved scheduler lock status applied when ceiling was raised; restored on unlock.
     ceiling_sched_status: Option<SchedStatus>,
-    waiting: Vec<WaitingThread>,
+    waiting: WaitVec,
+}
+
+impl MutexInner {
+    /// Creates mutex state with no priority ceiling.
+    pub const fn new() -> Self {
+        Self {
+            locked: false,
+            owner: None,
+            original_priority: None,
+            ceiling: None,
+            ceiling_sched_status: None,
+            waiting: WaitVec::new(),
+        }
+    }
+
+    /// Creates mutex state with a priority ceiling.
+    pub const fn with_ceiling(ceiling: u8) -> Self {
+        Self {
+            locked: false,
+            owner: None,
+            original_priority: None,
+            ceiling: Some(ceiling),
+            ceiling_sched_status: None,
+            waiting: WaitVec::new(),
+        }
+    }
+}
+
+impl Default for MutexInner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MutexPrim {
     /// Creates a new mutex.
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(MutexInner {
-                locked: false,
-                owner: None,
-                original_priority: None,
-                ceiling: None,
-                ceiling_sched_status: None,
-                waiting: Vec::new(),
-            })),
+            inner: share(MutexInner::new()),
             #[cfg(feature = "qs")]
             trace: None,
         }
@@ -328,16 +465,20 @@ impl MutexPrim {
     /// any task with priority ≤ `ceiling` from preempting the holder.  This
     /// eliminates unbounded priority inversion without full priority inheritance.
     /// Corresponds to `QXMutex` with `QF_QMPOOL_CTR_SIZE` ceiling in QP/C++.
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
     pub fn with_ceiling(ceiling: u8) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(MutexInner {
-                locked: false,
-                owner: None,
-                original_priority: None,
-                ceiling: Some(ceiling),
-                ceiling_sched_status: None,
-                waiting: Vec::new(),
-            })),
+            inner: share(MutexInner::with_ceiling(ceiling)),
+            #[cfg(feature = "qs")]
+            trace: None,
+        }
+    }
+
+    /// Builds a mutex handle over caller-owned `static` state (heap-free).
+    #[cfg(feature = "static-alloc")]
+    pub fn from_static(inner: &'static Mutex<MutexInner>) -> Self {
+        Self {
+            inner,
             #[cfg(feature = "qs")]
             trace: None,
         }
@@ -357,7 +498,7 @@ impl MutexPrim {
     #[cfg(feature = "qs")]
     fn emit(&self, record_id: u8, thread_prio: u8) {
         if let Some(ref hook) = self.trace {
-            let ptr = Arc::as_ptr(&self.inner) as u64;
+            let ptr = shared_ptr(&self.inner);
             let mut payload = [0u8; 9];
             payload[..8].copy_from_slice(&ptr.to_le_bytes());
             payload[8] = thread_prio;
@@ -396,7 +537,7 @@ impl MutexPrim {
                 inner.original_priority = Some(priority);
                 (true, inner.ceiling)
             } else {
-                inner.waiting.push(WaitingThread::new(thread, priority));
+                push_waiter(&mut inner.waiting, WaitingThread::new(thread, priority));
                 (false, None)
             }
         };
@@ -437,13 +578,7 @@ impl MutexPrim {
             inner.original_priority = None;
 
             // Wake highest priority waiter
-            if !inner.waiting.is_empty() {
-                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                let woken = inner.waiting.remove(0);
-                Some((woken.id, woken.priority))
-            } else {
-                None
-            }
+            take_highest(&mut inner.waiting).map(|w| (w.id, w.priority))
         };
 
         // Restore ceiling lock before emitting trace or unblocking waiters.
@@ -482,10 +617,11 @@ impl MutexPrim {
     /// Registers a thread as waiting.
     pub fn register_waiter(&self, thread: ThreadId, priority: u8) {
         let mut inner = self.inner.lock();
-        inner.waiting.push(WaitingThread::new(thread, priority));
+        push_waiter(&mut inner.waiting, WaitingThread::new(thread, priority));
     }
 }
 
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
 impl Default for MutexPrim {
     fn default() -> Self {
         Self::new()
@@ -495,7 +631,7 @@ impl Default for MutexPrim {
 impl Clone for MutexPrim {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: clone_shared(&self.inner),
             #[cfg(feature = "qs")]
             trace: self.trace.clone(),
         }
@@ -505,29 +641,95 @@ impl Clone for MutexPrim {
 /// FIFO message queue for inter-thread communication.
 ///
 /// Allows threads to send and receive typed messages. Receivers can block
-/// waiting for messages.
-pub struct MessageQueue<T> {
-    inner: Arc<Mutex<MessageQueueInner<T>>>,
+/// waiting for messages. The capacity is the const generic `N`: heap-free
+/// builds back the queue with a `heapless::Deque<T, N>`, the dynamic build with
+/// a `VecDeque<T>` bounded to `N`.
+pub struct MessageQueue<T: 'static, const N: usize> {
+    inner: Shared<MessageQueueInner<T, N>>,
 }
 
-struct MessageQueueInner<T> {
-    queue: VecDeque<T>,
-    capacity: usize,
-    waiting_receivers: Vec<WaitingThread>,
-    waiting_senders: Vec<WaitingThread>,
+/// Internal message-queue state. Public so that no-`std` heap-free targets can
+/// place it in `static` storage for [`MessageQueue::from_static`].
+pub struct MessageQueueInner<T, const N: usize> {
+    #[cfg(not(feature = "static-alloc"))]
+    queue: alloc::collections::VecDeque<T>,
+    #[cfg(feature = "static-alloc")]
+    queue: heapless::Deque<T, N>,
+    waiting_receivers: WaitVec,
+    waiting_senders: WaitVec,
+    // The dynamic queue does not embed `N`; keep the parameter live.
+    #[cfg(not(feature = "static-alloc"))]
+    _cap: core::marker::PhantomData<[(); N]>,
 }
 
-impl<T> MessageQueue<T> {
-    /// Creates a new message queue with the given capacity.
-    pub fn new(capacity: usize) -> Self {
+impl<T, const N: usize> MessageQueueInner<T, N> {
+    /// Creates empty message-queue state.
+    pub const fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(MessageQueueInner {
-                queue: VecDeque::with_capacity(capacity),
-                capacity,
-                waiting_receivers: Vec::new(),
-                waiting_senders: Vec::new(),
-            })),
+            #[cfg(not(feature = "static-alloc"))]
+            queue: alloc::collections::VecDeque::new(),
+            #[cfg(feature = "static-alloc")]
+            queue: heapless::Deque::new(),
+            waiting_receivers: WaitVec::new(),
+            waiting_senders: WaitVec::new(),
+            #[cfg(not(feature = "static-alloc"))]
+            _cap: core::marker::PhantomData,
         }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    #[inline]
+    fn is_full(&self) -> bool {
+        self.queue.len() >= N
+    }
+
+    /// Pushes to the back, returning `Err(msg)` if the queue is full.
+    #[inline]
+    fn try_push(&mut self, msg: T) -> Result<(), T> {
+        #[cfg(not(feature = "static-alloc"))]
+        {
+            if self.queue.len() >= N {
+                return Err(msg);
+            }
+            self.queue.push_back(msg);
+            Ok(())
+        }
+        #[cfg(feature = "static-alloc")]
+        {
+            self.queue.push_back(msg)
+        }
+    }
+
+    #[inline]
+    fn pop(&mut self) -> Option<T> {
+        self.queue.pop_front()
+    }
+}
+
+impl<T, const N: usize> Default for MessageQueueInner<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: 'static, const N: usize> MessageQueue<T, N> {
+    /// Creates a new message queue with capacity `N`.
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            inner: share(MessageQueueInner::new()),
+        }
+    }
+
+    /// Builds a queue handle over caller-owned `static` state (heap-free).
+    #[cfg(feature = "static-alloc")]
+    pub fn from_static(inner: &'static Mutex<MessageQueueInner<T, N>>) -> Self {
+        Self { inner }
     }
 
     /// Sends a message to the queue without blocking.
@@ -536,19 +738,10 @@ impl<T> MessageQueue<T> {
     pub fn try_send(&self, message: T, scheduler: &QxkScheduler) -> SyncResult<()> {
         let woken_receiver = {
             let mut inner = self.inner.lock();
-            if inner.queue.len() >= inner.capacity {
+            if inner.try_push(message).is_err() {
                 return Err(SyncError::QueueFull);
             }
-            inner.queue.push_back(message);
-
-            // Wake one waiting receiver
-            if !inner.waiting_receivers.is_empty() {
-                inner.waiting_receivers.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                let woken = inner.waiting_receivers.remove(0);
-                Some((woken.id, woken.priority))
-            } else {
-                None
-            }
+            take_highest(&mut inner.waiting_receivers).map(|w| (w.id, w.priority))
         };
 
         // Unblock receiver (outside lock)
@@ -562,7 +755,7 @@ impl<T> MessageQueue<T> {
     /// Receives a message from the queue without blocking.
     pub fn try_receive(&self) -> SyncResult<T> {
         let mut inner = self.inner.lock();
-        inner.queue.pop_front().ok_or(SyncError::QueueEmpty)
+        inner.pop().ok_or(SyncError::QueueEmpty)
     }
 
     /// Sends a message, blocking if queue is full.
@@ -572,22 +765,15 @@ impl<T> MessageQueue<T> {
     pub fn send(&self, message: T, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
         let woken_receiver = {
             let mut inner = self.inner.lock();
-            if inner.queue.len() >= inner.capacity {
-                // Queue full, register as waiting sender
-                inner.waiting_senders.push(WaitingThread::new(thread, priority));
-                drop(inner);
-                scheduler.block_thread(thread);
-                return Err(SyncError::WouldBlock);
-            }
-            inner.queue.push_back(message);
-
-            // Wake one waiting receiver
-            if !inner.waiting_receivers.is_empty() {
-                inner.waiting_receivers.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                let woken = inner.waiting_receivers.remove(0);
-                Some((woken.id, woken.priority))
-            } else {
-                None
+            match inner.try_push(message) {
+                Ok(()) => take_highest(&mut inner.waiting_receivers).map(|w| (w.id, w.priority)),
+                Err(_msg) => {
+                    // Queue full, register as waiting sender
+                    push_waiter(&mut inner.waiting_senders, WaitingThread::new(thread, priority));
+                    drop(inner);
+                    scheduler.block_thread(thread);
+                    return Err(SyncError::WouldBlock);
+                }
             }
         };
 
@@ -606,19 +792,13 @@ impl<T> MessageQueue<T> {
     pub fn receive(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<T> {
         let (message, woken_sender) = {
             let mut inner = self.inner.lock();
-            if let Some(msg) = inner.queue.pop_front() {
+            if let Some(msg) = inner.pop() {
                 // Wake one waiting sender
-                let woken = if !inner.waiting_senders.is_empty() {
-                    inner.waiting_senders.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                    let w = inner.waiting_senders.remove(0);
-                    Some((w.id, w.priority))
-                } else {
-                    None
-                };
+                let woken = take_highest(&mut inner.waiting_senders).map(|w| (w.id, w.priority));
                 (Some(msg), woken)
             } else {
                 // Queue empty, register as waiting receiver
-                inner.waiting_receivers.push(WaitingThread::new(thread, priority));
+                push_waiter(&mut inner.waiting_receivers, WaitingThread::new(thread, priority));
                 (None, None)
             }
         };
@@ -637,7 +817,7 @@ impl<T> MessageQueue<T> {
 
     /// Returns the number of messages currently in the queue.
     pub fn len(&self) -> usize {
-        self.inner.lock().queue.len()
+        self.inner.lock().len()
     }
 
     /// Returns true if the queue is empty.
@@ -647,20 +827,19 @@ impl<T> MessageQueue<T> {
 
     /// Returns true if the queue is full.
     pub fn is_full(&self) -> bool {
-        let inner = self.inner.lock();
-        inner.queue.len() >= inner.capacity
+        self.inner.lock().is_full()
     }
 
     /// Returns the capacity of the queue.
     pub fn capacity(&self) -> usize {
-        self.inner.lock().capacity
+        N
     }
 }
 
-impl<T> Clone for MessageQueue<T> {
+impl<T: 'static, const N: usize> Clone for MessageQueue<T, N> {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: clone_shared(&self.inner),
         }
     }
 }
@@ -670,21 +849,43 @@ impl<T> Clone for MessageQueue<T> {
 /// Allows threads to wait for a condition to become true, and other threads
 /// to notify waiting threads when the condition changes.
 pub struct CondVar {
-    inner: Arc<Mutex<CondVarInner>>,
+    inner: Shared<CondVarInner>,
 }
 
-struct CondVarInner {
-    waiting: Vec<WaitingThread>,
+/// Internal condition-variable state. Public so that no-`std` heap-free targets
+/// can place it in `static` storage for [`CondVar::from_static`].
+pub struct CondVarInner {
+    waiting: WaitVec,
+}
+
+impl CondVarInner {
+    /// Creates empty condition-variable state.
+    pub const fn new() -> Self {
+        Self {
+            waiting: WaitVec::new(),
+        }
+    }
+}
+
+impl Default for CondVarInner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CondVar {
     /// Creates a new condition variable.
+    #[cfg(any(not(feature = "static-alloc"), feature = "std"))]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(CondVarInner {
-                waiting: Vec::new(),
-            })),
+            inner: share(CondVarInner::new()),
         }
+    }
+
+    /// Builds a condvar handle over caller-owned `static` state (heap-free).
+    #[cfg(feature = "static-alloc")]
+    pub fn from_static(inner: &'static Mutex<CondVarInner>) -> Self {
+        Self { inner }
     }
 
     /// Waits for notification.
@@ -694,7 +895,7 @@ impl CondVar {
     pub fn wait(&self, thread: ThreadId, priority: u8, scheduler: &QxkScheduler) -> SyncResult<()> {
         {
             let mut inner = self.inner.lock();
-            inner.waiting.push(WaitingThread::new(thread, priority));
+            push_waiter(&mut inner.waiting, WaitingThread::new(thread, priority));
         }
         scheduler.block_thread(thread);
         Err(SyncError::WouldBlock)
@@ -704,13 +905,7 @@ impl CondVar {
     pub fn notify_one(&self, scheduler: &QxkScheduler) {
         let woken_thread = {
             let mut inner = self.inner.lock();
-            if !inner.waiting.is_empty() {
-                inner.waiting.sort_by_key(|w| core::cmp::Reverse(w.priority));
-                let woken = inner.waiting.remove(0);
-                Some((woken.id, woken.priority))
-            } else {
-                None
-            }
+            take_highest(&mut inner.waiting).map(|w| (w.id, w.priority))
         };
 
         if let Some((id, priority)) = woken_thread {
@@ -736,6 +931,7 @@ impl CondVar {
     }
 }
 
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
 impl Default for CondVar {
     fn default() -> Self {
         Self::new()
@@ -745,7 +941,7 @@ impl Default for CondVar {
 impl Clone for CondVar {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: clone_shared(&self.inner),
         }
     }
 }
@@ -820,7 +1016,7 @@ mod tests {
     #[test]
     fn message_queue_send_receive() {
         let sched = crate::scheduler::QxkScheduler::new(None);
-        let queue: MessageQueue<u32> = MessageQueue::new(3);
+        let queue: MessageQueue<u32, 3> = MessageQueue::new();
 
         assert!(queue.is_empty());
         assert_eq!(queue.len(), 0);
@@ -843,7 +1039,7 @@ mod tests {
     #[test]
     fn message_queue_fifo_order() {
         let sched = crate::scheduler::QxkScheduler::new(None);
-        let queue: MessageQueue<&str> = MessageQueue::new(5);
+        let queue: MessageQueue<&str, 5> = MessageQueue::new();
 
         queue.try_send("first", &sched).unwrap();
         queue.try_send("second", &sched).unwrap();

@@ -4,7 +4,9 @@
 //! environments. With the `std` feature enabled, uses standard library types.
 //! Without it, uses `spin::Mutex` for locking.
 
-#[cfg(not(feature = "std"))]
+// `Arc` is only used on the dynamic build; the heap-free `static-alloc` path
+// shares state via `&'static` and links no allocator (so `alloc` is absent).
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
 pub use alloc::sync::Arc;
 #[cfg(feature = "std")]
 pub use std::sync::Arc;
@@ -28,7 +30,10 @@ pub struct Mutex<T> {
 
 impl<T> Mutex<T> {
     /// Creates a new mutex protecting the given value.
-    pub fn new(value: T) -> Self {
+    ///
+    /// `const` so heap-free targets can place a `Mutex` in `static` storage and
+    /// hand a `&'static` reference to the `from_static` primitive constructors.
+    pub const fn new(value: T) -> Self {
         Self {
             #[cfg(feature = "std")]
             inner: std::sync::Mutex::new(value),

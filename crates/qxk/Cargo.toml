@@ -10,11 +10,12 @@ license = "MIT OR Apache-2.0"
 qf = { path = "../qf", default-features = false }
 qs = { path = "../qs", default-features = false, optional = true }
 spin = "0.9"
+heapless = { version = "0.8", default-features = false, optional = true }
 
 [features]
 default = ["std", "qs"]
 std = ["qf/std", "qs?/std"]
 qs = ["dep:qs", "qf/qs"]
 # Heap-free static-allocation primitives (see docs/FUSA.md, Phase 2).
-static-alloc = ["qf/static-alloc"]
+static-alloc = ["qf/static-alloc", "dep:heapless"]
 smp = ["qf/smp"]

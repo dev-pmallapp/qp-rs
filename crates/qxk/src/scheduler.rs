@@ -29,6 +29,24 @@ mod sched {
 // Custom QXK scheduler record for thread scheduling
 const THREAD_NEXT: u8 = 100;
 
+/// Thread ready-queue storage. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
+/// [`heapless::Vec`] bounded by [`crate::MAX_THREADS`].
+#[cfg(not(feature = "static-alloc"))]
+type ReadyVec = alloc::vec::Vec<(ThreadId, ThreadPriority)>;
+#[cfg(feature = "static-alloc")]
+type ReadyVec = heapless::Vec<(ThreadId, ThreadPriority), { crate::MAX_THREADS }>;
+
+/// Push a ready thread, faulting (crash-only) if the heap-free vector is full.
+#[inline]
+fn push_ready(v: &mut ReadyVec, item: (ThreadId, ThreadPriority)) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(item);
+    #[cfg(feature = "static-alloc")]
+    if v.push(item).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
+
 /// Scheduling mode indicates what type of entity should run next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleMode {
@@ -117,15 +135,15 @@ impl ReadySet {
 /// Thread ready queue (simple priority-based list).
 #[derive(Default)]
 struct ThreadReadyQueue {
-    ready_threads: alloc::vec::Vec<(ThreadId, ThreadPriority)>,
+    ready_threads: ReadyVec,
 }
 
 impl ThreadReadyQueue {
     fn insert(&mut self, id: ThreadId, priority: ThreadPriority) {
         if !self.ready_threads.iter().any(|(tid, _)| *tid == id) {
-            self.ready_threads.push((id, priority));
+            push_ready(&mut self.ready_threads, (id, priority));
             // Keep sorted by priority (highest first)
-            self.ready_threads.sort_by_key(|b| core::cmp::Reverse(b.1));
+            self.ready_threads.sort_unstable_by_key(|b| core::cmp::Reverse(b.1));
         }
     }
 

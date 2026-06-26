@@ -73,7 +73,7 @@ fn demo_message_queue() {
     println!("   - FIFO inter-thread communication");
 
     let sched = QxkScheduler::new(None);
-    let queue: MessageQueue<String> = MessageQueue::new(5);
+    let queue: MessageQueue<String, 5> = MessageQueue::new();
 
     // Send messages
     queue.try_send("Hello".to_string(), &sched).unwrap();

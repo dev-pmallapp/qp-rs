@@ -1,7 +1,7 @@
 //! Integration tests for QXK extended threads with blocking primitives.
 
 use qxk::primitives::{MessageQueue, Semaphore, SyncError};
-use qxk::thread::{ThreadAction, ThreadConfig, ThreadId, ThreadPriority};
+use qxk::thread::{thread_handler, ThreadAction, ThreadConfig, ThreadId, ThreadPriority};
 use qxk::QxkKernel;
 
 #[test]
@@ -14,7 +14,7 @@ fn thread_executes_and_terminates() {
     let thread = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             *executed_clone.lock().unwrap() = true;
             if ctx.iteration() < 3 {
                 ThreadAction::Continue
@@ -45,7 +45,7 @@ fn thread_blocks_on_semaphore() {
     let thread = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             static mut ATTEMPTS: usize = 0;
 
             unsafe { ATTEMPTS += 1 };
@@ -79,7 +79,7 @@ fn thread_blocks_on_semaphore() {
     assert!(!kernel.dispatch_once());
 
     // Signal the semaphore
-    sem.signal(kernel.scheduler().as_ref()).unwrap();
+    sem.signal(&kernel.scheduler()).unwrap();
 
     // Thread should be unblocked and run again
     assert!(kernel.dispatch_once());
@@ -99,7 +99,7 @@ fn multiple_threads_coordinate_via_semaphore() {
     let thread1 = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(10),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             if *acquired_clone.lock().unwrap() {
                 return ThreadAction::Terminated;
             }
@@ -119,7 +119,7 @@ fn multiple_threads_coordinate_via_semaphore() {
     let thread2 = ThreadConfig::new(
         ThreadId(2),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             match sem2.wait(ctx.thread_id(), ctx.priority().0, ctx.scheduler()) {
                 Ok(()) => ThreadAction::Terminated,
                 Err(SyncError::WouldBlock) => ThreadAction::Blocked,
@@ -155,7 +155,7 @@ fn multiple_threads_coordinate_via_semaphore() {
 fn message_queue_blocks_receiver() {
     use std::sync::{Arc, Mutex};
 
-    let queue: MessageQueue<u32> = MessageQueue::new(5);
+    let queue: MessageQueue<u32, 5> = MessageQueue::new();
     let queue_clone = queue.clone();
 
     let received = Arc::new(Mutex::new(None));
@@ -164,7 +164,7 @@ fn message_queue_blocks_receiver() {
     let receiver = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             if received_clone.lock().unwrap().is_some() {
                 return ThreadAction::Terminated;
             }
@@ -194,7 +194,7 @@ fn message_queue_blocks_receiver() {
     assert!(!kernel.dispatch_once()); // Blocked
 
     // Send a message
-    queue.try_send(42, kernel.scheduler().as_ref()).unwrap();
+    queue.try_send(42, &kernel.scheduler()).unwrap();
 
     // Receiver unblocks and receives
     assert!(kernel.dispatch_once());
@@ -209,7 +209,7 @@ fn thread_yield_gives_cpu_to_others() {
     let thread1 = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(10),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             *yield1.lock().unwrap() += 1;
             if ctx.iteration() < 5 {
                 ThreadAction::Yield // Yield to thread2
@@ -222,7 +222,7 @@ fn thread_yield_gives_cpu_to_others() {
     let thread2 = ThreadConfig::new(
         ThreadId(2),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             *yield2.lock().unwrap() += 1;
             if ctx.iteration() < 5 {
                 ThreadAction::Yield

@@ -6,7 +6,7 @@
 //! primitives.
 
 use qxk::primitives::{MessageQueue, Semaphore};
-use qxk::thread::{ThreadAction, ThreadConfig, ThreadId, ThreadPriority};
+use qxk::thread::{thread_handler, ThreadAction, ThreadConfig, ThreadId, ThreadPriority};
 use qxk::QxkKernel;
 
 fn main() {
@@ -15,7 +15,7 @@ fn main() {
     // Create synchronization primitives
     let empty_slots = Semaphore::new(5); // 5 empty slots
     let full_slots = Semaphore::new(0); // 0 full slots initially
-    let queue: MessageQueue<usize> = MessageQueue::new(5);
+    let queue: MessageQueue<usize, 5> = MessageQueue::new();
 
     // Clone primitives for sharing between threads
     let prod_empty = empty_slots.clone();
@@ -30,7 +30,7 @@ fn main() {
     let producer = ThreadConfig::new(
         ThreadId(1),
         ThreadPriority(5),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             static mut ITEM_COUNTER: usize = 0;
 
             // Wait for an empty slot
@@ -73,7 +73,7 @@ fn main() {
     let consumer = ThreadConfig::new(
         ThreadId(2),
         ThreadPriority(4),
-        Box::new(move |ctx| {
+        thread_handler(move |ctx| {
             static mut CONSUMED_COUNT: usize = 0;
 
             // Wait for a full slot

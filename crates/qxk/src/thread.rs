@@ -9,12 +9,9 @@
 //! - Have configurable stack sizes
 //! - Run with priority-based scheduling (lower priority than active objects)
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use core::fmt;
 
 use crate::scheduler::QxkScheduler;
-use crate::sync::Arc;
 
 /// Action returned by a thread handler indicating what to do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,14 +29,16 @@ pub enum ThreadAction {
 /// Context provided to thread handlers during polling.
 ///
 /// Provides access to thread identity, priority, scheduler, and iteration count.
-pub struct ThreadContext {
+/// The scheduler is borrowed for the duration of the poll, so the context is
+/// allocation-free on every build (no `Arc` handle is held).
+pub struct ThreadContext<'a> {
     thread_id: ThreadId,
     priority: ThreadPriority,
-    scheduler: Arc<QxkScheduler>,
+    scheduler: &'a QxkScheduler,
     iteration: u64,
 }
 
-impl ThreadContext {
+impl ThreadContext<'_> {
     /// Returns the thread ID.
     pub fn thread_id(&self) -> ThreadId {
         self.thread_id
@@ -52,7 +51,7 @@ impl ThreadContext {
 
     /// Returns a reference to the scheduler.
     pub fn scheduler(&self) -> &QxkScheduler {
-        &self.scheduler
+        self.scheduler
     }
 
     /// Returns the iteration count (number of times handler has been polled).
@@ -91,7 +90,41 @@ pub struct ThreadId(pub u8);
 /// ThreadContext and returns a ThreadAction indicating what should happen next.
 ///
 /// The handler must be `FnMut` to allow state mutation across polls.
-pub type ThreadHandler = Box<dyn FnMut(&mut ThreadContext) -> ThreadAction + Send>;
+///
+/// On the dynamic build this is a heap-allocated `Box`. Under the heap-free
+/// `static-alloc` build it is a `&'static mut` trait object — the handler lives
+/// in application-owned `static` storage, so the kernel holds no allocation
+/// (see `docs/FUSA.md`, Phase 2). Both are callable identically.
+#[cfg(not(feature = "static-alloc"))]
+pub type ThreadHandler = alloc::boxed::Box<dyn FnMut(&mut ThreadContext) -> ThreadAction + Send>;
+/// Heap-free thread-handler: a `&'static mut` trait object. See the dynamic
+/// variant above.
+#[cfg(feature = "static-alloc")]
+pub type ThreadHandler = &'static mut (dyn FnMut(&mut ThreadContext) -> ThreadAction + Send);
+
+/// Erases a closure into a [`ThreadHandler`] (dynamic build): boxes it on the heap.
+#[cfg(not(feature = "static-alloc"))]
+pub fn thread_handler<F>(f: F) -> ThreadHandler
+where
+    F: FnMut(&mut ThreadContext) -> ThreadAction + Send + 'static,
+{
+    alloc::boxed::Box::new(f)
+}
+
+/// Erases a closure into a [`ThreadHandler`] (`static-alloc` + `std`): leaks the
+/// closure to obtain a `&'static mut` handle.
+///
+/// This convenience exists for host tests, which have `std`; it deliberately
+/// uses the heap (`Box::leak`). Genuine heap-free targets (no `std`) instead
+/// place the closure in their own `static` storage and pass a `&'static mut`
+/// reference directly — so this helper is absent there.
+#[cfg(all(feature = "static-alloc", feature = "std"))]
+pub fn thread_handler<F>(f: F) -> ThreadHandler
+where
+    F: FnMut(&mut ThreadContext) -> ThreadAction + Send + 'static,
+{
+    alloc::boxed::Box::leak(alloc::boxed::Box::new(f))
+}
 
 /// Configuration for creating an extended thread.
 pub struct ThreadConfig {
@@ -131,7 +164,10 @@ pub struct ExtendedThread {
     id: ThreadId,
     priority: ThreadPriority,
     state: ThreadState,
-    stack: Vec<u8>,
+    /// Requested stack size in bytes. The cooperative poll model runs handlers
+    /// on the dispatcher's stack, so no separate stack is allocated; this is
+    /// retained for diagnostics and future preemptive ports.
+    stack_size: usize,
     handler: Option<ThreadHandler>,
     iteration: u64,
 }
@@ -139,12 +175,11 @@ pub struct ExtendedThread {
 impl ExtendedThread {
     /// Creates a new extended thread from configuration.
     pub fn new(config: ThreadConfig) -> Self {
-        let stack = Vec::with_capacity(config.stack_size);
         Self {
             id: config.id,
             priority: config.priority,
             state: ThreadState::Ready,
-            stack,
+            stack_size: config.stack_size,
             handler: Some(config.handler),
             iteration: 0,
         }
@@ -190,7 +225,7 @@ impl ExtendedThread {
     /// This method is called by the scheduler to execute one iteration of the thread.
     /// The thread handler receives a context with scheduler access and returns an action
     /// indicating whether to continue, yield, block, or terminate.
-    pub(crate) fn poll(&mut self, scheduler: Arc<QxkScheduler>) -> ThreadAction {
+    pub(crate) fn poll(&mut self, scheduler: &QxkScheduler) -> ThreadAction {
         if let Some(handler) = &mut self.handler {
             self.state = ThreadState::Running;
 
@@ -232,7 +267,7 @@ impl fmt::Debug for ExtendedThread {
             .field("id", &self.id)
             .field("priority", &self.priority)
             .field("state", &self.state)
-            .field("stack_size", &self.stack.capacity())
+            .field("stack_size", &self.stack_size)
             .finish()
     }
 }
@@ -246,7 +281,7 @@ mod tests {
         let config = ThreadConfig::new(
             ThreadId(1),
             ThreadPriority(5),
-            Box::new(|_ctx| ThreadAction::Terminated),
+            thread_handler(|_ctx| ThreadAction::Terminated),
         ).with_stack_size(8192);
 
         let thread = ExtendedThread::new(config);
@@ -261,7 +296,7 @@ mod tests {
         let mut thread = ExtendedThread::new(ThreadConfig::new(
             ThreadId(2),
             ThreadPriority(3),
-            Box::new(|_ctx| ThreadAction::Terminated),
+            thread_handler(|_ctx| ThreadAction::Terminated),
         ));
 
         assert_eq!(thread.state(), ThreadState::Ready);
@@ -275,12 +310,12 @@ mod tests {
 
     #[test]
     fn thread_poll_lifecycle() {
-        let scheduler = Arc::new(QxkScheduler::new(None));
+        let scheduler = QxkScheduler::new(None);
 
         let mut thread = ExtendedThread::new(ThreadConfig::new(
             ThreadId(3),
             ThreadPriority(4),
-            Box::new(move |ctx| {
+            thread_handler(move |ctx| {
                 if ctx.iteration() < 3 {
                     ThreadAction::Continue
                 } else {
@@ -290,28 +325,28 @@ mod tests {
         ));
 
         // Poll 1: Continue
-        let action = thread.poll(Arc::clone(&scheduler));
+        let action = thread.poll(&scheduler);
         assert_eq!(action, ThreadAction::Continue);
         assert_eq!(thread.state(), ThreadState::Ready);
 
         // Poll 2: Continue
-        let action = thread.poll(Arc::clone(&scheduler));
+        let action = thread.poll(&scheduler);
         assert_eq!(action, ThreadAction::Continue);
         assert_eq!(thread.state(), ThreadState::Ready);
 
         // Poll 3: Continue
-        let action = thread.poll(Arc::clone(&scheduler));
+        let action = thread.poll(&scheduler);
         assert_eq!(action, ThreadAction::Continue);
         assert_eq!(thread.state(), ThreadState::Ready);
 
         // Poll 4: Terminated
-        let action = thread.poll(Arc::clone(&scheduler));
+        let action = thread.poll(&scheduler);
         assert_eq!(action, ThreadAction::Terminated);
         assert_eq!(thread.state(), ThreadState::Terminated);
         assert!(thread.is_terminated());
 
         // Further polls return Terminated
-        let action = thread.poll(Arc::clone(&scheduler));
+        let action = thread.poll(&scheduler);
         assert_eq!(action, ThreadAction::Terminated);
     }
 }

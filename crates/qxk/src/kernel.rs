@@ -3,9 +3,8 @@
 //! The QXK kernel combines event-driven active objects (from QF) with
 //! extended blocking threads, providing a dual-mode execution model.
 
+#[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
-use alloc::vec;
-use alloc::vec::Vec;
 use core::fmt;
 
 use qf::active::{ActiveObjectId, ActiveObjectRef};
@@ -13,10 +12,77 @@ use qf::event::{DynEvent, Signal};
 use qf::TraceHook;
 
 use crate::scheduler::{QxkScheduler, ScheduleMode, SchedStatus};
-use crate::sync::{Arc, Mutex};
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
+use crate::sync::Mutex;
 use crate::thread::{ExtendedThread, ThreadAction, ThreadConfig, ThreadId};
 
 const MAX_AO_PRIORITY: usize = 63;
+
+/// Active-object registration list. Dynamic: heap [`Vec`]; `static-alloc`:
+/// heap-free [`heapless::Vec`] bounded by the priority range.
+#[cfg(not(feature = "static-alloc"))]
+type AoRegVec = alloc::vec::Vec<AoRegistration>;
+#[cfg(feature = "static-alloc")]
+type AoRegVec = heapless::Vec<AoRegistration, { MAX_AO_PRIORITY + 1 }>;
+
+/// Thread-config registration list. Dynamic: heap [`Vec`]; `static-alloc`:
+/// heap-free [`heapless::Vec`] bounded by [`crate::MAX_THREADS`].
+#[cfg(not(feature = "static-alloc"))]
+type ThreadCfgVec = alloc::vec::Vec<ThreadConfig>;
+#[cfg(feature = "static-alloc")]
+type ThreadCfgVec = heapless::Vec<ThreadConfig, { crate::MAX_THREADS }>;
+
+/// Live extended-thread storage. Dynamic: `BTreeMap` of `Arc<Mutex<_>>` (lookup
+/// by id); `static-alloc`: heap-free `heapless::Vec` of `(id, Mutex<_>)` scanned
+/// by id (threads are kernel-private, so no shared handle is needed).
+#[cfg(not(feature = "static-alloc"))]
+type ThreadStore = BTreeMap<ThreadId, Arc<Mutex<ExtendedThread>>>;
+#[cfg(feature = "static-alloc")]
+type ThreadStore = heapless::Vec<(ThreadId, Mutex<ExtendedThread>), { crate::MAX_THREADS }>;
+
+/// Shared handle to the scheduler. Dynamic: `Arc<QxkScheduler>`; `static-alloc`:
+/// the scheduler is owned inline and handed out by reference.
+#[cfg(not(feature = "static-alloc"))]
+type SchedOwned = Arc<QxkScheduler>;
+#[cfg(feature = "static-alloc")]
+type SchedOwned = QxkScheduler;
+
+/// Push an AO registration, faulting (crash-only) if the heap-free vector is full.
+#[inline]
+fn push_ao_reg(v: &mut AoRegVec, r: AoRegistration) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(r);
+    #[cfg(feature = "static-alloc")]
+    if v.push(r).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
+
+/// Push a thread config, faulting (crash-only) if the heap-free vector is full.
+#[inline]
+fn push_thread_cfg(v: &mut ThreadCfgVec, c: ThreadConfig) {
+    #[cfg(not(feature = "static-alloc"))]
+    v.push(c);
+    #[cfg(feature = "static-alloc")]
+    if v.push(c).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
+
+/// Insert a live thread into the store, faulting (crash-only) if the heap-free
+/// vector is full.
+#[inline]
+fn insert_thread(s: &mut ThreadStore, id: ThreadId, t: ExtendedThread) {
+    #[cfg(not(feature = "static-alloc"))]
+    {
+        s.insert(id, Arc::new(Mutex::new(t)));
+    }
+    #[cfg(feature = "static-alloc")]
+    if s.push((id, Mutex::new(t))).is_err() {
+        qf::fusa::on_error(module_path!(), line!());
+    }
+}
 
 /// QXK kernel errors.
 #[derive(Debug)]
@@ -73,6 +139,9 @@ impl std::error::Error for QxkKernelError {}
 struct AoRegistration {
     object: ActiveObjectRef,
     priority: u8,
+    // Used to build the id→priority map on the dynamic build; the heap-free
+    // build scans `ao_slots` by id instead, so the field is set but not read there.
+    #[cfg_attr(feature = "static-alloc", allow(dead_code))]
     id: ActiveObjectId,
 }
 
@@ -83,8 +152,8 @@ struct AoSlot {
 
 /// Builder for constructing a QXK kernel.
 pub struct QxkKernelBuilder {
-    ao_registrations: Vec<AoRegistration>,
-    thread_configs: Vec<ThreadConfig>,
+    ao_registrations: AoRegVec,
+    thread_configs: ThreadCfgVec,
     trace: Option<TraceHook>,
 }
 
@@ -92,8 +161,8 @@ impl QxkKernelBuilder {
     /// Creates a new QXK kernel builder.
     pub fn new() -> Self {
         Self {
-            ao_registrations: Vec::new(),
-            thread_configs: Vec::new(),
+            ao_registrations: AoRegVec::new(),
+            thread_configs: ThreadCfgVec::new(),
             trace: None,
         }
     }
@@ -103,7 +172,7 @@ impl QxkKernelBuilder {
         let priority = object.priority();
         self.validate_ao_priority(priority)?;
         let id = object.id();
-        self.ao_registrations.push(AoRegistration {
+        push_ao_reg(&mut self.ao_registrations, AoRegistration {
             object,
             priority,
             id,
@@ -117,7 +186,7 @@ impl QxkKernelBuilder {
         if self.thread_configs.iter().any(|c| c.id == config.id) {
             return Err(QxkKernelError::DuplicateThreadId(config.id));
         }
-        self.thread_configs.push(config);
+        push_thread_cfg(&mut self.thread_configs, config);
         Ok(self)
     }
 
@@ -159,10 +228,14 @@ impl Default for QxkKernelBuilder {
 ///
 /// Manages both active objects (event-driven) and extended threads (blocking).
 pub struct QxkKernel {
-    scheduler: Arc<QxkScheduler>,
-    ao_slots: Vec<Option<AoSlot>>,
+    scheduler: SchedOwned,
+    /// Priority-indexed AO registry (idle slot 0 unused). A fixed array, so it
+    /// needs no heap on either build.
+    ao_slots: [Option<AoSlot>; MAX_AO_PRIORITY + 1],
+    /// Id → priority map for `post_ao`. Heap-free builds drop it and scan `ao_slots`.
+    #[cfg(not(feature = "static-alloc"))]
     ao_id_to_prio: BTreeMap<ActiveObjectId, u8>,
-    threads: BTreeMap<ThreadId, Arc<Mutex<ExtendedThread>>>,
+    threads: ThreadStore,
     trace: Option<TraceHook>,
 }
 
@@ -173,12 +246,14 @@ impl QxkKernel {
     }
 
     fn new(
-        ao_registrations: Vec<AoRegistration>,
-        thread_configs: Vec<ThreadConfig>,
+        ao_registrations: AoRegVec,
+        thread_configs: ThreadCfgVec,
         trace: Option<TraceHook>,
     ) -> Result<Self, QxkKernelError> {
         // Set up active object slots
-        let mut ao_slots: Vec<Option<AoSlot>> = vec![None; MAX_AO_PRIORITY + 1];
+        let mut ao_slots: [Option<AoSlot>; MAX_AO_PRIORITY + 1] =
+            core::array::from_fn(|_| None);
+        #[cfg(not(feature = "static-alloc"))]
         let mut ao_id_to_prio = BTreeMap::new();
 
         for registration in ao_registrations {
@@ -186,6 +261,7 @@ impl QxkKernel {
             if ao_slots[prio].is_some() {
                 return Err(QxkKernelError::DuplicateAoPriority(registration.priority));
             }
+            #[cfg(not(feature = "static-alloc"))]
             ao_id_to_prio.insert(registration.id, registration.priority);
             ao_slots[prio] = Some(AoSlot {
                 object: registration.object,
@@ -193,27 +269,78 @@ impl QxkKernel {
         }
 
         // Set up extended threads
-        let mut threads = BTreeMap::new();
+        let mut threads = ThreadStore::new();
         for config in thread_configs {
             let id = config.id;
             let thread = ExtendedThread::new(config);
-            threads.insert(id, Arc::new(Mutex::new(thread)));
+            insert_thread(&mut threads, id, thread);
         }
 
-        let scheduler = Arc::new(QxkScheduler::new(trace.clone()));
+        let scheduler = Self::new_scheduler(trace.clone());
 
         Ok(Self {
             scheduler,
             ao_slots,
+            #[cfg(not(feature = "static-alloc"))]
             ao_id_to_prio,
             threads,
             trace,
         })
     }
 
-    /// Returns a reference to the scheduler.
+    #[cfg(not(feature = "static-alloc"))]
+    #[inline]
+    fn new_scheduler(trace: Option<TraceHook>) -> SchedOwned {
+        Arc::new(QxkScheduler::new(trace))
+    }
+    #[cfg(feature = "static-alloc")]
+    #[inline]
+    fn new_scheduler(trace: Option<TraceHook>) -> SchedOwned {
+        QxkScheduler::new(trace)
+    }
+
+    /// Borrows the scheduler. Works uniformly across builds: the dynamic build's
+    /// `Arc` deref-coerces to `&QxkScheduler`, the heap-free build owns it inline.
+    #[inline]
+    fn sched(&self) -> &QxkScheduler {
+        &self.scheduler
+    }
+
+    /// Returns a handle to the underlying scheduler: a shared `Arc` on the
+    /// dynamic build, a borrow under `static-alloc` (the kernel owns it inline).
+    #[cfg(not(feature = "static-alloc"))]
     pub fn scheduler(&self) -> Arc<QxkScheduler> {
         Arc::clone(&self.scheduler)
+    }
+    /// See the dynamic variant above.
+    #[cfg(feature = "static-alloc")]
+    pub fn scheduler(&self) -> &QxkScheduler {
+        &self.scheduler
+    }
+
+    /// Iterates the live thread mutexes (build-agnostic view over the store).
+    #[cfg(not(feature = "static-alloc"))]
+    fn thread_mutexes(&self) -> impl Iterator<Item = &Mutex<ExtendedThread>> {
+        self.threads.values().map(|a| a.as_ref())
+    }
+    /// See the dynamic variant above.
+    #[cfg(feature = "static-alloc")]
+    fn thread_mutexes(&self) -> impl Iterator<Item = &Mutex<ExtendedThread>> {
+        self.threads.iter().map(|(_, m)| m)
+    }
+
+    /// Looks up a live thread mutex by id (map lookup / heap-free scan).
+    #[cfg(not(feature = "static-alloc"))]
+    fn find_thread(&self, id: ThreadId) -> Option<&Mutex<ExtendedThread>> {
+        self.threads.get(&id).map(|a| a.as_ref())
+    }
+    /// See the dynamic variant above.
+    #[cfg(feature = "static-alloc")]
+    fn find_thread(&self, id: ThreadId) -> Option<&Mutex<ExtendedThread>> {
+        self.threads
+            .iter()
+            .find(|(tid, _)| *tid == id)
+            .map(|(_, m)| m)
     }
 
     /// Returns the trace hook.
@@ -248,8 +375,8 @@ impl QxkKernel {
         }
 
         // Mark all threads as ready
-        for thread_arc in self.threads.values() {
-            let thread = thread_arc.lock();
+        for thread_mtx in self.thread_mutexes() {
+            let thread = thread_mtx.lock();
             if thread.is_ready() {
                 self.scheduler
                     .mark_thread_ready(thread.id(), thread.priority());
@@ -263,10 +390,20 @@ impl QxkKernel {
         target: ActiveObjectId,
         event: DynEvent,
     ) -> Result<(), QxkKernelError> {
+        // Dynamic: O(log n) id→priority map. Heap-free: scan the fixed slot array.
+        #[cfg(not(feature = "static-alloc"))]
         let prio = self
             .ao_id_to_prio
             .get(&target)
             .copied()
+            .ok_or(QxkKernelError::AoNotFound(target))?;
+        #[cfg(feature = "static-alloc")]
+        let prio = self
+            .ao_slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.object.id() == target)
+            .map(|slot| slot.object.priority())
             .ok_or(QxkKernelError::AoNotFound(target))?;
         let slot = self.ao_slots[prio as usize]
             .as_ref()
@@ -316,9 +453,9 @@ impl QxkKernel {
                 true
             }
             ScheduleMode::ExtendedThread { id, priority } => {
-                if let Some(thread_arc) = self.threads.get(&id) {
-                    let mut thread = thread_arc.lock();
-                    let action = thread.poll(Arc::clone(&self.scheduler));
+                if let Some(thread_mtx) = self.find_thread(id) {
+                    let mut thread = thread_mtx.lock();
+                    let action = thread.poll(self.sched());
 
                     self.scheduler.complete_execution(mode);
 
@@ -406,7 +543,7 @@ mod tests {
     fn kernel_builds_with_aos() -> Result<(), QxkKernelError> {
         let log = StdArc::new(Mutex::new(Vec::new()));
         let ao_id = ActiveObjectId::new(1);
-        let ao = new_active_object(ao_id, 5, Recorder::new(ao_id, Arc::clone(&log)));
+        let ao = new_active_object(ao_id, 5, Recorder::new(ao_id, StdArc::clone(&log)));
 
         let _kernel = QxkKernel::builder().register_ao(ao)?.build()?;
         Ok(())
@@ -416,7 +553,7 @@ mod tests {
     fn kernel_dispatches_ao_events() -> Result<(), QxkKernelError> {
         let log = StdArc::new(Mutex::new(Vec::new()));
         let ao_id = ActiveObjectId::new(2);
-        let ao = new_active_object(ao_id, 3, Recorder::new(ao_id, Arc::clone(&log)));
+        let ao = new_active_object(ao_id, 3, Recorder::new(ao_id, StdArc::clone(&log)));
 
         let mut kernel = QxkKernel::builder().register_ao(ao)?.build()?;
         kernel.start();
@@ -434,8 +571,8 @@ mod tests {
         let ao1_id = ActiveObjectId::new(3);
         let ao2_id = ActiveObjectId::new(4);
 
-        let ao1 = new_active_object(ao1_id, 2, Recorder::new(ao1_id, Arc::clone(&log)));
-        let ao2 = new_active_object(ao2_id, 5, Recorder::new(ao2_id, Arc::clone(&log)));
+        let ao1 = new_active_object(ao1_id, 2, Recorder::new(ao1_id, StdArc::clone(&log)));
+        let ao2 = new_active_object(ao2_id, 5, Recorder::new(ao2_id, StdArc::clone(&log)));
 
         let mut kernel = QxkKernel::builder()
             .register_ao(ao1)?
@@ -545,7 +682,7 @@ mod tests {
         let thread_config = ThreadConfig::new(
             ThreadId(1),
             crate::thread::ThreadPriority(5),
-            Box::new(move |ctx| {
+            crate::thread::thread_handler(move |ctx| {
                 {
                     let mut active = active_threads_clone.lock().unwrap();
                     *active += 1;

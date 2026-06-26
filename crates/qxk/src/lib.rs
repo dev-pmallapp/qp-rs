@@ -31,6 +31,11 @@
 // Traceability: ASR-006 (memory-safe language subset / trusted elements).
 #![forbid(unsafe_code)]
 
+// Heap-free `static-alloc` build links no allocator (see qf `lib.rs`): `alloc`
+// is pulled in only off the `static-alloc` path or when `std` is present (host
+// tests). Any stray heap use on the heap-free path is then a hard compile error
+// — the forcing function that keeps the safety build allocation-free.
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
 extern crate alloc;
 
 pub mod kernel;
@@ -39,7 +44,17 @@ pub mod scheduler;
 mod sync;
 pub mod thread;
 
+/// Maximum number of extended threads (heap-free registry/ready-queue bound).
+pub const MAX_THREADS: usize = 32;
+/// Maximum number of threads that can wait on a single primitive (heap-free
+/// wait-list bound).
+pub const MAX_WAITERS: usize = 16;
+/// Highest supported active-object priority (priority 0 is reserved for idle).
+pub const MAX_AO_PRIORITY: usize = 63;
+
 pub use kernel::{QxkKernel, QxkKernelBuilder, QxkKernelError};
 pub use primitives::{CondVar, MessageQueue, MutexPrim, Semaphore, SyncError, SyncResult};
 pub use scheduler::{QxkScheduler, SchedStatus, ScheduleMode};
-pub use thread::{ExtendedThread, ThreadPriority, ThreadState};
+pub use thread::{ExtendedThread, ThreadAction, ThreadConfig, ThreadId, ThreadPriority, ThreadState};
+#[cfg(any(not(feature = "static-alloc"), feature = "std"))]
+pub use thread::thread_handler;
