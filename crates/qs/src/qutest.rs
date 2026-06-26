@@ -57,12 +57,10 @@ impl ProbeRegistry {
 
     fn set(&mut self, fn_ptr: u64, data: u32) {
         // Overwrite existing slot for the same fn_ptr
-        for slot in &mut self.slots {
-            if let Some(p) = slot {
-                if p.fn_ptr == fn_ptr {
-                    p.data = data;
-                    return;
-                }
+        for p in self.slots.iter_mut().flatten() {
+            if p.fn_ptr == fn_ptr {
+                p.data = data;
+                return;
             }
         }
         // Find an empty slot
