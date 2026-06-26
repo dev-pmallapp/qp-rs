@@ -8,7 +8,9 @@
       "Bash(cargo test *)",
       "Bash(cargo check *)",
       "Bash(cargo build *)",
-      "WebFetch(domain:www.quantumleaps.com)"
+      "WebFetch(domain:www.quantumleaps.com)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo clean *)"
     ]
   }
 }

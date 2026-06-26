@@ -167,7 +167,10 @@ macro_rules! qs_test_probe {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn clean(f: impl FnOnce()) {
+        let _guard = TEST_LOCK.lock().unwrap();
         clear_test_probes();
         f();
         clear_test_probes();
