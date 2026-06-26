@@ -44,14 +44,14 @@ codes.
 |---|---|---|
 | Semi-formal HFSM | ✅ `qf::hsm`, `qf::qmsm`, `q_tran!`/`qm_*` macros | Foundation in place |
 | Static block pool | ✅ `qf::pool::QMPool` (O(1), `&'static mut` storage) | Present, not used everywhere |
-| **Static allocation only** | ❌ `Arc`, `Box`, `Vec`, `VecDeque` across `active.rs`, `equeue.rs`, `time.rs`, `pubsub.rs`, `event.rs` | **Largest gap** |
+| **Static allocation only** | ✅ `static-alloc` heap-free build across `qf`/`qk`/`qxk` (`heapless` containers, `&'static` registration handles, pool-backed `PoolArc` event payloads); no global allocator linked | Phase 2 complete |
 | Failure-assertion programming | ✅ `qf::fusa` macros (`q_require!`/`q_ensure!`/`q_invariant!`/`q_assert!`/`q_error!`); core-path `unwrap()/expect()/panic!` migrated to `on_error` | Phase 1 complete |
 | Crash-only fault handler (`Q_onError`) | ✅ `qf::fusa::on_error` + `set_error_handler` | Done; ports to install safe-stop handler |
-| Error-detecting codes (Duplicate Inverse Storage) | ❌ None | New work |
-| Event-queue safety margins | ⚠️ Counters exist; not formalized | Formalize |
-| Safe language subset | ⚠️ `no_std`-capable; `unsafe` in `pool.rs` not lint-bounded | Lint policy + qualified toolchain |
-| Memory isolation (MPU) | ❌ Not in ports | Port-level work |
-| Forward/backward traceability | ❌ Ad hoc | Trace matrix needed |
+| Error-detecting codes (Duplicate Inverse Storage) | ✅ `qf::dis` (`Dis<T>`, `Dup<T>`, `DisAtomicU16`) on AO priority, pool free-list, `PoolArc` refcount/pool id, HSM state | Phase 3 complete |
+| Event-queue safety margins | ✅ Formalized on `QEQueue`/`StaticEQueue` (`post_normal`/`post_critical`, `is_degraded`, `with_safety_margin`) | Phase 3 complete |
+| Safe language subset | ✅ `#![forbid(unsafe_code)]` on `qk`/`qxk` (all unsafe isolated in `qf`, per-block `# Safety` proofs); Ferrocene documented as qualified toolchain | Phase 4 complete |
+| Memory isolation (MPU) | ✅ ARMv7-M MPU in `ports/cortex-m` (stack guard, RO/XN regions, `MemManage_Handler`→`on_error`) | Phase 5 complete |
+| Forward/backward traceability | ✅ `docs/traceability.md` (ASR-001..008) + `tools/trace-matrix.sh --check` in CI | Phase 4 complete |
 
 ## 4. Workstreams
 
@@ -104,8 +104,16 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       their signatures. Queue overflow → `fusa::on_error` (size your queues),
       matching QP/C. *Known limitation: per-AO queue sizing is uniform for now;
       individual sizing is a later refinement.*
-- [ ] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
+- [x] Pool-allocated, reference-counted events replacing `Arc<dyn Any>`,
       adopting QP's `QEvt` header model (pool id + ref count in the event).
+      Realized via `PoolArc` (payload item below): under `static-alloc`
+      `DynEvent = Event<PoolArc>`, where `PoolArc`'s control block carries the
+      pool id + atomic ref count — QP's `QEvt` model. The Rust port keeps the
+      `Event` header *inline* (a value type carried by value through the heap-free
+      queues) rather than boxing the whole event, so the pool-backed refcounting
+      lives on the payload control block; functionally equivalent (bounded,
+      pool-allocated, refcounted, no heap). The no-global-allocator build (below)
+      proves no `Arc`/heap remains anywhere on the event path.
 - [x] Convert pub/sub and the timer wheels to fixed-capacity `heapless`
       containers under the feature: `PubSubTable` (`PUBSUB_MAX_SIGNALS = 256`),
       `qf::TimerWheel` and `qk::QkTimerWheel` (`MAX_TICK_RATES = 4`,
@@ -123,12 +131,22 @@ Goal: a `no_std + static-alloc` build that links **zero heap**.
       Miri** (no UB; round-trip, refcount, drop-once, free-to-pool). Miri also
       surfaced and fixed a provenance bug in the Phase-1 fault handler (now a
       `spin::Mutex<Option<fn>>` instead of `AtomicUsize` + `transmute`).
-- [ ] Remove the remaining structural `Arc`s on the registration handles
+- [x] Remove the remaining structural `Arc`s on the registration handles
       (`Arc<ActiveObject>`, `Arc<Kernel>`, `Arc<TimeEvent>`, `ActiveObjectRef`)
-      — e.g. `&'static`/static storage — the last heap users outside the event
-      payload path.
-- [ ] Verify with a build that has **no global allocator** linked (blocked on
-      the `Arc` registration-handle removal above).
+      — under `static-alloc` these become `&'static`/static storage (the
+      application owns the objects), and the kernel registries become fixed
+      `heapless` containers / arrays. Done across all three framework crates:
+      `qf` (registries → `heapless::Vec`, refs → `&'static dyn`, hsm/qmsm history
+      → `heapless` maps), `qk` (priority-indexed `[Option<ActiveSlot>; 64]`,
+      scheduler held by value), and `qxk` (extended-thread store → `heapless::Vec`,
+      sync primitives over `&'static Mutex<_>`, `MessageQueue<T, const N>`). The
+      dynamic (`std`/`Arc`) build keeps its old signatures via feature-gated type
+      aliases, so the host/test path is unchanged.
+- [x] Verify with a build that has **no global allocator** linked. The heap-free
+      build (`--no-default-features --features static-alloc`) gates `extern crate
+      alloc` off entirely, so any stray heap use is a hard compile error — the
+      forcing function that proves the safety build is allocation-free. Enforced
+      in CI (`fusa.yml` heap-free build job) for `qf`/`qk`/`qxk`.
 
 ### Phase 3 — Error-detecting codes
 
