@@ -1704,7 +1704,6 @@ dependencies = [
 name = "qf-port-cortex-m"
 version = "8.1.4"
 dependencies = [
- "comms",
  "hal-cmsis",
  "qf",
  "qk",

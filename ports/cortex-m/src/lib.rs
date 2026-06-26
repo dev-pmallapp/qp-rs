@@ -55,9 +55,6 @@ pub mod context;
 pub mod mpu;
 pub mod nvic_cfg;
 
-#[cfg(feature = "hw")]
-pub mod rf_isr;
-
 pub use context::{ContextFrame, ThreadStack};
 pub use mpu::{Access, RegionConfig};
 pub use nvic_cfg::{qk_lock, qk_unlock, QK_BASEPRI};
@@ -289,6 +286,14 @@ impl qf::port::ContextSwitch for CortexMQxkRuntime {
 
 // ── PendSV / SVC stubs ────────────────────────────────────────────────────────
 
+/// Picks the next runnable and publishes its saved stack pointer in
+/// `NEXT_THREAD_SP`. Called from `PendSV_Handler` with the kernel already set up.
+///
+/// # Safety
+///
+/// Must be called only from the `PendSV` exception path after [`CortexMQxkRuntime::start`]
+/// has installed `KERNEL_PTR`; it dereferences that pointer and writes the
+/// `NEXT_THREAD_SP` static.
 #[cfg(feature = "hw")]
 #[no_mangle]
 pub unsafe extern "C" fn qxk_schedule() {
@@ -340,6 +345,14 @@ pub unsafe extern "C" fn PendSV_Handler() {
     );
 }
 
+/// Rust body of the `SVC_Handler`, decoding the SVC immediate from the stacked
+/// `pc` and dispatching the request.
+///
+/// # Safety
+///
+/// Must be called only from `SVC_Handler` with `frame` pointing at a valid
+/// exception stack frame (the active stack selected by `EXC_RETURN`); it reads
+/// through that frame and the instruction stream preceding the stacked `pc`.
 #[cfg(feature = "hw")]
 #[no_mangle]
 pub unsafe extern "C" fn rust_svc_handler(frame: *mut ContextFrame) {
@@ -349,12 +362,9 @@ pub unsafe extern "C" fn rust_svc_handler(frame: *mut ContextFrame) {
     let svc_instr = core::ptr::read_volatile(svc_instr_ptr);
     let svc_num = (svc_instr & 0xFF) as u8;
 
-    match svc_num {
-        0 => {
-            // SVC #0: scheduler lock/unlock/yield.
-            CortexMQxkRuntime::pend_sv();
-        }
-        _ => {}
+    if svc_num == 0 {
+        // SVC #0: scheduler lock/unlock/yield.
+        CortexMQxkRuntime::pend_sv();
     }
 }
 
@@ -362,6 +372,11 @@ pub unsafe extern "C" fn rust_svc_handler(frame: *mut ContextFrame) {
 ///
 /// Used for operations that must execute at the kernel privilege level:
 /// scheduler lock, thread yield, etc.
+///
+/// # Safety
+///
+/// This is an interrupt handler; it must be invoked only by the processor's
+/// exception entry mechanism (routed here from the vector table).
 #[cfg(feature = "hw")]
 #[unsafe(naked)]
 #[no_mangle]
