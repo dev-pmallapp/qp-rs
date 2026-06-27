@@ -167,10 +167,17 @@ macro_rules! qs_test_probe {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "std")]
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(not(feature = "std"))]
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
     fn clean(f: impl FnOnce()) {
+        #[cfg(feature = "std")]
         let _guard = TEST_LOCK.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let _guard = TEST_LOCK.lock();
+
         clear_test_probes();
         f();
         clear_test_probes();
