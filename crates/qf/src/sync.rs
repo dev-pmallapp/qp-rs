@@ -9,7 +9,14 @@
 // instead (see `docs/FUSA.md`, Phase 2). `std` builds always re-export `Arc`
 // (host tests still use it).
 #[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
-pub use alloc::sync::Arc;
+mod no_std_arc {
+    #[cfg(target_has_atomic = "ptr")]
+    pub use alloc::sync::Arc;
+    #[cfg(not(target_has_atomic = "ptr"))]
+    pub use portable_atomic_util::Arc;
+}
+#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
+pub use no_std_arc::Arc;
 // On the `static-alloc` lib build no framework code uses `Arc` (handles are
 // `&'static`); it is still re-exported for `std` host tests, so suppress the
 // expected unused-import lint there only.

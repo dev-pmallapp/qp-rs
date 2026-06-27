@@ -1,7 +1,7 @@
 //! Cooperative kernel and scheduling services (SRS §3.4).
 
 use core::fmt;
-use core::sync::atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, Ordering};
 
 #[cfg(not(feature = "static-alloc"))]
 use alloc::collections::BTreeMap;
@@ -297,7 +297,7 @@ const CORE_ID_NONE: u8 = 0xFF;
 #[cfg(feature = "smp")]
 pub struct MpsActiveSlot {
     pub object: ActiveObjectRef,
-    pub executing_core: core::sync::atomic::AtomicU8,
+    pub executing_core: portable_atomic::AtomicU8,
 }
 
 /// SMP registry vector. Dynamic: heap [`Vec`]; `static-alloc`: heap-free
@@ -327,7 +327,7 @@ pub struct QvKernel {
     #[cfg(not(feature = "smp"))]
     scheduler: Mutex<SchedulerState>,
     #[cfg(feature = "smp")]
-    sched_ceiling: core::sync::atomic::AtomicU8,
+    sched_ceiling: portable_atomic::AtomicU8,
     /// Set by `stop()` to break out of a `run()` loop.
     stop_flag: AtomicBool,
     pubsub: Option<PubSubTable>,
@@ -635,7 +635,7 @@ impl QvKernel {
             by_id.insert(ao.id(), clone_ref(ao));
             let slot = MpsActiveSlot {
                 object: clone_ref(ao),
-                executing_core: core::sync::atomic::AtomicU8::new(CORE_ID_NONE),
+                executing_core: portable_atomic::AtomicU8::new(CORE_ID_NONE),
             };
             #[cfg(not(feature = "static-alloc"))]
             slots.push(slot);
@@ -650,7 +650,7 @@ impl QvKernel {
             #[cfg(not(feature = "static-alloc"))]
             by_id,
             trace,
-            sched_ceiling: core::sync::atomic::AtomicU8::new(0),
+            sched_ceiling: portable_atomic::AtomicU8::new(0),
             stop_flag: AtomicBool::new(false),
             pubsub,
         }

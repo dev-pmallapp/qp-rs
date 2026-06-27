@@ -22,7 +22,7 @@
 //! ```
 
 use core::ops::Not;
-use core::sync::atomic::{AtomicU32, Ordering};
+use portable_atomic::{AtomicU32, Ordering};
 
 mod sealed {
     pub trait Sealed {}

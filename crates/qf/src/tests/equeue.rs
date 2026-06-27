@@ -147,14 +147,14 @@ fn recall_reinjects_lifo() {
     assert!(eq.is_empty());
 
     // Dispatch: ev(2) should be processed before ev(1).
-    struct Capture(alloc::sync::Arc<crate::sync::Mutex<alloc::vec::Vec<u16>>>);
+    struct Capture(crate::sync::Arc<crate::sync::Mutex<alloc::vec::Vec<u16>>>);
     impl ActiveBehavior for Capture {
         fn on_start(&mut self, _: &mut ActiveContext) {}
         fn on_event(&mut self, _: &mut ActiveContext, e: DynEvent) {
             self.0.lock().push(e.signal().0);
         }
     }
-    let log = alloc::sync::Arc::new(crate::sync::Mutex::new(alloc::vec::Vec::new()));
+    let log = crate::sync::Arc::new(crate::sync::Mutex::new(alloc::vec::Vec::new()));
     let ao2 = new_active_object(ActiveObjectId(2), 2, Capture(log.clone()));
     ao2.post(ev(1));
     ao2.post_lifo(ev(2)); // simulate what recall does

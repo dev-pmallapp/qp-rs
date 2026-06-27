@@ -27,7 +27,7 @@
 //! The counter is stored in an `AtomicU8` and is safe to read/write from
 //! multiple interrupt priorities without a mutex.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use portable_atomic::{AtomicU8, Ordering};
 
 /// Global ISR nesting depth counter.
 ///

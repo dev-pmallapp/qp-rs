@@ -6,7 +6,7 @@ pub use qs::{TraceError, TraceHook};
 pub type TraceResult = Result<(), TraceError>;
 
 #[cfg(all(not(feature = "qs"), not(feature = "static-alloc")))]
-use alloc::sync::Arc;
+use crate::sync::Arc;
 
 #[cfg(not(feature = "qs"))]
 pub type TraceError = core::convert::Infallible;

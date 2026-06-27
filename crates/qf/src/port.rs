@@ -88,7 +88,7 @@ pub trait Runtime {
 pub fn current_core_id() -> u8 {
     #[cfg(feature = "std")]
     {
-        use core::sync::atomic::{AtomicU8, Ordering};
+        use portable_atomic::{AtomicU8, Ordering};
         thread_local! {
             static MY_CORE_ID: u8 = {
                 static CORE_COUNTER: AtomicU8 = AtomicU8::new(0);

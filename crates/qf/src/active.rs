@@ -279,7 +279,13 @@ impl<B: ActiveBehavior> ActiveObject<B> {
 /// [`ActiveObjectRef`]).
 #[cfg(not(feature = "static-alloc"))]
 pub fn arc_as_runnable<B: ActiveBehavior>(ao: Arc<ActiveObject<B>>) -> ActiveObjectRef {
-    ao as ActiveObjectRef
+    let raw = Arc::into_raw(ao);
+    // SAFETY: the vtable for dyn ActiveRunnable has identical alignment/layout,
+    // and we recreate the Arc using Arc::from_raw.
+    unsafe {
+        let trait_ptr = raw as *const dyn ActiveRunnable;
+        Arc::from_raw(trait_ptr)
+    }
 }
 
 impl<B: ActiveBehavior> ActiveRunnable for ActiveObject<B> {
@@ -344,7 +350,7 @@ pub fn new_active_object<B: ActiveBehavior>(
     priority: u8,
     behavior: B,
 ) -> ActiveObjectRef {
-    ActiveObject::new(id, priority, behavior) as ActiveObjectRef
+    arc_as_runnable(ActiveObject::new(id, priority, behavior))
 }
 
 /// Helper builder for typed active objects (`static-alloc` + `std`): leaks the

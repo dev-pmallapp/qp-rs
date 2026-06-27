@@ -54,7 +54,7 @@ unsafe impl Sync for PoolSlot {}
 pub struct PoolRegistry {
     /// `spin::Mutex` has a `const fn new()` usable in `static` initialisers.
     slots: [spin::Mutex<PoolSlot>; MAX_POOLS],
-    count: core::sync::atomic::AtomicUsize,
+    count: portable_atomic::AtomicUsize,
 }
 
 // SAFETY: all interior mutability is protected by the per-slot spin::Mutex.
@@ -76,7 +76,7 @@ impl PoolRegistry {
                 pool_slot!(), pool_slot!(), pool_slot!(),
                 pool_slot!(), pool_slot!(), pool_slot!(),
             ],
-            count: core::sync::atomic::AtomicUsize::new(0),
+            count: portable_atomic::AtomicUsize::new(0),
         }
     }
 
@@ -89,7 +89,7 @@ impl PoolRegistry {
     ///
     /// Panics if more than `MAX_POOLS` pools are registered.
     pub fn init_pool(&self, storage: &'static mut [u8], block_size: usize) -> u8 {
-        use core::sync::atomic::Ordering;
+        use portable_atomic::Ordering;
         let idx = self.count.fetch_add(1, Ordering::SeqCst);
         assert!(idx < MAX_POOLS, "PoolRegistry: max {} pools exceeded", MAX_POOLS);
         self.slots[idx].lock().pool.init(storage, block_size);
@@ -98,7 +98,7 @@ impl PoolRegistry {
 
     /// Number of registered pools.
     pub fn pool_count(&self) -> usize {
-        self.count.load(core::sync::atomic::Ordering::Relaxed)
+        self.count.load(portable_atomic::Ordering::Relaxed)
     }
 
     /// Allocate one block from the smallest pool that fits `size` bytes.

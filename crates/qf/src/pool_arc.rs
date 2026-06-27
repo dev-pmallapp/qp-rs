@@ -21,7 +21,7 @@
 
 use core::any::Any;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{fence, Ordering};
+use portable_atomic::{fence, Ordering};
 
 use crate::dis::{Dis, DisAtomicU16};
 use crate::event_pool::POOL_REGISTRY;
@@ -199,7 +199,7 @@ mod tests {
 
     // Register one pool, once, large enough for the payloads exercised here.
     fn ensure_pool() -> u8 {
-        use core::sync::atomic::{AtomicU8, Ordering};
+        use portable_atomic::{AtomicU8, Ordering};
         static POOL_ID: AtomicU8 = AtomicU8::new(0);
         let existing = POOL_ID.load(Ordering::SeqCst);
         if existing != 0 {
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn drop_runs_value_destructor() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use portable_atomic::{AtomicUsize, Ordering};
         static DROPS: AtomicUsize = AtomicUsize::new(0);
         struct Tracked;
         impl Drop for Tracked {

@@ -11,10 +11,8 @@ use core::fmt;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(all(not(feature = "std"), not(feature = "static-alloc")))]
-use alloc::sync::Arc;
-#[cfg(all(feature = "std", not(feature = "static-alloc")))]
-use std::sync::Arc;
+#[cfg(not(feature = "static-alloc"))]
+use crate::sync::Arc;
 
 /// Identifier for a QP signal.
 ///
