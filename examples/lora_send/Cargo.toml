@@ -22,17 +22,28 @@ esp32c6 = [
     "dep:hal-rvsis",
     "hal-rvsis/esp32c6",
 ]
+esp32s3 = [
+    "qf/std", "qk/std",
+    "dep:qf-port-esp32-s3",
+    "qf-port-esp32-s3/rt",
+    "dep:critical-section",
+    "dep:esp-idf-sys",
+    "dep:hal-lxsis",
+    "hal-lxsis/esp32s3",
+]
 smp = ["qf/smp", "qk/smp"]
 
 [dependencies]
 comms          = { path = "../../crates/comms" }
 hal            = { path = "../../hal" }
 hal-rvsis      = { path = "../../hal/hal-rvsis", optional = true }
+hal-lxsis      = { path = "../../hal/hal-lxsis", optional = true }
 qf             = { path = "../../crates/qf",  default-features = false }
 qk             = { path = "../../crates/qk",  default-features = false }
 qs             = { path = "../../crates/qs",  optional = true }
 qf-port-posix  = { path = "../../ports/posix",    optional = true }
 qf-port-esp32-c6 = { path = "../../ports/esp32-c6", optional = true }
+qf-port-esp32-s3 = { path = "../../ports/esp32-s3", optional = true }
 critical-section = { version = "1",  optional = true }
 esp-idf-sys    = { version = "0.34", features = ["binstart"], optional = true }
 
@@ -48,3 +59,8 @@ required-features = ["host"]
 name = "lora_send_c6"
 path = "src/bin/esp32_c6.rs"
 required-features = ["esp32c6"]
+
+[[bin]]
+name = "lora_send_s3"
+path = "src/bin/esp32_s3.rs"
+required-features = ["esp32s3"]
