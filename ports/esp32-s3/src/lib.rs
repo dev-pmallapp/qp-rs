@@ -16,6 +16,9 @@ pub mod timer;
 #[cfg(feature = "rt")]
 pub mod runtime;
 
+#[cfg(feature = "rt")]
+pub mod rf_isr;
+
 pub use interrupts::{InterruptController, SchedulerGuard};
 pub use timer::SystemTimer;
 
