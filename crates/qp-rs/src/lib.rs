@@ -106,5 +106,5 @@ pub mod prelude {
     pub use qs::{QsConfig, Tracer, TraceBackend};
 
     #[cfg(feature = "comms")]
-    pub use comms::{CommsAO, Rf, RfStack, RfStackAO};
+    pub use comms::{RfStack, RfStackAO, FotaDriver, FotaStatus};
 }

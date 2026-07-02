@@ -19,9 +19,11 @@ lives in the main workspace, not in the framework-agnostic `hal/` workspace.
 
 ## What it provides
 
-- `LoRaRf<D: RfDriver>` — LoRaWAN uplink transport over a radio driver
-- `CommsAO` — a QF active object that drives the RF stack
-- `FotaSession` — chunked firmware-over-the-air transfer
+- `RfStack<T, N, M, P>` — zero-cost, compile-time composition of Transport /
+  Network / MAC / PHY layers over a `hal::rf::RfPhy` radio
+- `RfStackAO` — a QF active object that drives the composed RF stack (TX, RX,
+  reliable retransmit, receive-first)
+- `FotaDriver` — chunked firmware-over-the-air transfer over `RfStackAO`
 - AES-CMAC message authentication (no_std)
 - `LoRaSession` — DevAddr + network/app session keys + uplink frame counter
 
