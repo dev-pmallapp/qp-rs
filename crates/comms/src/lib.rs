@@ -30,7 +30,7 @@ pub mod transport;
 
 pub use error::CommsError;
 pub use events::{RfTxReqPayload, RF_TX_DONE_SIG, RF_TX_REQ_SIG};
-pub use fota::FotaSession;
+pub use fota::{FotaDriver, FotaStatus};
 pub use lora::LoRaRf;
 pub use mac::CommsAO;
 pub use null_rf::NullRf;
