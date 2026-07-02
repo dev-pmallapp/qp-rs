@@ -35,6 +35,18 @@ pub trait Layer: Send {
     fn on_timeout(&mut self) -> TransportAction {
         TransportAction::Nothing
     }
+
+    /// Set the destination address / kind tag for the *next* `down()` call.
+    /// Only meaningful for an addressing layer (e.g. [`crate::net::Network`]);
+    /// every other layer keeps the no-op default.
+    fn set_tx_meta(&mut self, _dst: u16, _kind: u8) {}
+
+    /// Source address / kind tag extracted by the most recent successful
+    /// `up()` call. Only meaningful for an addressing layer; every other
+    /// layer keeps the no-op default of `(0, 0)`.
+    fn last_rx_meta(&self) -> (u16, u8) {
+        (0, 0)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,6 +257,10 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         }
         let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() else { return };
 
+        // Tell the network layer (if any) who this frame is for before
+        // encoding — a no-op on layers that don't implement addressing.
+        self.stack.network.set_tx_meta(req.dst, req.kind);
+
         // Build fully-encoded frame: transport → network → MAC.
         let frame = match self.stack.build_frame(&req.data) {
             Ok(f) => f,
@@ -372,11 +388,14 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 // Deliver received payload to application.
                 let mut data = heapless::Vec::new();
                 if data.extend_from_slice(app_frame.payload()).is_ok() {
+                    let (src, kind) = self.stack.network.last_rx_meta();
                     let pld = RfRxFramePayload {
                         data,
                         port: 1,
                         rssi: meta.rssi_dbm,
                         snr:  meta.snr_db_x10,
+                        src,
+                        kind,
                     };
                     self.app_ao.post(DynEvent::with_arc(RF_RX_FRAME_SIG, Arc::new(pld)));
                 }

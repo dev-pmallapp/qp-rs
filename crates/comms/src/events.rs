@@ -31,6 +31,9 @@ pub const RF_TRANSPORT_TIMEOUT_SIG: Signal = Signal(30);
 /// Legacy / compatibility signal (aliased to RF_PHY_TX_DONE_SIG or RF_TX_DONE_SIG)
 pub const RF_TX_DONE_SIG_LEGACY: Signal = Signal(21);
 
+/// Broadcast destination address for the [`crate::net::Network`] layer.
+pub const NET_BROADCAST_ADDR: u16 = 0xFFFF;
+
 /// Payload carried by [`RF_TX_REQ_SIG`].
 #[derive(Debug, Clone)]
 pub struct RfTxReqPayload {
@@ -40,17 +43,29 @@ pub struct RfTxReqPayload {
     pub fport:    u8,
     /// Whether to require reliability (ACK/retransmissions).
     pub reliable: bool,
+    /// Destination address for the network layer (ignored by layers that
+    /// don't implement addressing). Defaults to [`NET_BROADCAST_ADDR`].
+    pub dst:      u16,
+    /// Frame-kind / protocol tag for the network layer (ignored by layers
+    /// that don't implement addressing). Defaults to `0`.
+    pub kind:     u8,
 }
 
 impl RfTxReqPayload {
     /// Creates a transmit-request payload for the given data and LoRaWAN FPort.
     pub fn new(data: Vec<u8>, fport: u8) -> Self {
-        Self { data, fport, reliable: false }
+        Self { data, fport, reliable: false, dst: NET_BROADCAST_ADDR, kind: 0 }
     }
 
     /// Creates a transmit-request payload with reliability option.
     pub fn with_reliability(data: Vec<u8>, fport: u8, reliable: bool) -> Self {
-        Self { data, fport, reliable }
+        Self { data, fport, reliable, dst: NET_BROADCAST_ADDR, kind: 0 }
+    }
+
+    /// Creates a transmit-request payload addressed to `dst` and tagged
+    /// `kind`, for use with a real [`crate::net::Network`] layer.
+    pub fn with_dst_kind(data: Vec<u8>, fport: u8, reliable: bool, dst: u16, kind: u8) -> Self {
+        Self { data, fport, reliable, dst, kind }
     }
 }
 
@@ -61,6 +76,12 @@ pub struct RfRxFramePayload {
     pub port:    u8,
     pub rssi:    i16,
     pub snr:     i16,
+    /// Source address extracted by the network layer (`0` if the stack's
+    /// network layer doesn't implement addressing).
+    pub src:     u16,
+    /// Frame-kind / protocol tag extracted by the network layer (`0` if the
+    /// stack's network layer doesn't implement addressing).
+    pub kind:    u8,
 }
 
 /// Payload for RF_PHY_IRQ_SIG (posted from ISR).

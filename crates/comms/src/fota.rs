@@ -155,7 +155,7 @@ impl FotaDriver {
         let data = payload.to_vec();
         let ev = DynEvent::with_arc(
             RF_TX_REQ_SIG,
-            Arc::new(RfTxReqPayload { data, fport: 2, reliable }),
+            Arc::new(RfTxReqPayload::with_reliability(data, 2, reliable)),
         );
         self.rf_ao.post(ev);
         Ok(())
