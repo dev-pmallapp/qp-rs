@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use crate::active::{ActiveBehavior, ActiveContext};
 use crate::event::{DynEvent, Signal};
-use crate::hsm::QAsm;
+use crate::hsm::{QAsm, SameState};
 use crate::trace::TraceHook;
 
 /// Shallow-history table. Dynamic: heap [`BTreeMap`]; `static-alloc`: heap-free
@@ -90,10 +90,18 @@ unsafe impl<S: 'static> Send for QMState<S> {}
 // SAFETY: see the `Send` impl above — `QMState` is read-only after construction.
 unsafe impl<S: 'static> Sync for QMState<S> {}
 
+impl<S: 'static> SameState for &'static QMState<S> {
+    #[inline]
+    fn same_state(self, other: Self) -> bool {
+        core::ptr::eq(self, other)
+    }
+}
+
 /// Compare two static states by reference pointer.
 #[inline]
+#[deprecated(since = "0.2.0", note = "use the `SameState` trait instead")]
 pub fn same_qmstate<S: 'static>(a: &'static QMState<S>, b: &'static QMState<S>) -> bool {
-    core::ptr::eq(a, b)
+    SameState::same_state(a, b)
 }
 
 /// Quantum Meta State Machine.
@@ -146,7 +154,7 @@ impl<S: Send + 'static> QMsm<S> {
     pub fn is_in(&self, state: &'static QMState<S>) -> bool {
         let mut cur = Some(self.state);
         while let Some(s) = cur {
-            if same_qmstate(s, state) {
+            if s.same_state(state) {
                 return true;
             }
             cur = s.superstate;
@@ -254,7 +262,7 @@ impl<S: Send + 'static> QMsm<S> {
         let current = self.state;
 
         let target_path = path_to_top(target);
-        let lca_source = if same_qmstate(source, target) {
+        let lca_source = if source.same_state(target) {
             source.superstate.unwrap_or(source)
         } else {
             source
@@ -264,7 +272,7 @@ impl<S: Send + 'static> QMsm<S> {
         let lca = find_lca(&lca_source_path, &target_path);
 
         let mut s = current;
-        while !same_qmstate(s, lca.unwrap_or(s)) {
+        while !s.same_state(lca.unwrap_or(s)) {
             if let Some(parent) = s.superstate {
                 #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as *const _ as usize, s);
@@ -290,7 +298,7 @@ impl<S: Send + 'static> QMsm<S> {
         }
 
         let lca_idx = if let Some(lca_state) = lca {
-            target_path.iter().position(|&t| same_qmstate(t, lca_state)).unwrap_or(target_path.len())
+            target_path.iter().position(|&t| t.same_state(lca_state)).unwrap_or(target_path.len())
         } else {
             target_path.len()
         };
@@ -316,7 +324,7 @@ impl<S: Send + 'static> QMsm<S> {
             };
             let next_path = path_to_top(next);
             let current = self.state;
-            let current_idx = next_path.iter().position(|&t| same_qmstate(t, current)).unwrap_or(next_path.len());
+            let current_idx = next_path.iter().position(|&t| t.same_state(current)).unwrap_or(next_path.len());
 
             for i in (0..current_idx).rev() {
                 let state = next_path[i];
@@ -382,7 +390,7 @@ fn find_lca<S: 'static>(
 ) -> Option<&'static QMState<S>> {
     for &a in path1 {
         for &b in path2 {
-            if same_qmstate(a, b) {
+            if a.same_state(b) {
                 return Some(a);
             }
         }

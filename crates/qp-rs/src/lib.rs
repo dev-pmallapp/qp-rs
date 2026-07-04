@@ -66,8 +66,7 @@ pub mod prelude {
         QAsm,
         QHsm,
         QMsm,
-        same_state,
-        same_qmstate,
+        SameState,
         // Cooperative kernel (QP/C++ QV equivalent; `Kernel` is a back-compat alias)
         QvKernel,
         Kernel,
@@ -87,6 +86,9 @@ pub mod prelude {
         Runtime,
         TraceSink,
     };
+
+    #[allow(deprecated)]
+    pub use qf::{same_state, same_qmstate};
 
     #[cfg(feature = "qk")]
     pub use qk::{QkKernel, QkKernelBuilder, QkTimerWheel};

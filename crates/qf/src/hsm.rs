@@ -151,10 +151,24 @@ pub enum QHsmResult<S> {
 /// state machine data; the second is the current event.
 pub type StateHandler<S> = fn(&mut S, &DynEvent) -> QHsmResult<S>;
 
+/// Trait for comparing state representations for identity.
+pub trait SameState {
+    /// Returns `true` if `self` and `other` represent the same state.
+    fn same_state(self, other: Self) -> bool;
+}
+
+impl<S> SameState for StateHandler<S> {
+    #[inline]
+    fn same_state(self, other: Self) -> bool {
+        (self as usize) == (other as usize)
+    }
+}
+
 /// Compare two state handlers for identity (by function-pointer address).
 #[inline]
+#[deprecated(since = "0.2.0", note = "use the `SameState` trait instead")]
 pub fn same_state<S>(a: StateHandler<S>, b: StateHandler<S>) -> bool {
-    (a as usize) == (b as usize)
+    SameState::same_state(a, b)
 }
 
 /// Abstract state machine interface.
@@ -223,10 +237,10 @@ impl<S: Send + 'static> QHsm<S> {
     pub fn is_in(&mut self, state: StateHandler<S>) -> bool {
         let mut cur = self.state.get();
         loop {
-            if same_state(cur, state) {
+            if cur.same_state(state) {
                 return true;
             }
-            if same_state(cur, Self::top_state) {
+            if cur.same_state(Self::top_state) {
                 break;
             }
             cur = self.get_super(cur);
@@ -410,7 +424,7 @@ impl<S: Send + 'static> QHsm<S> {
         let mut path = [top; MAX_NEST_DEPTH];
         let mut len = 0usize;
         let mut cur = s;
-        while !same_state(cur, Self::top_state) && len < MAX_NEST_DEPTH {
+        while !cur.same_state(Self::top_state) && len < MAX_NEST_DEPTH {
             path[len] = cur;
             len += 1;
             cur = self.get_super(cur);
@@ -427,7 +441,7 @@ impl<S: Send + 'static> QHsm<S> {
     ) -> StateHandler<S> {
         for &a in path1 {
             for &b in path2 {
-                if same_state(a, b) {
+                if a.same_state(b) {
                     return a;
                 }
             }
@@ -449,12 +463,12 @@ impl<S: Send + 'static> QHsm<S> {
 
         // For LCA finding, use super(source) when source == target (self-transition)
         // so the source state itself is exited and re-entered.
-        let lca_source = if same_state(source, target) {
+        let lca_source = if source.same_state(target) {
             self.get_super(source)
         } else {
             source
         };
-        let (lca_source_path, lca_source_len) = if same_state(source, target) {
+        let (lca_source_path, lca_source_len) = if source.same_state(target) {
             self.path_to_top(lca_source)
         } else {
             self.path_to_top(source)
@@ -468,12 +482,12 @@ impl<S: Send + 'static> QHsm<S> {
         // Exit from `current` up to (not including) `lca`, recording shallow
         // history at each level so TranHist can later restore any ancestor.
         let mut s = current;
-        while !same_state(s, lca) {
+        while !s.same_state(lca) {
             // get_super first so we call the state handler only once per state.
             let parent = self.get_super(s);
 
             // Record: `s` was the last active direct child of `parent`.
-            if !same_state(parent, Self::top_state) {
+            if !parent.same_state(Self::top_state) {
                 #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as usize, s);
                 // Heap-free map is fixed-capacity: a full history table is a
@@ -490,7 +504,7 @@ impl<S: Send + 'static> QHsm<S> {
             }
 
             s = parent;
-            if same_state(s, Self::top_state) {
+            if s.same_state(Self::top_state) {
                 break;
             }
         }
@@ -499,7 +513,7 @@ impl<S: Send + 'static> QHsm<S> {
         // The entry chain is target_path[0..lca_idx] in reverse.
         let lca_idx = target_path[..target_len]
             .iter()
-            .position(|&t| same_state(t, lca))
+            .position(|&t| t.same_state(lca))
             .unwrap_or(target_len); // if LCA not in path, enter whole chain
 
         for i in (0..lca_idx).rev() {
@@ -531,7 +545,7 @@ impl<S: Send + 'static> QHsm<S> {
             let current = self.state.get();
             let current_idx = next_path[..next_len]
                 .iter()
-                .position(|&t| same_state(t, current))
+                .position(|&t| t.same_state(current))
                 .unwrap_or(next_len);
 
             // Enter states from (not including) current down to next.

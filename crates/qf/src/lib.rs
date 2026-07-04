@@ -46,8 +46,13 @@ pub use equeue::StaticEQueue;
 pub use event::{Event, EventHeader, Signal};
 pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
 pub use fusa::{clear_error_handler, on_error, set_error_handler, ErrorHandler};
-pub use hsm::{same_state, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH, QAsm};
-pub use qmsm::{QMsm, QMState, QMsmResult, QMStateHandler, same_qmstate};
+pub use hsm::{SameState, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH, QAsm};
+#[allow(deprecated)]
+pub use hsm::same_state;
+
+pub use qmsm::{QMsm, QMState, QMsmResult, QMStateHandler};
+#[allow(deprecated)]
+pub use qmsm::same_qmstate;
 pub use isr::{in_isr, isr_nesting};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, QvKernel};
 pub use pool::QMPool;
