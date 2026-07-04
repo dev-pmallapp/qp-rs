@@ -7,6 +7,7 @@
 #![cfg_attr(feature = "static-alloc", allow(noop_method_call))]
 
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 
 use crate::active::{new_active_object, ActiveContext, ActiveObjectId, SignalHandler};
 use crate::event::Signal;
@@ -14,18 +15,28 @@ use crate::isr;
 use crate::kernel::Kernel;
 use crate::time::{new_time_event, share_kernel, TimeEventConfig, TimerWheel};
 
+// ── ISR Test Synchronization ──────────────────────────────────────────────────
+static ISR_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+fn lock_isr_test() -> std::sync::MutexGuard<'static, ()> {
+    let guard = ISR_TEST_MUTEX.lock().unwrap();
+    // Reset global nesting counter to ensure a clean starting point.
+    isr::ISR_NESTING.store(0, Ordering::SeqCst);
+    guard
+}
+
 // ── ISR nesting counter ───────────────────────────────────────────────────────
 
 #[test]
 fn isr_nesting_starts_at_zero() {
-    // Reset any state from other tests (AtomicU8, relaxed ordering).
-    // Each test is single-threaded, so no races here.
+    let _guard = lock_isr_test();
     assert_eq!(isr::isr_nesting(), 0);
     assert!(!isr::in_isr());
 }
 
 #[test]
 fn qk_isr_entry_exit_macros_track_nesting() {
+    let _guard = lock_isr_test();
     assert_eq!(isr::isr_nesting(), 0);
 
     crate::qk_isr_entry!();
@@ -92,6 +103,7 @@ fn has_pending_work_reflects_queue_state() {
 
 #[test]
 fn post_from_isr_delivers_event() {
+    let _guard = lock_isr_test();
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(3);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
@@ -108,6 +120,7 @@ fn post_from_isr_delivers_event() {
 
 #[test]
 fn publish_from_isr_broadcasts_to_all_aos() {
+    let _guard = lock_isr_test();
     let count_a = Arc::new(Mutex::new(0usize));
     let count_b = Arc::new(Mutex::new(0usize));
     let ao_a = new_active_object(ActiveObjectId::new(4), 1, Counter(count_a.clone()));
@@ -191,6 +204,7 @@ fn was_disarmed_set_when_oneshot_fires() {
 
 #[test]
 fn tick_from_isr_advances_timer_wheel() {
+    let _guard = lock_isr_test();
     let count = Arc::new(Mutex::new(0usize));
     let ao_id = ActiveObjectId::new(9);
     let ao = new_active_object(ao_id, 1, Counter(count.clone()));
