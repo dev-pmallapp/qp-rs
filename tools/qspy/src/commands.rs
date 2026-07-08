@@ -1,5 +1,4 @@
 use std::io::{self, Write};
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]
@@ -29,14 +28,16 @@ const XOR:  u8 = 0x20;
 pub type SharedSender = Arc<Mutex<Option<CommandSender>>>;
 
 pub struct CommandSender {
-    stream: TcpStream,
+    writer: Box<dyn Write + Send>,
     seq:    u8,
 }
 
 impl CommandSender {
-    pub fn new(stream: TcpStream) -> io::Result<Self> {
-        stream.set_nodelay(true)?;
-        Ok(Self { stream, seq: 0 })
+    /// Wraps any duplex byte sink (a cloned `TcpStream`, a serial `File`,
+    /// …) as a QS-RX command sender. Callers that need transport-specific
+    /// setup (e.g. `TcpStream::set_nodelay`) do it before boxing.
+    pub fn new(writer: Box<dyn Write + Send>) -> Self {
+        Self { writer, seq: 0 }
     }
 
     pub fn send_info(&mut self) -> io::Result<()> {
@@ -109,7 +110,7 @@ impl CommandSender {
     fn send(&mut self, record_id: u8, payload: &[u8]) -> io::Result<()> {
         let frame = build_frame(self.seq, record_id, payload);
         self.seq = self.seq.wrapping_add(1);
-        self.stream.write_all(&frame)
+        self.writer.write_all(&frame)
     }
 }
 

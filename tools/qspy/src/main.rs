@@ -6,5 +6,5 @@
 //! binary that registers formatters via
 //! [`qspy::FrameInterpreter::add_user_formatter`] before calling `run`.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    qspy::run(|_interpreter| {})
+    qspy::run(|_interpreter| {}, &[])
 }

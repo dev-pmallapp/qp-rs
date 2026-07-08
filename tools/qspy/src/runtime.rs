@@ -146,7 +146,13 @@ enum UserCmd {
 /// so the caller can install project-specific user-record formatters via
 /// [`FrameInterpreter::add_user_formatter`], then enters the transport loop.
 /// qspy itself registers nothing, keeping the tool domain-agnostic.
-pub fn run<F>(register: F) -> Result<(), Box<dyn Error>>
+///
+/// `cmd_aliases` maps typed keyboard words (line mode only) to a QS-RX
+/// `COMMAND` id, sent with `p1=p2=p3=0` — e.g. `[("tx", 1)]` lets a caller
+/// type `tx` instead of `c 1 0 0 0`. qspy itself registers none (pass `&[]`);
+/// a project-specific binary supplies its own table, keeping the generic
+/// tool domain-agnostic (mirrors [`FrameInterpreter::add_user_formatter`]).
+pub fn run<F>(register: F, cmd_aliases: &'static [(&'static str, u8)]) -> Result<(), Box<dyn Error>>
 where
     F: FnOnce(&mut FrameInterpreter),
 {
@@ -201,7 +207,7 @@ where
 
     let (kbd_tx, kbd_rx) = mpsc::channel::<UserCmd>();
     if !opts.no_kbd {
-        thread::spawn(move || keyboard_loop(kbd_tx));
+        thread::spawn(move || keyboard_loop(kbd_tx, cmd_aliases));
     }
 
     let mut frontend: Option<FrontendServer> = opts.frontend_port.as_ref().and_then(|port| {
@@ -216,6 +222,12 @@ where
 
     if let Some(ref path) = serial_path {
         let s = serial::open(path, opts.baud)?;
+        // Serial is inherently duplex — register a cloned handle as the
+        // command sender so keyboard commands reach real hardware over the
+        // same link, matching the `--tcp-remote` self-registration above.
+        if let Ok(cmd_handle) = s.try_clone() {
+            *shared_sender.lock().unwrap() = Some(CommandSender::new(Box::new(cmd_handle)));
+        }
         run_reader(s, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
     } else if let Some(ref path) = opts.file {
         println!("qspy replaying {}", path.display());
@@ -229,6 +241,12 @@ where
             match listener.accept() {
                 Ok((stream, peer)) => {
                     println!("telemetry connected: {peer}");
+                    if let Ok(cmd_stream) = stream.try_clone() {
+                        if cmd_stream.set_nodelay(true).is_ok() {
+                            *shared_sender.lock().unwrap() =
+                                Some(CommandSender::new(Box::new(cmd_stream)));
+                        }
+                    }
                     run_reader(stream, &mut interpreter, &mut sinks, &mut frontend,
                                &shared_sender, &kbd_rx);
                     println!("telemetry disconnected: {peer}");
@@ -242,6 +260,16 @@ where
         println!("qspy connecting to tcp://{addr}");
         let stream = TcpStream::connect(&addr)?;
         println!("qspy connected to {addr}");
+        // The connected socket is already full-duplex (e.g. Renode's
+        // CreateServerSocketTerminal bridges USB-serial-JTOG both ways over
+        // one TCP connection) — register a clone as the command sender so
+        // keyboard commands work without requiring a *second* connection
+        // into `--cmd`'s listener, which nothing dials into in that setup.
+        if let Ok(cmd_stream) = stream.try_clone() {
+            if cmd_stream.set_nodelay(true).is_ok() {
+                *shared_sender.lock().unwrap() = Some(CommandSender::new(Box::new(cmd_stream)));
+            }
+        }
         run_reader(stream, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
         println!("qspy disconnected from {addr}");
     } else {
@@ -442,10 +470,10 @@ fn cmd_listener(addr: &str, sender: SharedSender) {
                 let peer = stream.peer_addr()
                     .map(|a| a.to_string())
                     .unwrap_or_else(|_| "unknown".into());
-                match CommandSender::new(stream) {
-                    Ok(cs) => {
+                match stream.set_nodelay(true) {
+                    Ok(()) => {
                         println!("command channel connected: {peer}");
-                        *sender.lock().unwrap() = Some(cs);
+                        *sender.lock().unwrap() = Some(CommandSender::new(Box::new(stream)));
                     }
                     Err(e) => eprintln!("command channel setup error: {e}"),
                 }
@@ -457,19 +485,19 @@ fn cmd_listener(addr: &str, sender: SharedSender) {
 
 // ── Keyboard / stdin thread ───────────────────────────────────────────────────
 
-fn keyboard_loop(tx: mpsc::Sender<UserCmd>) {
+fn keyboard_loop(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
     #[cfg(unix)]
     if crate::output::stdin_is_tty() {
-        keyboard_loop_raw(tx);
+        keyboard_loop_raw(tx, cmd_aliases);
         return;
     }
-    keyboard_loop_line(tx);
+    keyboard_loop_line(tx, cmd_aliases);
 }
 
-fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>) {
+fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
     for line in io::stdin().lock().lines() {
         let raw = match line { Ok(l) => l, Err(_) => break };
-        let cmd = parse_keyboard_cmd(raw.trim());
+        let cmd = parse_keyboard_cmd(raw.trim(), cmd_aliases);
         let quit = matches!(cmd, Some(UserCmd::Quit));
         if let Some(c) = cmd {
             if tx.send(c).is_err() { break; }
@@ -479,10 +507,10 @@ fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>) {
 }
 
 #[cfg(unix)]
-fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>) {
+fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
     let _raw = match raw_terminal::RawTerminal::enter() {
         Some(r) => r,
-        None    => { keyboard_loop_line(tx); return; }
+        None    => { keyboard_loop_line(tx, cmd_aliases); return; }
     };
     let stdin = io::stdin();
     let mut locked = stdin.lock();
@@ -522,8 +550,12 @@ fn map_raw_key(b: u8) -> Option<UserCmd> {
     }
 }
 
-fn parse_keyboard_cmd(line: &str) -> Option<UserCmd> {
+fn parse_keyboard_cmd(line: &str, cmd_aliases: &'static [(&'static str, u8)]) -> Option<UserCmd> {
     let mut parts = line.splitn(5, ' ');
+    let word = parts.clone().next()?;
+    if let Some(&(_, id)) = cmd_aliases.iter().find(|&&(alias, _)| alias == word) {
+        return Some(UserCmd::SendCommand { id, p1: 0, p2: 0, p3: 0 });
+    }
     match parts.next()? {
         "r" | "reset"  => Some(UserCmd::Reset),
         "i" | "info"   => Some(UserCmd::Info),
