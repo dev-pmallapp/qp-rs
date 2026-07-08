@@ -59,16 +59,26 @@ impl HdlcDecoder {
         self.escape_next = false;
     }
 
-    /// Feeds raw bytes into the decoder and returns any complete frames that
-    /// were assembled.
-    pub fn push_bytes(&mut self, input: &[u8]) -> Result<Vec<QsFrame>, DecodeError> {
-        let mut frames = Vec::new();
+    /// Feeds raw bytes into the decoder and returns the outcome of every
+    /// frame boundary crossed by this call, in order.
+    ///
+    /// Each frame is independently delimited by `FLAG` bytes, so a single
+    /// corrupt frame (e.g. a checksum mismatch from a dropped byte on the
+    /// wire) does not desync the rest of the stream: it is reported as an
+    /// `Err` in place and decoding continues with the next frame, instead of
+    /// aborting the whole call and silently dropping every frame still left
+    /// in `input`.
+    pub fn push_bytes(&mut self, input: &[u8]) -> Vec<Result<QsFrame, DecodeError>> {
+        let mut results = Vec::new();
 
         for &byte in input {
             if byte == FLAG {
+                // A FLAG always terminates framing; a dangling escape from a
+                // corrupt prior frame must not bleed into the next one.
+                self.escape_next = false;
                 if !self.buffer.is_empty() {
                     let frame_bytes = std::mem::take(&mut self.buffer);
-                    frames.push(Self::decode_frame(&frame_bytes)?);
+                    results.push(Self::decode_frame(&frame_bytes));
                 }
                 continue;
             }
@@ -86,7 +96,7 @@ impl HdlcDecoder {
             }
         }
 
-        Ok(frames)
+        results
     }
 
     fn decode_frame(data: &[u8]) -> Result<QsFrame, DecodeError> {

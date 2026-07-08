@@ -9,7 +9,7 @@ use clap::Parser;
 use crate::commands::{try_send, CommandSender, SharedSender};
 use crate::frontend::{FrontendCmd, FrontendServer};
 use crate::output::{stdout_is_tty, OutputSinks};
-use crate::{DecodeError, FrameInterpreter, HdlcDecoder, TargetSizes};
+use crate::{FrameInterpreter, HdlcDecoder, TargetSizes};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -298,10 +298,7 @@ fn run_reader<R: Read>(
         match source.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if let Err(e) = process_chunk(&buf[..n], &mut decoder, interpreter, sinks, frontend) {
-                    eprintln!("decode error: {e}; resetting");
-                    decoder.reset();
-                }
+                process_chunk(&buf[..n], &mut decoder, interpreter, sinks, frontend);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => { eprintln!("read error: {e}"); break; }
@@ -338,11 +335,7 @@ fn run_udp(
                     println!("telemetry from {peer}");
                     last_peer = peer_s;
                 }
-                sinks.write_raw(&buf[..n]);
-                if let Err(e) = process_chunk(&buf[..n], &mut decoder, interpreter, sinks, frontend) {
-                    eprintln!("decode error: {e}; resetting");
-                    decoder.reset();
-                }
+                process_chunk(&buf[..n], &mut decoder, interpreter, sinks, frontend);
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                    || e.kind() == io::ErrorKind::TimedOut => {}
@@ -365,9 +358,16 @@ fn process_chunk(
     interpreter: &mut FrameInterpreter,
     sinks:       &mut OutputSinks,
     frontend:    &mut Option<FrontendServer>,
-) -> Result<(), DecodeError> {
+) {
     sinks.write_raw(raw);
-    for frame in decoder.push_bytes(raw)? {
+    for result in decoder.push_bytes(raw) {
+        let frame = match result {
+            Ok(frame) => frame,
+            Err(e) => {
+                eprintln!("decode error: {e}; skipping frame");
+                continue;
+            }
+        };
         for line in interpreter.interpret(&frame) {
             sinks.write_line(&line);
             if let Some(fe) = frontend.as_mut() {
@@ -378,7 +378,6 @@ fn process_chunk(
             fe.forward_frame(frame.record_type, &frame.payload);
         }
     }
-    Ok(())
 }
 
 // ── Command polling (called at end of each loop iteration) ────────────────────
