@@ -148,6 +148,105 @@ fn receive_first_rx_frame_delivered() {
     });
 }
 
+// ── Stage 1.5 regression: a TX request arriving while one is already in
+//    flight must be queued and sent once the in-flight TX resolves, not
+//    silently dropped. See swm-rs's docs/03-design/
+//    DES_multi_oht_channel_access.md, Stage 1.5, for the original bug: two
+//    OHT nodes racing a simultaneous pairing retry could lose one side's
+//    reply because the MC's RfStackAO dropped the second TX_REQ with no
+//    failure signal while still `Transmitting`/`WaitingAck` on the first. ──
+
+#[test]
+fn tx_req_while_busy_is_queued_and_sent_on_resolve() {
+    let (rf_ao, capture, kernel) = build_stack_unreliable();
+
+    // First TX request — AO starts transmitting.
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"first".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // AO transmits "first", enters Transmitting
+
+    // Second TX request arrives while the first is still in flight. Before
+    // the Stage 1.5 fix this was silently dropped with no signal at all.
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"second".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // AO queues "second" (still Transmitting)
+
+    // Resolve the first TX (port ISR bridge posts PHY TxDone). handle_tx_done
+    // notifies the app, then drains the queued "second" request.
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::empty_dyn(RF_PHY_TX_DONE_SIG));
+    kernel.dispatch_once(); // handle_tx_done("first") -> RF_TX_DONE_SIG, drains "second"
+    kernel.dispatch_once(); // capture AO receives RF_TX_DONE_SIG for "first"
+
+    // Resolve the drained second TX the same way.
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::empty_dyn(RF_PHY_TX_DONE_SIG));
+    kernel.dispatch_once(); // handle_tx_done("second") -> RF_TX_DONE_SIG
+    kernel.dispatch_once(); // capture AO receives RF_TX_DONE_SIG for "second"
+
+    capture.with_behavior(|c| {
+        assert_eq!(c.done, 2, "both the in-flight and the queued TX must complete");
+        assert_eq!(c.fail, 0);
+    });
+
+    // Drain the loopback-echoed RX frames to confirm both payloads actually
+    // reached the PHY (not just that the state machine thinks they did).
+    pump(&rf_ao, &kernel, 10);
+    capture.with_behavior(|c| {
+        assert_eq!(c.frames.len(), 2, "both frames must have actually been transmitted");
+        assert!(c.frames.iter().any(|f| f == b"first"));
+        assert!(c.frames.iter().any(|f| f == b"second"));
+    });
+}
+
+/// A third request arriving while the depth-1 pending slot is already
+/// occupied is still dropped — same as the pre-fix busy behaviour beyond
+/// depth 1 (see the design doc's Stage 1.5 fix notes on sizing).
+#[test]
+fn third_tx_req_while_slot_occupied_is_still_dropped() {
+    let (rf_ao, capture, kernel) = build_stack_unreliable();
+
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"first".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // Transmitting
+
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"second".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // queued (pending slot now occupied)
+
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"third".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // slot already occupied — dropped
+
+    // Resolve first, then the drained second — only two TX_DONE total.
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::empty_dyn(RF_PHY_TX_DONE_SIG));
+    kernel.dispatch_once();
+    kernel.dispatch_once();
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::empty_dyn(RF_PHY_TX_DONE_SIG));
+    kernel.dispatch_once();
+    kernel.dispatch_once();
+
+    capture.with_behavior(|c| {
+        assert_eq!(c.done, 2, "only the in-flight + one queued TX complete, the third is dropped");
+    });
+
+    pump(&rf_ao, &kernel, 10);
+    capture.with_behavior(|c| {
+        assert_eq!(c.frames.len(), 2);
+        assert!(c.frames.iter().any(|f| f == b"first"));
+        assert!(c.frames.iter().any(|f| f == b"second"));
+        assert!(!c.frames.iter().any(|f| f == b"third"));
+    });
+}
+
 // ── T7c: reliable TX no ACK → retransmits → RF_TX_FAIL_SIG ──────────────────
 
 #[test]

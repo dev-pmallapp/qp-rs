@@ -189,6 +189,12 @@ where
     retransmit_frame:  Option<[u8; MAX_FRAME]>,
     /// Number of bytes valid in `retransmit_frame` (= frame.phy_bytes().len()).
     retransmit_len:    usize,
+    /// A single `RF_TX_REQ_SIG` request queued by `handle_tx_req` while a
+    /// previous TX (or its ACK wait) was still in flight. Drained by
+    /// `drain_pending_tx` the moment that resolves. Depth 1: a second
+    /// request arriving while this slot is already occupied is still
+    /// dropped, same as the pre-queue behaviour.
+    pending_tx:        Option<RfTxReqPayload>,
     rx_frame:          Frame,
     state:             AoState,
     app_ao:            ActiveObjectRef,
@@ -216,6 +222,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
             retransmit_timer:  None,
             retransmit_frame:  None,
             retransmit_len:    0,
+            pending_tx:        None,
             rx_frame:          Frame::new(),
             state:             AoState::Idle,
             app_ao,
@@ -243,20 +250,39 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
 
     /// Handle an incoming TX request from the application.
     ///
-    /// Builds the full frame (transport + network + MAC), snapshots the post-MAC
-    /// bytes for potential retransmit, then hands the frame to the PHY.
+    /// If a previous TX (or its ACK wait) is still in flight, queue this
+    /// request (depth 1, see `pending_tx`) instead of dropping it — it is
+    /// sent the moment the in-flight TX resolves, via `drain_pending_tx`.
+    /// A second request arriving while the slot is already occupied is
+    /// still dropped: depth 1 is sufficient for the two-node simultaneous
+    /// pairing contention this exists for (Stage 1.5,
+    /// `docs/03-design/DES_multi_oht_channel_access.md` in swm-rs);
+    /// revisit sizing if that assumption changes.
+    ///
+    /// From an RX/listen state, however, a TX request pre-empts the
+    /// receive window: a half-duplex node (e.g. a receive-first MC, which
+    /// spends its idle time in `Listening`) must be able to transmit its
+    /// reply without first leaving RX — that path is unaffected by the
+    /// queue and goes straight to `start_tx` below.
     fn handle_tx_req(&mut self, _ctx: &mut ActiveContext, event: &DynEvent) {
-        if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
-            // A TX is already in flight (or awaiting its ACK) — drop the request.
-            // The application must wait for RF_TX_DONE_SIG / RF_TX_FAIL_SIG before
-            // queuing another TX. From an RX/listen state, however, a TX request
-            // pre-empts the receive window: a half-duplex node (e.g. a
-            // receive-first MC, which spends its idle time in `Listening`) must
-            // be able to transmit its reply without first leaving RX.
-            return;
-        }
         let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() else { return };
 
+        if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
+            if self.pending_tx.is_none() {
+                self.pending_tx = Some(req.clone());
+            }
+            return;
+        }
+
+        self.start_tx(req);
+    }
+
+    /// Build the full frame (transport → network → MAC), snapshot the
+    /// post-MAC bytes for potential retransmit, and hand it to the PHY.
+    ///
+    /// Shared by `handle_tx_req`'s direct dispatch path and
+    /// `drain_pending_tx`.
+    fn start_tx(&mut self, req: &RfTxReqPayload) {
         // Tell the network layer (if any) who this frame is for before
         // encoding — a no-op on layers that don't implement addressing.
         self.stack.network.set_tx_meta(req.dst, req.kind);
@@ -300,6 +326,19 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         }
     }
 
+    /// Drain a `pending_tx` request queued by `handle_tx_req` while a
+    /// previous TX (or its ACK wait) was in flight. Called at every point
+    /// a TX fully resolves: unreliable `TxDone`, an ACK received, or
+    /// `GiveUp`/`TxComplete` on transport timeout.
+    fn drain_pending_tx(&mut self) {
+        if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
+            return; // still busy — nothing to drain into yet
+        }
+        if let Some(req) = self.pending_tx.take() {
+            self.start_tx(&req);
+        }
+    }
+
     /// Handle PHY TxDone event.
     ///
     /// - Unreliable TX: disarm watchdog, notify app `RF_TX_DONE_SIG`, enter RX.
@@ -325,6 +364,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 // Class A behaviour: enter RX1 window immediately after TX.
                 let _ = self.stack.phy.set_mode(RadioMode::Rx { timeout_ms: Some(1000) });
                 self.state = AoState::Listening;
+                self.drain_pending_tx();
             }
         }
     }
@@ -345,12 +385,14 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 self.retransmit_len   = 0;
                 self.state            = AoState::Idle;
                 self.app_ao.post(DynEvent::empty_dyn(RF_TX_FAIL_SIG));
+                self.drain_pending_tx();
             }
             TransportAction::TxComplete => {
                 // Shouldn't normally fire from a timeout, but handle defensively.
                 self.retransmit_frame = None;
                 self.state            = AoState::Idle;
                 self.app_ao.post(DynEvent::empty_dyn(RF_TX_DONE_SIG));
+                self.drain_pending_tx();
             }
             TransportAction::Nothing => {}
         }
@@ -413,6 +455,10 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         if self.state == AoState::Listening || self.state == AoState::ProcessingRx {
             self.state = AoState::Idle;
         }
+        // Catches the ACK-received case above, which may have just resolved
+        // WaitingAck → Idle; a no-op otherwise since nothing sets
+        // `pending_tx` outside a busy state.
+        self.drain_pending_tx();
     }
 
     fn handle_phy_irq(&mut self, _ctx: &mut ActiveContext, _event: &DynEvent) {
