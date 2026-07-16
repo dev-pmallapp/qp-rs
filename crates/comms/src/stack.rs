@@ -264,7 +264,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     /// spends its idle time in `Listening`) must be able to transmit its
     /// reply without first leaving RX — that path is unaffected by the
     /// queue and goes straight to `start_tx` below.
-    fn handle_tx_req(&mut self, _ctx: &mut ActiveContext, event: &DynEvent) {
+    fn handle_tx_req(&mut self, ctx: &mut ActiveContext, event: &DynEvent) {
         let Some(req) = event.payload.as_ref().downcast_ref::<RfTxReqPayload>() else { return };
 
         if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
@@ -274,7 +274,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
             return;
         }
 
-        self.start_tx(req);
+        self.start_tx(ctx, req);
     }
 
     /// Build the full frame (transport → network → MAC), snapshot the
@@ -282,7 +282,18 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     ///
     /// Shared by `handle_tx_req`'s direct dispatch path and
     /// `drain_pending_tx`.
-    fn start_tx(&mut self, req: &RfTxReqPayload) {
+    ///
+    /// Emits two diagnostic markers (Stage 1.5,
+    /// `docs/03-design/DES_multi_oht_channel_access.md` in swm-rs) around
+    /// the physical `phy.transmit()` call: `RF_PHY_TX` (payload tag `1`)
+    /// right before, `RF_PHY_TX_DONE` (payload tag `1`) right after it
+    /// returns. Since `transmit()` blocks for the full on-air time, the gap
+    /// between these two timestamps is the real TX air-time. Compare
+    /// against `handle_tx_done`'s own `RF_PHY_TX_DONE` (tag `2`), which
+    /// only fires a whole cooperative-loop iteration later, to see how much
+    /// lag remains between physical readiness and the AO's own bookkeeping
+    /// catching up.
+    fn start_tx(&mut self, ctx: &mut ActiveContext, req: &RfTxReqPayload) {
         // Tell the network layer (if any) who this frame is for before
         // encoding — a no-op on layers that don't implement addressing.
         self.stack.network.set_tx_meta(req.dst, req.kind);
@@ -307,8 +318,10 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
 
         // Configure PHY and transmit.
         if self.stack.phy.configure_tx(&self.tx_cfg).is_err() { return; }
+        let _ = ctx.emit_trace(crate::records::RF_PHY_TX, &[1, req.dst as u8]);
         match self.stack.phy.transmit(frame.phy_bytes()) {
             Ok(()) => {
+                let _ = ctx.emit_trace(crate::records::RF_PHY_TX_DONE, &[1, req.dst as u8]);
                 self.state = if req.reliable {
                     AoState::WaitingAck
                 } else {
@@ -330,12 +343,12 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     /// previous TX (or its ACK wait) was in flight. Called at every point
     /// a TX fully resolves: unreliable `TxDone`, an ACK received, or
     /// `GiveUp`/`TxComplete` on transport timeout.
-    fn drain_pending_tx(&mut self) {
+    fn drain_pending_tx(&mut self, ctx: &mut ActiveContext) {
         if self.state == AoState::Transmitting || self.state == AoState::WaitingAck {
             return; // still busy — nothing to drain into yet
         }
         if let Some(req) = self.pending_tx.take() {
-            self.start_tx(&req);
+            self.start_tx(ctx, &req);
         }
     }
 
@@ -344,7 +357,11 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     /// - Unreliable TX: disarm watchdog, notify app `RF_TX_DONE_SIG`, enter RX.
     /// - Reliable TX (WaitingAck): stay in WaitingAck — ACK timeout timer
     ///   continues running.
-    fn handle_tx_done(&mut self) {
+    ///
+    /// Emits `RF_PHY_TX_DONE` (payload tag `2`) here — see `start_tx`'s doc
+    /// comment for why this is the "AO caught up" timestamp, one
+    /// cooperative-loop iteration after the tag-`1` marker there.
+    fn handle_tx_done(&mut self, ctx: &mut ActiveContext) {
         if let Some(ref timer) = self.retransmit_timer {
             timer.disarm();
         }
@@ -359,18 +376,19 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
             }
             _ => {
                 // Unreliable or Transmitting — TX complete.
+                let _ = ctx.emit_trace(crate::records::RF_PHY_TX_DONE, &[2, 0]);
                 self.app_ao.post(DynEvent::empty_dyn(RF_TX_DONE_SIG));
                 self.state = AoState::Idle;
                 // Class A behaviour: enter RX1 window immediately after TX.
                 let _ = self.stack.phy.set_mode(RadioMode::Rx { timeout_ms: Some(1000) });
                 self.state = AoState::Listening;
-                self.drain_pending_tx();
+                self.drain_pending_tx(ctx);
             }
         }
     }
 
     /// Handle retransmit timer expiry (reliable transport timeout).
-    fn handle_transport_timeout(&mut self) {
+    fn handle_transport_timeout(&mut self, ctx: &mut ActiveContext) {
         match self.stack.transport.on_timeout() {
             TransportAction::ShouldRetransmit => {
                 self.do_retransmit();
@@ -385,23 +403,28 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 self.retransmit_len   = 0;
                 self.state            = AoState::Idle;
                 self.app_ao.post(DynEvent::empty_dyn(RF_TX_FAIL_SIG));
-                self.drain_pending_tx();
+                self.drain_pending_tx(ctx);
             }
             TransportAction::TxComplete => {
                 // Shouldn't normally fire from a timeout, but handle defensively.
                 self.retransmit_frame = None;
                 self.state            = AoState::Idle;
                 self.app_ao.post(DynEvent::empty_dyn(RF_TX_DONE_SIG));
-                self.drain_pending_tx();
+                self.drain_pending_tx(ctx);
             }
             TransportAction::Nothing => {}
         }
     }
 
     /// Handle PHY RxDone event — read frame from radio and drive RX stack.
+    ///
+    /// Emits `RF_PHY_RX` (payload tag `1`) at entry — the moment the
+    /// cooperative loop's `pump()` noticed a captured frame, not
+    /// necessarily true physical arrival time (bounded by polling cadence).
     fn handle_rx_done(&mut self, ctx: &mut ActiveContext, event: &DynEvent) {
         let Some(payload) = event.payload.as_ref().downcast_ref::<PhyIrqPayload>() else { return };
         let meta = payload.meta;
+        let _ = ctx.emit_trace(crate::records::RF_PHY_RX, &[1, meta.rssi_dbm as u8]);
 
         // Read raw bytes from radio into the DMA-aligned frame buffer.
         self.rx_frame = Frame::new();
@@ -458,7 +481,7 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         // Catches the ACK-received case above, which may have just resolved
         // WaitingAck → Idle; a no-op otherwise since nothing sets
         // `pending_tx` outside a busy state.
-        self.drain_pending_tx();
+        self.drain_pending_tx(ctx);
     }
 
     fn handle_phy_irq(&mut self, _ctx: &mut ActiveContext, _event: &DynEvent) {
@@ -478,13 +501,19 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
     /// Only acts from `Idle` so it never disturbs an in-flight TX or an open
     /// post-TX RX window; it is therefore safe to drive unconditionally from a
     /// cooperative poll loop.
-    fn handle_rx_start(&mut self) {
+    ///
+    /// Emits `RF_RX_ARMED`: payload tag `1` if it actually armed continuous
+    /// RX (state was `Idle`), tag `0` if it was a no-op (state was busy) —
+    /// diagnostic for Stage 1.5 (see `start_tx`'s doc comment).
+    fn handle_rx_start(&mut self, ctx: &mut ActiveContext) {
         if self.state != AoState::Idle {
+            let _ = ctx.emit_trace(crate::records::RF_RX_ARMED, &[0]);
             return;
         }
         let _ = self.stack.phy.configure_rx(&self.rx_cfg);
         if self.stack.phy.set_mode(RadioMode::Rx { timeout_ms: None }).is_ok() {
             self.state = AoState::Listening;
+            let _ = ctx.emit_trace(crate::records::RF_RX_ARMED, &[1]);
         }
     }
 }
@@ -562,13 +591,13 @@ impl<T: Layer + 'static, N: Layer + 'static, M: Layer + 'static, P: RfPhy + 'sta
     fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent) {
         match event.signal() {
             RF_TX_REQ_SIG            => self.handle_tx_req(ctx, &event),
-            RF_RX_START_SIG          => self.handle_rx_start(),
+            RF_RX_START_SIG          => self.handle_rx_start(ctx),
             RF_PHY_IRQ_SIG           => self.handle_phy_irq(ctx, &event),
             RF_PHY_RX_DONE_SIG       => self.handle_rx_done(ctx, &event),
-            RF_PHY_TX_DONE_SIG       => self.handle_tx_done(),
+            RF_PHY_TX_DONE_SIG       => self.handle_tx_done(ctx),
             RF_PHY_RX_TIMEOUT_SIG    => { self.state = AoState::Idle; }
             RF_PHY_CRC_ERROR_SIG     => { self.state = AoState::Idle; }
-            RF_TRANSPORT_TIMEOUT_SIG => self.handle_transport_timeout(),
+            RF_TRANSPORT_TIMEOUT_SIG => self.handle_transport_timeout(ctx),
             _                        => {}
         }
     }
