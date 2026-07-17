@@ -5,27 +5,27 @@
 //! objects, the preemptive kernel, time events, and QS tracing integrate in
 //! Rust using the QHsm framework.
 
-use std::env;
 use std::error::Error;
-use std::io::Read;
-use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::SmallRng, SeedableRng};
 
 use qf::active::{new_active_object, ActiveObjectId};
-use qf::event::{DynEvent, DynPayload, Event};
-use qf::hsm::reserved::*;
 use qf::time::{TimeEvent, TimeEventConfig, TimeEventTraceInfo};
-use qf::{q_handled, q_super, q_tran, QHsm, QHsmResult, Signal, TraceError};
+use qf::{TraceError, Signal, QHsm};
 use qf_port_posix::{PosixPort, PosixQkRuntime};
 use qk::{QkKernel, QkKernelError};
-use qs::qutest::make_probe_record;
-use qs::records::infra::TEST_PROBE as QS_TEST_PROBE_GET;
-use qs::rx::{cmd as rx_cmd, RxCmd, RxParser};
-use qs::{clear_test_probes, set_test_probe, GlbFilter, TargetInfo, UserRecordBuilder};
+use qs::{TargetInfo, UserRecordBuilder};
+
+mod philo;
+mod table;
+mod qspy;
+
+use philo::{PhiloData, philo_initial, thinking, hungry, eating};
+use table::{TableData, TableMsg, table_initial, active, serving, paused};
+use qspy::init_port;
 
 const N_PHILO: usize = 5;
 const TABLE_ID: ActiveObjectId = ActiveObjectId::new(1);
@@ -109,294 +109,6 @@ fn philo_trace_entries() -> &'static [PhiloTraceEntry] {
         .as_slice()
 }
 
-// ── Philosopher HSM Data & State Handlers ─────────────────────────────────────
-
-struct PhiloData {
-    index: usize,
-    name: &'static str,
-    timer: Arc<TimeEvent>,
-    rng: SmallRng,
-}
-
-impl PhiloData {
-    fn think_ticks(&mut self) -> u64 {
-        self.rng.gen_range(3..=6)
-    }
-
-    fn eat_ticks(&mut self) -> u64 {
-        self.rng.gen_range(2..=5)
-    }
-
-    fn post_table(&self, signal: Signal) {
-        if let Some(kernel) = KERNEL.get() {
-            let payload: DynPayload = Arc::new(TableMsg::new(ActiveObjectId::new(PHILO_BASE_ID + self.index as u8)));
-            let evt = Event::with_arc(signal, payload);
-            let _ = kernel.post(TABLE_ID, evt);
-        }
-    }
-
-    fn log_state(&self, state_str: &'static str) {
-        println!("{} is {}", self.name, state_str);
-        if let Some(port) = PORT.get() {
-            let mut builder = UserRecordBuilder::with_capacity(self.name.len() + 8);
-            builder.push_u8(1, self.index as u8);
-            builder.push_str(state_str);
-            let payload = builder.into_vec();
-            let _ = port.emit_record(PHILO_STAT_RECORD, &payload, true);
-        }
-    }
-}
-
-fn philo_initial(_sm: &mut PhiloData, _e: &DynEvent) -> QHsmResult<PhiloData> {
-    q_tran!(thinking)
-}
-
-fn thinking(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
-        Q_ENTRY_SIG_VAL => {
-            let ticks = sm.think_ticks();
-            sm.timer.arm(ticks, None);
-            sm.log_state("thinking");
-            q_handled!()
-        }
-        Q_EXIT_SIG_VAL => {
-            sm.timer.disarm();
-            q_handled!()
-        }
-        10 => { // TIMEOUT_SIG
-            let tp_fn = thinking as usize as u64;
-            if let Some(tp) = qs::qutest::take_test_probe(tp_fn) {
-                if let Some(port) = PORT.get() {
-                    let rec = make_probe_record(tp_fn, tp);
-                    let _ = port.emit_record(QS_TEST_PROBE_GET, &rec, false);
-                }
-                if tp != 0 {
-                    return q_handled!();
-                }
-            }
-            q_tran!(hungry)
-        }
-        8 => { // TEST_SIG
-            q_handled!()
-        }
-        _ => q_super!(QHsm::<PhiloData>::top_state),
-    }
-}
-
-fn hungry(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
-        Q_ENTRY_SIG_VAL => {
-            sm.post_table(HUNGRY_SIG);
-            sm.log_state("hungry");
-            q_handled!()
-        }
-        4 => { // EAT_SIG
-            q_tran!(eating)
-        }
-        _ => q_super!(QHsm::<PhiloData>::top_state),
-    }
-}
-
-fn eating(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
-        Q_ENTRY_SIG_VAL => {
-            let ticks = sm.eat_ticks();
-            sm.timer.arm(ticks, None);
-            sm.log_state("eating");
-            q_handled!()
-        }
-        Q_EXIT_SIG_VAL => {
-            sm.timer.disarm();
-            sm.post_table(DONE_SIG);
-            q_handled!()
-        }
-        10 => { // TIMEOUT_SIG
-            q_tran!(thinking)
-        }
-        _ => q_super!(QHsm::<PhiloData>::top_state),
-    }
-}
-
-// ── Table HSM Data & State Handlers ───────────────────────────────────────────
-
-#[derive(Clone, Copy, Debug)]
-struct TableMsg {
-    philo: ActiveObjectId,
-}
-
-impl TableMsg {
-    fn new(philo: ActiveObjectId) -> Self {
-        Self { philo }
-    }
-}
-
-struct TableData {
-    forks: [bool; N_PHILO],
-    hungry: [bool; N_PHILO],
-}
-
-impl TableData {
-    fn new() -> Self {
-        Self {
-            forks: [true; N_PHILO],
-            hungry: [false; N_PHILO],
-        }
-    }
-
-    fn left(n: usize) -> usize {
-        (n + 1) % N_PHILO
-    }
-
-    fn right(n: usize) -> usize {
-        (n + N_PHILO - 1) % N_PHILO
-    }
-
-    fn can_eat(&self, idx: usize) -> bool {
-        self.forks[idx] && self.forks[Self::left(idx)]
-    }
-
-    fn take_forks(&mut self, idx: usize) {
-        self.forks[idx] = false;
-        self.forks[Self::left(idx)] = false;
-    }
-
-    fn release_forks(&mut self, idx: usize) {
-        self.forks[idx] = true;
-        self.forks[Self::left(idx)] = true;
-    }
-
-    fn grant_forks(&mut self, idx: usize, prefix: &str) {
-        self.take_forks(idx);
-        self.hungry[idx] = false;
-        println!("{} {}", prefix, NAMES[idx]);
-        if let Some(kernel) = KERNEL.get() {
-            let target = ActiveObjectId::new(PHILO_BASE_ID + idx as u8);
-            let _ = kernel.post(target, DynEvent::empty_dyn(EAT_SIG));
-        }
-    }
-
-    fn handle_hungry(&mut self, idx: usize) {
-        if self.can_eat(idx) {
-            self.grant_forks(idx, "Table grants forks to");
-        } else {
-            self.hungry[idx] = true;
-            println!("{} waits for forks", NAMES[idx]);
-        }
-    }
-
-    fn handle_done(&mut self, idx: usize) {
-        self.release_forks(idx);
-        println!("{} is done eating", NAMES[idx]);
-
-        let right = Self::right(idx);
-        if self.hungry[right] && self.can_eat(right) {
-            self.grant_forks(right, "Table now serves");
-        }
-
-        let left = Self::left(idx);
-        if self.hungry[left] && self.can_eat(left) {
-            self.grant_forks(left, "Table now serves");
-        }
-    }
-
-    fn handle_paused_done(&mut self, idx: usize) {
-        self.release_forks(idx);
-        println!("{} is done eating", NAMES[idx]);
-    }
-
-    fn msg_index(&self, msg: &TableMsg) -> usize {
-        (msg.philo.0 - PHILO_BASE_ID) as usize
-    }
-}
-
-fn table_initial(_sm: &mut TableData, _e: &DynEvent) -> QHsmResult<TableData> {
-    q_tran!(serving)
-}
-
-fn active(_sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
-        Q_INIT_SIG_VAL => {
-            q_tran!(serving)
-        }
-        8 => { // TEST_SIG
-            q_handled!()
-        }
-        _ => q_super!(QHsm::<TableData>::top_state),
-    }
-}
-
-fn serving(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
-        Q_ENTRY_SIG_VAL => {
-            println!("Table is ready");
-            for idx in 0..N_PHILO {
-                if sm.hungry[idx] && sm.can_eat(idx) {
-                    sm.grant_forks(idx, "Table now serves");
-                }
-            }
-            q_handled!()
-        }
-        11 => { // HUNGRY_SIG
-            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
-                let idx = sm.msg_index(msg);
-                sm.handle_hungry(idx);
-            }
-            q_handled!()
-        }
-        5 => { // DONE_SIG
-            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
-                let idx = sm.msg_index(msg);
-                sm.handle_done(idx);
-            }
-            q_handled!()
-        }
-        6 => { // PAUSE_SIG
-            q_tran!(paused)
-        }
-        _ => q_super!(active),
-    }
-}
-
-fn paused(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
-        Q_ENTRY_SIG_VAL => {
-            println!("Table paused");
-            if let Some(port) = PORT.get() {
-                let _ = port.emit_record(PAUSED_STAT_RECORD, &[1], true);
-            }
-            q_handled!()
-        }
-        Q_EXIT_SIG_VAL => {
-            println!("Table resumed");
-            if let Some(port) = PORT.get() {
-                let _ = port.emit_record(PAUSED_STAT_RECORD, &[0], true);
-            }
-            q_handled!()
-        }
-        7 => { // SERVE_SIG
-            q_tran!(serving)
-        }
-        11 => { // HUNGRY_SIG
-            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
-                let idx = sm.msg_index(msg);
-                sm.hungry[idx] = true;
-                println!("{} waits for forks", NAMES[idx]);
-            }
-            q_handled!()
-        }
-        5 => { // DONE_SIG
-            if let Some(msg) = e.payload.as_ref().downcast_ref::<TableMsg>() {
-                let idx = sm.msg_index(msg);
-                sm.handle_paused_done(idx);
-            }
-            q_handled!()
-        }
-        _ => q_super!(active),
-    }
-}
-
-// ── Wiring & Runtime ─────────────────────────────────────────────────────────
-
 fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
     let port = init_port();
     let mut builder = QkKernel::builder();
@@ -438,178 +150,6 @@ fn build_runtime() -> Result<(PosixQkRuntime, Arc<PosixPort>), QkKernelError> {
     Ok((runtime, port))
 }
 
-fn init_port() -> Arc<PosixPort> {
-    let cmd_addr = env::var("QSPY_CMD_ADDR").unwrap_or_else(|_| "127.0.0.1:6601".to_string());
-    let port = if let Ok(raw_addr) = env::var("QSPY_ADDR") {
-        let addr = raw_addr.trim().to_string();
-        match PosixPort::connect(&addr) {
-            Ok(port) => {
-                println!("QS tracing connected to tcp://{addr}");
-                port
-            }
-            Err(err) => {
-                eprintln!(
-                    "failed to connect to qspy at {addr}: {err}; falling back to UDP default"
-                );
-                connect_udp_default()
-            }
-        }
-    } else {
-        connect_udp_default()
-    };
-
-    let port = Arc::new(port);
-    PORT.set(Arc::clone(&port)).unwrap_or_else(|_| panic!("port already set"));
-    start_command_channel(&cmd_addr, Arc::clone(&port));
-    port
-}
-
-fn connect_udp_default() -> PosixPort {
-    let udp_addr = env::var("QSPY_UDP_ADDR").unwrap_or_else(|_| "127.0.0.1:7701".to_string());
-    match PosixPort::connect_udp(&udp_addr) {
-        Ok(port) => {
-            println!("QS tracing connected to udp://{udp_addr}");
-            port
-        }
-        Err(err) => {
-            eprintln!("failed to connect to qspy at {udp_addr}: {err}; falling back to stdout");
-            PosixPort::new()
-        }
-    }
-}
-
-fn start_command_channel(addr: &str, port: Arc<PosixPort>) {
-    let addr = addr.to_string();
-    thread::spawn(move || loop {
-        match TcpStream::connect(&addr) {
-            Ok(stream) => {
-                if let Err(err) = stream.set_nodelay(true) {
-                    eprintln!("failed to configure QS command channel: {err}");
-                }
-                handle_command_stream(stream, Arc::clone(&port));
-            }
-            Err(err) => {
-                eprintln!("failed to connect to QS command listener at {addr}: {err}");
-            }
-        }
-
-        thread::sleep(Duration::from_secs(1));
-    });
-}
-
-fn handle_command_stream(mut stream: TcpStream, port: Arc<PosixPort>) {
-    if let Ok(peer) = stream.peer_addr() {
-        println!("QS command channel connected to {peer}");
-    }
-    let mut buffer = [0u8; 128];
-    let mut ctx = QsRxContext::new(port);
-    loop {
-        match stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                for &byte in &buffer[..count] {
-                    ctx.ingest(byte);
-                }
-            }
-            Err(err) => {
-                eprintln!("QS command stream error: {err}");
-                break;
-            }
-        }
-    }
-    if let Ok(peer) = stream.peer_addr() {
-        println!("QS command channel from {peer} closed");
-    }
-}
-
-struct QsRxContext {
-    port:   Arc<PosixPort>,
-    parser: RxParser,
-}
-
-impl QsRxContext {
-    fn new(port: Arc<PosixPort>) -> Self {
-        Self { port, parser: RxParser::new() }
-    }
-
-    fn ingest(&mut self, byte: u8) {
-        if let Some(cmd) = self.parser.push(byte) {
-            self.handle_cmd(cmd);
-        }
-    }
-
-    fn handle_cmd(&self, cmd: RxCmd) {
-        match cmd {
-            RxCmd::Info => {
-                if let Err(err) = self.port.emit_target_info(&TargetInfo::default()) {
-                    eprintln!("QS-RX INFO error: {err}");
-                }
-            }
-            RxCmd::Reset => {
-                eprintln!("QS-RX RESET (not implemented in this demo)");
-            }
-            RxCmd::Command { id, p1, p2, p3 } => {
-                self.ack(rx_cmd::COMMAND);
-                println!("QS command id={id} params=[{p1}, {p2}, {p3}]");
-                self.done(rx_cmd::COMMAND);
-            }
-            RxCmd::TestSetup => {
-                clear_test_probes();
-                self.ack_done(rx_cmd::TEST_SETUP);
-            }
-            RxCmd::TestTeardown => {
-                clear_test_probes();
-                self.ack_done(rx_cmd::TEST_TEARDOWN);
-            }
-            RxCmd::TestContinue => {
-                self.ack_done(rx_cmd::TEST_CONTINUE);
-            }
-            RxCmd::TestProbe { fn_ptr, data } => {
-                set_test_probe(fn_ptr, data);
-                self.ack_done(rx_cmd::TEST_PROBE);
-            }
-            RxCmd::Event { prio, signal, .. } => {
-                if let Some(kernel) = KERNEL.get() {
-                    let _ = kernel.post(
-                        ActiveObjectId::new(prio),
-                        DynEvent::empty_dyn(Signal(signal)),
-                    );
-                }
-                self.ack_done(rx_cmd::EVENT);
-            }
-            RxCmd::GlbFilter { bits } => {
-                self.port.set_filter(GlbFilter::from_bytes(bits));
-                self.ack_done(rx_cmd::GLB_FILTER);
-            }
-            RxCmd::Tick { .. }       => self.ack_done(rx_cmd::TICK),
-            RxCmd::AoFilter { .. }   => self.ack_done(rx_cmd::AO_FILTER),
-            RxCmd::LocFilter { .. }  => self.ack_done(rx_cmd::LOC_FILTER),
-            RxCmd::CurrObj { .. }    => self.ack_done(rx_cmd::CURR_OBJ),
-            RxCmd::QueryCurr { .. }  => self.ack_done(rx_cmd::QUERY_CURR),
-            RxCmd::Peek { .. }       => self.ack_done(rx_cmd::PEEK),
-            RxCmd::Poke { .. }       => self.ack_done(rx_cmd::POKE),
-            RxCmd::Fill { .. }       => self.ack_done(rx_cmd::FILL),
-            RxCmd::Unknown { cmd, .. } => {
-                eprintln!("unknown QS-RX record {cmd:#04x}");
-                let _ = self.port.emit_record(QS_RX_STATUS, &[0x80 | 0x43u8], false);
-            }
-        }
-    }
-
-    fn ack(&self, rec_id: u8) {
-        let _ = self.port.emit_record(QS_RX_STATUS, &[rec_id], false);
-    }
-
-    fn done(&self, rec_id: u8) {
-        let _ = self.port.emit_record(QS_TARGET_DONE, &[rec_id], true);
-    }
-
-    fn ack_done(&self, rec_id: u8) {
-        self.ack(rec_id);
-        self.done(rec_id);
-    }
-}
-
 fn emit_reference_dictionary(port: &PosixPort) -> Result<(), TraceError> {
     port.emit_target_info(&TargetInfo::default())?;
     port.emit_obj_dict(dict_handle(QS_RX_NAME), QS_RX_NAME)?;
@@ -638,14 +178,14 @@ fn emit_reference_dictionary(port: &PosixPort) -> Result<(), TraceError> {
         port.emit_obj_dict(entry.timer_handle, entry.timer_name.as_str())?;
     }
 
-    port.emit_fun_dict(philo_initial as usize as u64, PHILO_INITIAL_NAME)?;
-    port.emit_fun_dict(thinking      as usize as u64, PHILO_THINKING_NAME)?;
-    port.emit_fun_dict(hungry        as usize as u64, PHILO_HUNGRY_NAME)?;
-    port.emit_fun_dict(eating        as usize as u64, PHILO_EATING_NAME)?;
-    port.emit_fun_dict(table_initial as usize as u64, "Table::initial")?;
-    port.emit_fun_dict(active        as usize as u64, "Table::active")?;
-    port.emit_fun_dict(serving       as usize as u64, TABLE_SERVING_NAME)?;
-    port.emit_fun_dict(paused        as usize as u64, TABLE_PAUSED_NAME)?;
+    port.emit_fun_dict(philo_initial as *const () as usize as u64, PHILO_INITIAL_NAME)?;
+    port.emit_fun_dict(thinking      as *const () as usize as u64, PHILO_THINKING_NAME)?;
+    port.emit_fun_dict(hungry        as *const () as usize as u64, PHILO_HUNGRY_NAME)?;
+    port.emit_fun_dict(eating        as *const () as usize as u64, PHILO_EATING_NAME)?;
+    port.emit_fun_dict(table_initial as *const () as usize as u64, "Table::initial")?;
+    port.emit_fun_dict(active        as *const () as usize as u64, "Table::active")?;
+    port.emit_fun_dict(serving       as *const () as usize as u64, TABLE_SERVING_NAME)?;
+    port.emit_fun_dict(paused        as *const () as usize as u64, TABLE_PAUSED_NAME)?;
 
     Ok(())
 }
