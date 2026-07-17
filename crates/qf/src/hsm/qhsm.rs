@@ -1,122 +1,20 @@
-//! Hierarchical State Machine (QHsm) framework — Phase 2.
+//! Hierarchical State Machine (QHsm) framework.
 //!
 //! Provides a QHsm-compatible framework for code-based hierarchical state
 //! machines, compatible with QP/C++ v8.x conventions.
-//!
-//! # Usage
-//!
-//! 1. Define your state machine data type `S`.
-//! 2. Write state handler functions of type `StateHandler<S>`.
-//! 3. Wrap everything in a `QHsm<S>` and register it as an `ActiveObject`.
-//!
-//! ```rust,ignore
-//! use qf::hsm::{QHsm, QHsmResult, StateHandler};
-//! use qf::hsm::reserved::*;
-//! use qf::event::DynEvent;
-//!
-//! const TIMEOUT_SIG: u16 = 4; // Q_USER_SIG + 0
-//!
-//! struct Blinky { count: u32 }
-//!
-//! fn initial(sm: &mut Blinky, _e: &DynEvent) -> QHsmResult<Blinky> {
-//!     QHsmResult::Tran(off)
-//! }
-//!
-//! fn off(sm: &mut Blinky, e: &DynEvent) -> QHsmResult<Blinky> {
-//!     match e.signal().0 {
-//!         Q_ENTRY_SIG_VAL => { /* LED off */ QHsmResult::Handled }
-//!         TIMEOUT_SIG     => QHsmResult::Tran(on),
-//!         _               => QHsmResult::Super(QHsm::<Blinky>::top_state),
-//!     }
-//! }
-//!
-//! fn on(sm: &mut Blinky, e: &DynEvent) -> QHsmResult<Blinky> {
-//!     match e.signal().0 {
-//!         Q_ENTRY_SIG_VAL => { sm.count += 1; /* LED on */ QHsmResult::Handled }
-//!         TIMEOUT_SIG     => QHsmResult::Tran(off),
-//!         _               => QHsmResult::Super(QHsm::<Blinky>::top_state),
-//!     }
-//! }
-//!
-//! let mut ao_data = Blinky { count: 0 };
-//! let mut hsm = QHsm::new(ao_data, initial);
-//! hsm.init();
-//! ```
-
-#[cfg(not(feature = "static-alloc"))]
-use alloc::collections::BTreeMap;
 
 use crate::active::{ActiveBehavior, ActiveContext};
 use crate::dis::Dup;
-use crate::event::{DynEvent, Event, Signal};
+use crate::event::{DynEvent, Event};
 use crate::trace::TraceHook;
 
-/// Shallow-history table type. Dynamic: a heap [`BTreeMap`]; `static-alloc`: a
-/// fixed-capacity, heap-free [`heapless::FnvIndexMap`] (capacity must be a power
-/// of two). Keyed by parent-state fn-pointer address.
-#[cfg(not(feature = "static-alloc"))]
-type HistoryMap<S> = BTreeMap<usize, StateHandler<S>>;
-/// Maximum number of composite states with remembered shallow history under the
-/// heap-free build; exceeding it is a configuration fault.
-#[cfg(feature = "static-alloc")]
-pub const HSM_HISTORY_CAP: usize = 16;
-#[cfg(feature = "static-alloc")]
-type HistoryMap<S> = heapless::FnvIndexMap<usize, StateHandler<S>, HSM_HISTORY_CAP>;
-
-// ── QS record IDs for QEP events ────────────────────────────────────────────
-// Matches QP/C++ v8.x canonical values.
-const QS_QEP_STATE_ENTRY:  u8 = 1;
-const QS_QEP_STATE_EXIT:   u8 = 2;
-const QS_QEP_STATE_INIT:   u8 = 3;
-const QS_QEP_INIT_TRAN:    u8 = 4;
-const QS_QEP_INTERN_TRAN:  u8 = 5;
-const QS_QEP_TRAN:         u8 = 6;
-const QS_QEP_IGNORED:      u8 = 7;
-const QS_QEP_DISPATCH:     u8 = 8;
-#[allow(dead_code)]
-const QS_QEP_UNHANDLED:    u8 = 9;
-const QS_QEP_TRAN_HIST:    u8 = 55;
+use super::common::{QAsm, SameState};
+use super::common::reserved::{Q_EMPTY_SIG, Q_ENTRY_SIG, Q_EXIT_SIG, Q_INIT_SIG};
+use super::history::HistoryMap;
+use super::trace;
 
 /// Maximum nesting depth supported by the hierarchy traversal algorithm.
 pub const MAX_NEST_DEPTH: usize = 6;
-
-// ── Reserved signals ─────────────────────────────────────────────────────────
-
-/// Reserved signals used internally by the QHsm framework.
-///
-/// Every state handler receives these signals from the framework during
-/// `init()` and `dispatch()`.  User-defined signals **must** start at
-/// [`Q_USER_SIG`] (value `4`) or higher.
-pub mod reserved {
-    use crate::event::Signal;
-
-    /// Probe signal: the framework asks a state for its super-state.
-    /// States should return `QHsmResult::Super(parent)` for this signal
-    /// (achieved by the `_ => q_super!(parent)` catch-all arm).
-    pub const Q_EMPTY_SIG: Signal = Signal(0);
-
-    /// Entry action signal — perform one-time setup when entering the state.
-    pub const Q_ENTRY_SIG: Signal = Signal(1);
-    /// Numeric value of `Q_ENTRY_SIG` for use in `match` patterns.
-    pub const Q_ENTRY_SIG_VAL: u16 = 1;
-
-    /// Exit action signal — clean up when leaving the state.
-    pub const Q_EXIT_SIG: Signal = Signal(2);
-    /// Numeric value of `Q_EXIT_SIG` for use in `match` patterns.
-    pub const Q_EXIT_SIG_VAL: u16 = 2;
-
-    /// Initial transition signal — fired once to start the state's own sub-SM.
-    pub const Q_INIT_SIG: Signal = Signal(3);
-    /// Numeric value of `Q_INIT_SIG` for use in `match` patterns.
-    pub const Q_INIT_SIG_VAL: u16 = 3;
-
-    /// First signal value safe for user-defined signals.
-    pub const Q_USER_SIG: Signal = Signal(4);
-}
-
-use reserved::{Q_EMPTY_SIG, Q_ENTRY_SIG, Q_EXIT_SIG, Q_INIT_SIG};
-
-// ── Core types ───────────────────────────────────────────────────────────────
 
 /// Return value from a state handler function.
 ///
@@ -151,30 +49,12 @@ pub enum QHsmResult<S> {
 /// state machine data; the second is the current event.
 pub type StateHandler<S> = fn(&mut S, &DynEvent) -> QHsmResult<S>;
 
-/// Trait for comparing state representations for identity.
-pub trait SameState {
-    /// Returns `true` if `self` and `other` represent the same state.
-    fn same_state(self, other: Self) -> bool;
-}
-
 impl<S> SameState for StateHandler<S> {
     #[inline]
     fn same_state(self, other: Self) -> bool {
         (self as usize) == (other as usize)
     }
 }
-
-
-
-/// Abstract state machine interface.
-pub trait QAsm: Send + 'static {
-    /// Initialise the state machine (execute initial transition).
-    fn init(&mut self);
-    /// Dispatch an event to the state machine.
-    fn dispatch(&mut self, event: &DynEvent);
-}
-
-// ── QHsm struct ──────────────────────────────────────────────────────────────
 
 /// Hierarchical State Machine.
 ///
@@ -199,7 +79,7 @@ pub struct QHsm<S> {
     sm: S,
     /// Shallow history table.  Key = parent state fn-pointer as `usize`,
     /// value = last active direct child state handler.
-    history: HistoryMap<S>,
+    history: HistoryMap<StateHandler<S>>,
 }
 
 impl<S: Send + 'static> QAsm for QHsm<S> {
@@ -293,14 +173,14 @@ impl<S: Send + 'static> QHsm<S> {
         for i in (0..len).rev() {
             self.call_entry(path[i]);
             if let Some(ref hook) = trace {
-                emit_state_entry(hook, path[i] as usize);
+                trace::emit_state_entry(hook, path[i] as usize);
             }
         }
 
         self.state.set(target);
 
         if let Some(ref hook) = trace {
-            emit_init_tran(hook, target as usize);
+            trace::emit_init_tran(hook, target as usize);
         }
 
         // Resolve any nested initial transitions in the target composite state.
@@ -317,7 +197,7 @@ impl<S: Send + 'static> QHsm<S> {
     /// Dispatch an event with optional QS tracing.
     pub fn dispatch_traced(&mut self, event: &DynEvent, trace: Option<TraceHook>) {
         if let Some(ref hook) = trace {
-            emit_dispatch(hook, event.signal(), self.state.get() as usize);
+            trace::emit_dispatch(hook, event.signal(), self.state.get() as usize);
         }
 
         // Walk the hierarchy upward until an event handler is found.
@@ -342,17 +222,17 @@ impl<S: Send + 'static> QHsm<S> {
         match result {
             QHsmResult::Handled => {
                 if let Some(ref hook) = trace {
-                    emit_intern_tran(hook, event.signal(), source as usize);
+                    trace::emit_intern_tran(hook, event.signal(), source as usize);
                 }
             }
             QHsmResult::Ignored | QHsmResult::Unhandled => {
                 if let Some(ref hook) = trace {
-                    emit_ignored(hook, event.signal(), source as usize);
+                    trace::emit_ignored(hook, event.signal(), source as usize);
                 }
             }
             QHsmResult::Tran(target) => {
                 if let Some(ref hook) = trace {
-                    emit_tran(hook, event.signal(), source as usize, target as usize);
+                    trace::emit_tran(hook, event.signal(), source as usize, target as usize);
                 }
                 self.execute_tran(source, target, &trace);
             }
@@ -365,7 +245,7 @@ impl<S: Send + 'static> QHsm<S> {
                     .copied()
                     .unwrap_or(parent);
                 if let Some(ref hook) = trace {
-                    emit_tran_hist(hook, event.signal(), source as usize, target as usize);
+                    trace::emit_tran_hist(hook, event.signal(), source as usize, target as usize);
                 }
                 self.execute_tran(source, target, &trace);
             }
@@ -495,7 +375,7 @@ impl<S: Send + 'static> QHsm<S> {
 
             self.call_exit(s);
             if let Some(ref hook) = trace {
-                emit_state_exit(hook, s as usize);
+                trace::emit_state_exit(hook, s as usize);
             }
 
             s = parent;
@@ -514,7 +394,7 @@ impl<S: Send + 'static> QHsm<S> {
         for i in (0..lca_idx).rev() {
             self.call_entry(target_path[i]);
             if let Some(ref hook) = trace {
-                emit_state_entry(hook, target_path[i] as usize);
+                trace::emit_state_entry(hook, target_path[i] as usize);
             }
         }
 
@@ -547,12 +427,12 @@ impl<S: Send + 'static> QHsm<S> {
             for i in (0..current_idx).rev() {
                 self.call_entry(next_path[i]);
                 if let Some(ref hook) = trace {
-                    emit_state_entry(hook, next_path[i] as usize);
+                    trace::emit_state_entry(hook, next_path[i] as usize);
                 }
             }
 
             if let Some(ref hook) = trace {
-                emit_state_init(hook, self.state.get() as usize);
+                trace::emit_state_init(hook, self.state.get() as usize);
             }
 
             self.state.set(next);
@@ -570,61 +450,4 @@ impl<S: Send + 'static> ActiveBehavior for QHsm<S> {
     fn on_event(&mut self, ctx: &mut ActiveContext, event: DynEvent) {
         self.dispatch_traced(&event, ctx.trace_hook());
     }
-}
-
-// ── QS trace emission helpers ─────────────────────────────────────────────────
-
-const PTR_SIZE: usize = core::mem::size_of::<usize>();
-
-fn emit_state_entry(hook: &TraceHook, state_ptr: usize) {
-    let _ = hook(QS_QEP_STATE_ENTRY, &state_ptr.to_le_bytes(), false);
-}
-
-fn emit_state_exit(hook: &TraceHook, state_ptr: usize) {
-    let _ = hook(QS_QEP_STATE_EXIT, &state_ptr.to_le_bytes(), false);
-}
-
-fn emit_state_init(hook: &TraceHook, state_ptr: usize) {
-    let _ = hook(QS_QEP_STATE_INIT, &state_ptr.to_le_bytes(), false);
-}
-
-fn emit_init_tran(hook: &TraceHook, state_ptr: usize) {
-    let _ = hook(QS_QEP_INIT_TRAN, &state_ptr.to_le_bytes(), false);
-}
-
-fn emit_dispatch(hook: &TraceHook, sig: Signal, state_ptr: usize) {
-    let mut buf = [0u8; 2 + PTR_SIZE];
-    buf[0..2].copy_from_slice(&sig.0.to_le_bytes());
-    buf[2..].copy_from_slice(&state_ptr.to_le_bytes());
-    let _ = hook(QS_QEP_DISPATCH, &buf, true);
-}
-
-fn emit_intern_tran(hook: &TraceHook, sig: Signal, state_ptr: usize) {
-    let mut buf = [0u8; 2 + PTR_SIZE];
-    buf[0..2].copy_from_slice(&sig.0.to_le_bytes());
-    buf[2..].copy_from_slice(&state_ptr.to_le_bytes());
-    let _ = hook(QS_QEP_INTERN_TRAN, &buf, true);
-}
-
-fn emit_ignored(hook: &TraceHook, sig: Signal, state_ptr: usize) {
-    let mut buf = [0u8; 2 + PTR_SIZE];
-    buf[0..2].copy_from_slice(&sig.0.to_le_bytes());
-    buf[2..].copy_from_slice(&state_ptr.to_le_bytes());
-    let _ = hook(QS_QEP_IGNORED, &buf, true);
-}
-
-fn emit_tran(hook: &TraceHook, sig: Signal, source_ptr: usize, target_ptr: usize) {
-    let mut buf = [0u8; 2 + PTR_SIZE * 2];
-    buf[0..2].copy_from_slice(&sig.0.to_le_bytes());
-    buf[2..2 + PTR_SIZE].copy_from_slice(&source_ptr.to_le_bytes());
-    buf[2 + PTR_SIZE..].copy_from_slice(&target_ptr.to_le_bytes());
-    let _ = hook(QS_QEP_TRAN, &buf, true);
-}
-
-fn emit_tran_hist(hook: &TraceHook, sig: Signal, source_ptr: usize, target_ptr: usize) {
-    let mut buf = [0u8; 2 + PTR_SIZE * 2];
-    buf[0..2].copy_from_slice(&sig.0.to_le_bytes());
-    buf[2..2 + PTR_SIZE].copy_from_slice(&source_ptr.to_le_bytes());
-    buf[2 + PTR_SIZE..].copy_from_slice(&target_ptr.to_le_bytes());
-    let _ = hook(QS_QEP_TRAN_HIST, &buf, true);
 }

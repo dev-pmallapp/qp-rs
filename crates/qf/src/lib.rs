@@ -27,7 +27,9 @@ pub mod event;
 pub mod event_pool;
 pub mod fusa;
 pub mod hsm;
-pub mod qmsm;
+pub mod qmsm {
+    pub use crate::hsm::qmsm::*;
+}
 pub mod isr;
 pub mod kernel;
 pub mod pool;

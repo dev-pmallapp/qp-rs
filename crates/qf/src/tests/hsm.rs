@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::active::{ActiveObjectId};
 use crate::event::{DynEvent, Signal};
-use crate::hsm::{SameState, QHsm, QHsmResult};
+use crate::hsm::{SameState, QHsm, QHsmResult, StateHandler};
 use crate::hsm::reserved::*;
 use crate::kernel::Kernel;
 use crate::{q_handled, q_ignored, q_super, q_tran, q_tran_hist};

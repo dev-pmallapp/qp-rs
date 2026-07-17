@@ -334,7 +334,7 @@ mod tests {
         // is not a meaningful comparison per clippy); the read must still be
         // intact.
         assert!(f.is_intact());
-        assert_eq!(f.get() as usize, b as usize);
+        assert_eq!(f.get() as usize, b as *const () as usize);
     }
 
     #[test]
