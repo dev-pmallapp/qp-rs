@@ -240,7 +240,7 @@ impl<S: Send + 'static> QHsm<S> {
             if cur.same_state(state) {
                 return true;
             }
-            if cur.same_state(Self::top_state) {
+            if cur.same_state(Self::top_state as StateHandler<S>) {
                 break;
             }
             cur = self.get_super(cur);
@@ -424,7 +424,7 @@ impl<S: Send + 'static> QHsm<S> {
         let mut path = [top; MAX_NEST_DEPTH];
         let mut len = 0usize;
         let mut cur = s;
-        while !cur.same_state(Self::top_state) && len < MAX_NEST_DEPTH {
+        while !cur.same_state(Self::top_state as StateHandler<S>) && len < MAX_NEST_DEPTH {
             path[len] = cur;
             len += 1;
             cur = self.get_super(cur);
@@ -487,7 +487,7 @@ impl<S: Send + 'static> QHsm<S> {
             let parent = self.get_super(s);
 
             // Record: `s` was the last active direct child of `parent`.
-            if !parent.same_state(Self::top_state) {
+            if !parent.same_state(Self::top_state as StateHandler<S>) {
                 #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as usize, s);
                 // Heap-free map is fixed-capacity: a full history table is a
@@ -504,7 +504,7 @@ impl<S: Send + 'static> QHsm<S> {
             }
 
             s = parent;
-            if s.same_state(Self::top_state) {
+            if s.same_state(Self::top_state as StateHandler<S>) {
                 break;
             }
         }

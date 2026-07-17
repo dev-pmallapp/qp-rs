@@ -272,7 +272,7 @@ impl<S: Send + 'static> QMsm<S> {
         let lca = find_lca(&lca_source_path, &target_path);
 
         let mut s = current;
-        while !s.same_state(lca.unwrap_or(s)) {
+        while lca.map_or(true, |lca_state| !s.same_state(lca_state)) {
             if let Some(parent) = s.superstate {
                 #[cfg(not(feature = "static-alloc"))]
                 self.history.insert(parent as *const _ as usize, s);

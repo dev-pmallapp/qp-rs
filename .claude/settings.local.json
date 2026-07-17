@@ -10,7 +10,9 @@
       "Bash(cargo build *)",
       "WebFetch(domain:www.quantumleaps.com)",
       "Bash(cargo clippy *)",
-      "Bash(cargo clean *)"
+      "Bash(cargo clean *)",
+      "Bash(timeout 20 cargo run --bin lora_send)",
+      "Bash(git checkout *)"
     ]
   }
 }
