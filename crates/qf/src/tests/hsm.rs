@@ -29,8 +29,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::active::{ActiveObjectId};
 use crate::event::{DynEvent, Signal};
-#[allow(deprecated)]
-use crate::hsm::same_state;
 use crate::hsm::{SameState, QHsm, QHsmResult};
 use crate::hsm::reserved::*;
 use crate::kernel::Kernel;
@@ -143,15 +141,14 @@ fn dispatch(hsm: &mut QHsm<TestSm>, sig: u16) {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[allow(deprecated)]
 fn state_handler_reports_current_leaf() {
     let mut hsm = make_hsm();
     // Before init the machine is not yet in the leaf state s21.
-    assert!(!same_state(hsm.state_handler(), s21));
+    assert!(!hsm.state_handler().same_state(s21 as StateHandler<TestSm>));
     hsm.init();
     // After init the active leaf is s21 (initial → s2 → s2-INIT → s21).
-    assert!(same_state(hsm.state_handler(), s21));
-    assert!(same_state(hsm.state_handler(), s21));
+    assert!(hsm.state_handler().same_state(s21 as StateHandler<TestSm>));
+    assert!(hsm.state_handler().same_state(s21 as StateHandler<TestSm>));
 }
 
 #[test]

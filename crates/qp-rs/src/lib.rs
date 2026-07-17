@@ -87,8 +87,7 @@ pub mod prelude {
         TraceSink,
     };
 
-    #[allow(deprecated)]
-    pub use qf::{same_state, same_qmstate};
+
 
     #[cfg(feature = "qk")]
     pub use qk::{QkKernel, QkKernelBuilder, QkTimerWheel};

@@ -164,12 +164,7 @@ impl<S> SameState for StateHandler<S> {
     }
 }
 
-/// Compare two state handlers for identity (by function-pointer address).
-#[inline]
-#[deprecated(since = "0.2.0", note = "use the `SameState` trait instead")]
-pub fn same_state<S>(a: StateHandler<S>, b: StateHandler<S>) -> bool {
-    SameState::same_state(a, b)
-}
+
 
 /// Abstract state machine interface.
 pub trait QAsm: Send + 'static {

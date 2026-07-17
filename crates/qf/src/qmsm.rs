@@ -97,12 +97,7 @@ impl<S: 'static> SameState for &'static QMState<S> {
     }
 }
 
-/// Compare two static states by reference pointer.
-#[inline]
-#[deprecated(since = "0.2.0", note = "use the `SameState` trait instead")]
-pub fn same_qmstate<S: 'static>(a: &'static QMState<S>, b: &'static QMState<S>) -> bool {
-    SameState::same_state(a, b)
-}
+
 
 /// Quantum Meta State Machine.
 ///
