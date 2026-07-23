@@ -317,7 +317,17 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         self.retransmit_len   = len;
 
         // Configure PHY and transmit.
-        if self.stack.phy.configure_tx(&self.tx_cfg).is_err() { return; }
+        if self.stack.phy.configure_tx(&self.tx_cfg).is_err() {
+            // A raw PHY-command failure this early (SPI/BUSY-level fault, chip
+            // absent) used to `return` here with no app-visible signal at all —
+            // `RF_TX_FAIL_SIG` only fired from the transport-timeout ("GiveUp")
+            // path, so a hardware fault at the command interface was invisible
+            // to the app layer and to anything (e.g. `LedAo`) subscribed to it.
+            self.retransmit_frame = None;
+            self.app_ao.post(DynEvent::empty_dyn(RF_TX_FAIL_SIG));
+            self.drain_pending_tx(ctx);
+            return;
+        }
         let _ = ctx.emit_trace(crate::records::RF_PHY_TX, &[1, req.dst as u8]);
         match self.stack.phy.transmit(frame.phy_bytes()) {
             Ok(()) => {
@@ -333,8 +343,12 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 }
             }
             Err(e) => {
+                // See the `configure_tx` branch above — same silent-drop gap,
+                // now fixed the same way.
                 ceprintln!("RfStackAO: TX failed: {e}");
                 self.retransmit_frame = None;
+                self.app_ao.post(DynEvent::empty_dyn(RF_TX_FAIL_SIG));
+                self.drain_pending_tx(ctx);
             }
         }
     }

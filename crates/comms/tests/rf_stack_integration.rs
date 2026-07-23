@@ -15,6 +15,8 @@ use comms::transport::{ReliableTransport, UnreliableTransport};
 use comms::mac::noop::NoopMac;
 use comms::net::NoopNetwork;
 use comms::phy::loopback::LoopbackPhy;
+use hal::rf::{RfPhy, RadioMode, RxMetadata, PhyEvent};
+use hal::error::{HalError, HalResult};
 
 /// Concrete RF AO type for the loopback/no-op unreliable stack used below.
 /// `pump()` is an inherent method on `RfStackAO`, so helpers must name the
@@ -48,6 +50,24 @@ fn eu868_rx() -> RfRxConfig {
         timeout_ms: None,
         params: RadioParams::LoRa(LoRaModulation::default()),
     }
+}
+
+/// A PHY whose `transmit()` always fails — models a real-HW fault at the
+/// command interface (SPI/BUSY timeout, chip absent) to exercise the
+/// silent-drop gap fixed in `RfStackAO::start_tx`'s `Err` branch.
+struct FailingPhy;
+
+impl RfPhy for FailingPhy {
+    fn init(&mut self) -> HalResult<()> { Ok(()) }
+    fn set_mode(&mut self, _mode: RadioMode) -> HalResult<()> { Ok(()) }
+    fn configure_tx(&mut self, _cfg: &RfTxConfig) -> HalResult<()> { Ok(()) }
+    fn configure_rx(&mut self, _cfg: &RfRxConfig) -> HalResult<()> { Ok(()) }
+    fn transmit(&mut self, _payload: &[u8]) -> HalResult<()> { Err(HalError::Timeout) }
+    fn read_rx(&mut self, _buf: &mut [u8], _meta: &RxMetadata) -> HalResult<()> { Ok(()) }
+    fn poll_irq(&mut self) -> HalResult<Option<PhyEvent>> { Ok(None) }
+    fn clear_irq(&mut self) -> HalResult<()> { Ok(()) }
+    fn rssi(&mut self) -> HalResult<i16> { Ok(-50) }
+    fn chip_name(&self) -> &'static str { "Failing" }
 }
 
 // Capture AO: records signals it receives
@@ -290,6 +310,45 @@ fn reliable_tx_no_ack_gives_tx_fail_after_exhaustion() {
 
     capture.with_behavior(|c| {
         assert_eq!(c.fail, 1, "TX_FAIL must be delivered after retransmit exhaustion");
+        assert_eq!(c.done, 0);
+    });
+}
+
+// ── Regression: raw PHY `transmit()` failure must reach the app ─────────────
+//
+// Before this fix, a hardware fault at `phy.transmit()` itself (real-HW SX1262
+// bring-up: BUSY-line/SPI timeout) was silently dropped in `start_tx`'s `Err`
+// arm — no `RF_TX_FAIL_SIG`, so `LedAo` (and any other subscriber) never
+// learned the TX failed. Only the transport-timeout ("GiveUp" after retries)
+// path posted it. See swm-rs's real-HW SX1262 bring-up notes for the bug this
+// gap hid: the radio's `GetIrqStatus` poll timing out looked, from the LED's
+// perspective, identical to a healthy idle radio.
+
+type FailRfAo = RfStackAO<UnreliableTransport, NoopNetwork, NoopMac, FailingPhy>;
+
+#[test]
+fn raw_phy_transmit_failure_delivers_tx_fail() {
+    let capture = ActiveObject::new(ActiveObjectId(0), 1, CaptureAo { done: 0, fail: 0, frames: vec![] });
+    let stack = RfStack::new(UnreliableTransport::new(), NoopNetwork, NoopMac, FailingPhy);
+    let rf_ao: Arc<ActiveObject<FailRfAo>> = ActiveObject::new(
+        ActiveObjectId(1), 2,
+        RfStackAO::new(stack, eu868_tx(), eu868_rx(), arc_as_runnable(Arc::clone(&capture))),
+    );
+    let kernel = Kernel::builder()
+        .register(arc_as_runnable(Arc::clone(&rf_ao)))
+        .register(arc_as_runnable(Arc::clone(&capture)))
+        .build();
+    kernel.start();
+
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::new(b"hello".to_vec(), 1)),
+    ));
+    kernel.dispatch_once(); // AO attempts TX, phy.transmit() errors
+    kernel.dispatch_once(); // capture AO receives RF_TX_FAIL_SIG
+
+    capture.with_behavior(|c| {
+        assert_eq!(c.fail, 1, "a raw PHY transmit() failure must post RF_TX_FAIL_SIG");
         assert_eq!(c.done, 0);
     });
 }
