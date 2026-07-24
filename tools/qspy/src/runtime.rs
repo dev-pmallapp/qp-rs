@@ -122,6 +122,12 @@ struct Opts {
     #[arg(short = 'C', value_name = "N", default_value_t = 2)] timeevt_ctr:  u8,
 }
 
+/// Custom handler callback for project-specific console commands.
+///
+/// Given a typed command string and the shared command sender handle,
+/// returns `true` if the command was handled.
+pub type CustomCommandHandler = Arc<dyn Fn(&str, &SharedSender) -> bool + Send + Sync>;
+
 // ── User command enum ─────────────────────────────────────────────────────────
 
 enum UserCmd {
@@ -135,24 +141,26 @@ enum UserCmd {
     Help,
     ToggleTextOut,
     ToggleBinOut,
+    Custom(String),
     Quit,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Run the qspy console.
-///
-/// Parses CLI options, builds the [`FrameInterpreter`], invokes `register`
-/// so the caller can install project-specific user-record formatters via
-/// [`FrameInterpreter::add_user_formatter`], then enters the transport loop.
-/// qspy itself registers nothing, keeping the tool domain-agnostic.
-///
-/// `cmd_aliases` maps typed keyboard words (line mode only) to a QS-RX
-/// `COMMAND` id, sent with `p1=p2=p3=0` — e.g. `[("tx", 1)]` lets a caller
-/// type `tx` instead of `c 1 0 0 0`. qspy itself registers none (pass `&[]`);
-/// a project-specific binary supplies its own table, keeping the generic
-/// tool domain-agnostic (mirrors [`FrameInterpreter::add_user_formatter`]).
+/// Run the qspy console using default configuration.
 pub fn run<F>(register: F, cmd_aliases: &'static [(&'static str, u8)]) -> Result<(), Box<dyn Error>>
+where
+    F: FnOnce(&mut FrameInterpreter),
+{
+    run_with_custom_handler(register, cmd_aliases, None)
+}
+
+/// Run the qspy console with an optional project-specific custom command handler.
+pub fn run_with_custom_handler<F>(
+    register:       F,
+    cmd_aliases:    &'static [(&'static str, u8)],
+    custom_handler: Option<CustomCommandHandler>,
+) -> Result<(), Box<dyn Error>>
 where
     F: FnOnce(&mut FrameInterpreter),
 {
@@ -207,7 +215,8 @@ where
 
     let (kbd_tx, kbd_rx) = mpsc::channel::<UserCmd>();
     if !opts.no_kbd {
-        thread::spawn(move || keyboard_loop(kbd_tx, cmd_aliases));
+        let handler = custom_handler.clone();
+        thread::spawn(move || keyboard_loop(kbd_tx, cmd_aliases, handler));
     }
 
     let mut frontend: Option<FrontendServer> = opts.frontend_port.as_ref().and_then(|port| {
@@ -228,11 +237,11 @@ where
         if let Ok(cmd_handle) = s.try_clone() {
             *shared_sender.lock().unwrap() = Some(CommandSender::new(Box::new(cmd_handle)));
         }
-        run_reader(s, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
+        run_reader(s, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx, &custom_handler);
     } else if let Some(ref path) = opts.file {
         println!("qspy replaying {}", path.display());
         let f = std::fs::File::open(path)?;
-        run_reader(f, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
+        run_reader(f, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx, &custom_handler);
     } else if let Some(ref addr) = opts.tcp {
         let bind_addr = if addr.contains(':') { addr.clone() } else { format!("0.0.0.0:{addr}") };
         let listener = TcpListener::bind(&bind_addr)?;
@@ -248,7 +257,7 @@ where
                         }
                     }
                     run_reader(stream, &mut interpreter, &mut sinks, &mut frontend,
-                               &shared_sender, &kbd_rx);
+                               &shared_sender, &kbd_rx, &custom_handler);
                     println!("telemetry disconnected: {peer}");
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -270,12 +279,12 @@ where
                 *shared_sender.lock().unwrap() = Some(CommandSender::new(Box::new(cmd_stream)));
             }
         }
-        run_reader(stream, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
+        run_reader(stream, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx, &custom_handler);
         println!("qspy disconnected from {addr}");
     } else {
         let socket = UdpSocket::bind(&opts.udp_addr)?;
         println!("qspy listening on udp://{}", opts.udp_addr);
-        run_udp(socket, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx);
+        run_udp(socket, &mut interpreter, &mut sinks, &mut frontend, &shared_sender, &kbd_rx, &custom_handler);
     }
 
     Ok(())
@@ -284,12 +293,13 @@ where
 // ── Generic streaming reader ──────────────────────────────────────────────────
 
 fn run_reader<R: Read>(
-    mut source:  R,
-    interpreter: &mut FrameInterpreter,
-    sinks:       &mut OutputSinks,
-    frontend:    &mut Option<FrontendServer>,
-    sender:      &SharedSender,
-    kbd_rx:      &mpsc::Receiver<UserCmd>,
+    mut source:     R,
+    interpreter:    &mut FrameInterpreter,
+    sinks:          &mut OutputSinks,
+    frontend:       &mut Option<FrontendServer>,
+    sender:         &SharedSender,
+    kbd_rx:         &mpsc::Receiver<UserCmd>,
+    custom_handler: &Option<CustomCommandHandler>,
 ) {
     let mut decoder = HdlcDecoder::new();
     let mut buf = [0u8; 4096];
@@ -304,7 +314,7 @@ fn run_reader<R: Read>(
             Err(e) => { eprintln!("read error: {e}"); break; }
         }
 
-        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks) {
+        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks, custom_handler) {
             break;
         }
         sinks.flush();
@@ -314,12 +324,13 @@ fn run_reader<R: Read>(
 // ── UDP telemetry reader ──────────────────────────────────────────────────────
 
 fn run_udp(
-    socket:      UdpSocket,
-    interpreter: &mut FrameInterpreter,
-    sinks:       &mut OutputSinks,
-    frontend:    &mut Option<FrontendServer>,
-    sender:      &SharedSender,
-    kbd_rx:      &mpsc::Receiver<UserCmd>,
+    socket:         UdpSocket,
+    interpreter:    &mut FrameInterpreter,
+    sinks:          &mut OutputSinks,
+    frontend:       &mut Option<FrontendServer>,
+    sender:         &SharedSender,
+    kbd_rx:         &mpsc::Receiver<UserCmd>,
+    custom_handler: &Option<CustomCommandHandler>,
 ) {
     socket.set_read_timeout(Some(std::time::Duration::from_millis(100))).ok();
 
@@ -343,7 +354,7 @@ fn run_udp(
             Err(e) => { eprintln!("udp error: {e}"); break; }
         }
 
-        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks) {
+        if poll_commands(kbd_rx, frontend, interpreter, sender, sinks, custom_handler) {
             break;
         }
         sinks.flush();
@@ -385,14 +396,15 @@ fn process_chunk(
 /// Drain all pending user and front-end commands.  Returns `true` if the
 /// caller should exit its loop (Quit command received).
 fn poll_commands(
-    kbd_rx:   &mpsc::Receiver<UserCmd>,
-    frontend: &mut Option<FrontendServer>,
-    interp:   &mut FrameInterpreter,
-    sender:   &SharedSender,
-    sinks:    &mut OutputSinks,
+    kbd_rx:         &mpsc::Receiver<UserCmd>,
+    frontend:       &mut Option<FrontendServer>,
+    interp:         &mut FrameInterpreter,
+    sender:         &SharedSender,
+    sinks:          &mut OutputSinks,
+    custom_handler: &Option<CustomCommandHandler>,
 ) -> bool {
     while let Ok(cmd) = kbd_rx.try_recv() {
-        if dispatch_cmd(cmd, sender, interp, sinks) {
+        if dispatch_cmd(cmd, sender, interp, sinks, custom_handler) {
             return true;
         }
     }
@@ -406,10 +418,11 @@ fn poll_commands(
 
 /// Dispatch a user command.  Returns `true` if the caller should quit.
 fn dispatch_cmd(
-    cmd:    UserCmd,
-    sender: &SharedSender,
-    interp: &mut FrameInterpreter,
-    sinks:  &mut OutputSinks,
+    cmd:            UserCmd,
+    sender:         &SharedSender,
+    interp:         &mut FrameInterpreter,
+    sinks:          &mut OutputSinks,
+    custom_handler: &Option<CustomCommandHandler>,
 ) -> bool {
     match cmd {
         UserCmd::Info            => try_send(sender, |s| s.send_info()),
@@ -429,6 +442,13 @@ fn dispatch_cmd(
         UserCmd::Help          => print_help(),
         UserCmd::ToggleTextOut => sinks.toggle_text(),
         UserCmd::ToggleBinOut  => sinks.toggle_binary(),
+        UserCmd::Custom(ref line) => {
+            if let Some(ref handler) = custom_handler {
+                if !handler(line, sender) {
+                    eprintln!("unknown command: {line}  (r/i/t/u/d/c/cls/quiet/help/text/bin/q)");
+                }
+            }
+        }
         UserCmd::Quit          => return true,
     }
     false
@@ -484,19 +504,27 @@ fn cmd_listener(addr: &str, sender: SharedSender) {
 
 // ── Keyboard / stdin thread ───────────────────────────────────────────────────
 
-fn keyboard_loop(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
+fn keyboard_loop(
+    tx:             mpsc::Sender<UserCmd>,
+    cmd_aliases:    &'static [(&'static str, u8)],
+    custom_handler: Option<CustomCommandHandler>,
+) {
     #[cfg(unix)]
     if crate::output::stdin_is_tty() {
-        keyboard_loop_raw(tx, cmd_aliases);
+        keyboard_loop_raw(tx, cmd_aliases, custom_handler);
         return;
     }
-    keyboard_loop_line(tx, cmd_aliases);
+    keyboard_loop_line(tx, cmd_aliases, custom_handler);
 }
 
-fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
+fn keyboard_loop_line(
+    tx:             mpsc::Sender<UserCmd>,
+    cmd_aliases:    &'static [(&'static str, u8)],
+    custom_handler: Option<CustomCommandHandler>,
+) {
     for line in io::stdin().lock().lines() {
         let raw = match line { Ok(l) => l, Err(_) => break };
-        let cmd = parse_keyboard_cmd(raw.trim(), cmd_aliases);
+        let cmd = parse_keyboard_cmd(raw.trim(), cmd_aliases, &custom_handler);
         let quit = matches!(cmd, Some(UserCmd::Quit));
         if let Some(c) = cmd {
             if tx.send(c).is_err() { break; }
@@ -506,10 +534,14 @@ fn keyboard_loop_line(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'stati
 }
 
 #[cfg(unix)]
-fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static str, u8)]) {
+fn keyboard_loop_raw(
+    tx:             mpsc::Sender<UserCmd>,
+    cmd_aliases:    &'static [(&'static str, u8)],
+    custom_handler: Option<CustomCommandHandler>,
+) {
     let _raw = match raw_terminal::RawTerminal::enter() {
         Some(r) => r,
-        None    => { keyboard_loop_line(tx, cmd_aliases); return; }
+        None    => { keyboard_loop_line(tx, cmd_aliases, custom_handler); return; }
     };
     let stdin = io::stdin();
     let mut locked = stdin.lock();
@@ -518,7 +550,7 @@ fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static
         match locked.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                let cmd = map_raw_key(buf[0]);
+                let cmd = map_raw_key(buf[0], custom_handler.is_some());
                 let quit = matches!(cmd, Some(UserCmd::Quit));
                 if let Some(c) = cmd {
                     if tx.send(c).is_err() { break; }
@@ -530,7 +562,7 @@ fn keyboard_loop_raw(tx: mpsc::Sender<UserCmd>, cmd_aliases: &'static [(&'static
 }
 
 #[cfg(unix)]
-fn map_raw_key(b: u8) -> Option<UserCmd> {
+fn map_raw_key(b: u8, has_custom: bool) -> Option<UserCmd> {
     match b {
         b'X' | b'x' | 0x1B => Some(UserCmd::Quit),
         b'Q'                => Some(UserCmd::ToggleQuiet),
@@ -539,25 +571,33 @@ fn map_raw_key(b: u8) -> Option<UserCmd> {
         b'O' | b'o'         => Some(UserCmd::ToggleTextOut),
         b'S' | b's' | b'B' | b'b' => Some(UserCmd::ToggleBinOut),
         b'R' | b'r'         => Some(UserCmd::Reset),
+        b'E' | b'e'         => Some(UserCmd::Custom((b as char).to_string())),
         b'I' | b'i'         => Some(UserCmd::Info),
         b'T' | b't'         => Some(UserCmd::Tick(0)),
         b'U' | b'u'         => Some(UserCmd::Tick(1)),
         b'D' | b'd'         => Some(UserCmd::SaveDict(
             PathBuf::from(crate::output::timestamped_name("dic"))
         )),
+        _ if has_custom     => Some(UserCmd::Custom((b as char).to_string())),
         _                   => None,
     }
 }
 
-fn parse_keyboard_cmd(line: &str, cmd_aliases: &'static [(&'static str, u8)]) -> Option<UserCmd> {
+fn parse_keyboard_cmd(
+    line:           &str,
+    cmd_aliases:    &'static [(&'static str, u8)],
+    custom_handler: &Option<CustomCommandHandler>,
+) -> Option<UserCmd> {
     let mut parts = line.splitn(5, ' ');
     let word = parts.clone().next()?;
     if let Some(&(_, id)) = cmd_aliases.iter().find(|&&(alias, _)| alias == word) {
         return Some(UserCmd::SendCommand { id, p1: 0, p2: 0, p3: 0 });
     }
     match parts.next()? {
-        "r" | "reset"  => Some(UserCmd::Reset),
-        "i" | "info"   => Some(UserCmd::Info),
+        "r" | "reset"                      => Some(UserCmd::Reset),
+        "er" | "esp-reset" | "board-reset" | "hard-reset"
+            if custom_handler.is_some() => Some(UserCmd::Custom(word.to_string())),
+        "i" | "info"                       => Some(UserCmd::Info),
         "t" | "tick"   => {
             let rate = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0u8);
             Some(UserCmd::Tick(rate))
@@ -587,8 +627,12 @@ fn parse_keyboard_cmd(line: &str, cmd_aliases: &'static [(&'static str, u8)]) ->
         "q" | "quit"       => Some(UserCmd::Quit),
         ""                 => None,
         other              => {
-            eprintln!("unknown command: {other}  (r/i/t/u/d/c/cls/quiet/help/text/bin/q)");
-            None
+            if custom_handler.is_some() {
+                Some(UserCmd::Custom(other.to_string()))
+            } else {
+                eprintln!("unknown command: {other}  (r/reset/er/esp-reset/board-reset/i/t/u/d/c/cls/quiet/help/text/bin/q)");
+                None
+            }
         }
     }
 }
