@@ -28,9 +28,6 @@ pub const RF_RX_FRAME_SIG:        Signal = Signal(29);  // payload received
 // ── Internal ──────────────────────────────────────────────────────────────
 pub const RF_TRANSPORT_TIMEOUT_SIG: Signal = Signal(30);
 
-/// Legacy / compatibility signal (aliased to RF_PHY_TX_DONE_SIG or RF_TX_DONE_SIG)
-pub const RF_TX_DONE_SIG_LEGACY: Signal = Signal(21);
-
 /// Broadcast destination address for the [`crate::net::Network`] layer.
 pub const NET_BROADCAST_ADDR: u16 = 0xFFFF;
 
