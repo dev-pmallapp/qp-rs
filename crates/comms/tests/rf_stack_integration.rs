@@ -11,7 +11,7 @@ use comms::events::{
     RF_PHY_TX_DONE_SIG,
 };
 use comms::stack::{RfStack, RfStackAO};
-use comms::transport::{ReliableTransport, UnreliableTransport};
+use comms::transport::{ReliableTransport, TransportFlags, UnreliableTransport};
 use comms::mac::noop::NoopMac;
 use comms::net::NoopNetwork;
 use comms::phy::loopback::LoopbackPhy;
@@ -311,6 +311,101 @@ fn reliable_tx_no_ack_gives_tx_fail_after_exhaustion() {
     capture.with_behavior(|c| {
         assert_eq!(c.fail, 1, "TX_FAIL must be delivered after retransmit exhaustion");
         assert_eq!(c.done, 0);
+    });
+}
+
+// ── Regression: a pure-ACK PDU must resolve `WaitingAck`, not just a
+//    data-bearing reply — see stack.rs's `handle_rx_done` / `transport_state`
+//    doc comments. Before the fix, ACK-received was inferred from
+//    `receive_raw`'s `Ok(Some(..))` shape; `ReliableTransport::up()` reports a
+//    pure ACK as `Ok(false)` (no application payload), so that inference
+//    never fired and the AO stayed in `WaitingAck` forever — the whole TX
+//    path (including `pending_tx`) wedged behind it. ─────────────────────────
+
+/// A PHY whose `transmit()` does nothing (unlike `LoopbackPhy`, it never
+/// echoes) and whose RX queue is seeded up front — models a real peer's ACK
+/// arriving over the air, decoupled from whatever bytes we transmitted.
+struct AckPhy {
+    rx_queue: std::collections::VecDeque<Vec<u8>>,
+    pending: Option<Vec<u8>>,
+}
+
+impl AckPhy {
+    fn new() -> Self {
+        Self { rx_queue: std::collections::VecDeque::new(), pending: None }
+    }
+
+    fn queue_rx(&mut self, bytes: Vec<u8>) {
+        self.rx_queue.push_back(bytes);
+    }
+}
+
+impl RfPhy for AckPhy {
+    fn init(&mut self) -> HalResult<()> { Ok(()) }
+    fn set_mode(&mut self, _mode: RadioMode) -> HalResult<()> { Ok(()) }
+    fn configure_tx(&mut self, _cfg: &RfTxConfig) -> HalResult<()> { Ok(()) }
+    fn configure_rx(&mut self, _cfg: &RfRxConfig) -> HalResult<()> { Ok(()) }
+    fn transmit(&mut self, _payload: &[u8]) -> HalResult<()> { Ok(()) }
+    fn read_rx(&mut self, buf: &mut [u8], _meta: &RxMetadata) -> HalResult<()> {
+        if let Some(bytes) = self.pending.take() {
+            let len = bytes.len().min(buf.len());
+            buf[..len].copy_from_slice(&bytes[..len]);
+        }
+        Ok(())
+    }
+    fn poll_irq(&mut self) -> HalResult<Option<PhyEvent>> {
+        if let Some(bytes) = self.rx_queue.pop_front() {
+            let meta = RxMetadata { pkt_len: bytes.len() as u8, ..Default::default() };
+            self.pending = Some(bytes);
+            Ok(Some(PhyEvent::RxDone(meta)))
+        } else {
+            Ok(None)
+        }
+    }
+    fn clear_irq(&mut self) -> HalResult<()> { Ok(()) }
+    fn rssi(&mut self) -> HalResult<i16> { Ok(-50) }
+    fn chip_name(&self) -> &'static str { "AckOnly" }
+}
+
+type AckRfAo = RfStackAO<ReliableTransport, NoopNetwork, NoopMac, AckPhy>;
+
+#[test]
+fn reliable_tx_pure_ack_delivers_done_to_app() {
+    let capture = ActiveObject::new(ActiveObjectId(0), 1, CaptureAo { done: 0, fail: 0, frames: vec![] });
+
+    // Pre-seed a pure-ACK PDU for SEQ 0 (the sequence number
+    // `ReliableTransport::down()` assigns to the first frame it sends):
+    // [SEQ=0, ACK=0, FLAGS=IS_ACK, LEN=0, LENHI=0].
+    let mut phy = AckPhy::new();
+    phy.queue_rx(vec![0, 0, TransportFlags::IS_ACK, 0, 0]);
+
+    let stack = RfStack::new(ReliableTransport::new(2), NoopNetwork, NoopMac, phy);
+    let rf_ao: Arc<ActiveObject<AckRfAo>> = ActiveObject::new(
+        ActiveObjectId(1), 2,
+        RfStackAO::new(stack, eu868_tx(), eu868_rx(), arc_as_runnable(Arc::clone(&capture))),
+    );
+    let kernel = Kernel::builder()
+        .register(arc_as_runnable(Arc::clone(&rf_ao)))
+        .register(arc_as_runnable(Arc::clone(&capture)))
+        .build();
+    kernel.start();
+
+    arc_as_runnable(Arc::clone(&rf_ao)).post(DynEvent::with_arc(
+        RF_TX_REQ_SIG,
+        Arc::new(RfTxReqPayload::with_reliability(b"reliable".to_vec(), 1, true)),
+    ));
+    kernel.dispatch_once(); // AO transmits, enters WaitingAck (AckPhy.transmit is a no-op)
+
+    // Pump surfaces the pre-seeded ACK PDU as an RxDone event.
+    let mut ctx = ActiveContext::new(RF_AO_ID, None);
+    rf_ao.with_behavior_mut(|rf| { rf.pump(&mut ctx); });
+    kernel.dispatch_once(); // handle_rx_done processes the ACK -> RF_TX_DONE_SIG
+    kernel.dispatch_once(); // capture AO receives it
+
+    capture.with_behavior(|c| {
+        assert_eq!(c.done, 1, "a pure ACK PDU must resolve WaitingAck and notify the app");
+        assert_eq!(c.fail, 0);
+        assert!(c.frames.is_empty(), "a pure ACK carries no application payload");
     });
 }
 

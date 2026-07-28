@@ -135,6 +135,10 @@ impl Layer for ReliableTransport {
     fn on_timeout(&mut self) -> TransportAction {
         self.on_timeout()
     }
+
+    fn transport_state(&self) -> Option<TransportState> {
+        Some(self.state)
+    }
 }
 
 /// Flag constants for the transport header FLAGS byte.

@@ -8,7 +8,7 @@ use qf::active::{ActiveBehavior, ActiveContext, ActiveObjectRef, ActiveObjectId}
 use qf::event::DynEvent;
 use qf::time::{TimeEvent, TimeEventConfig};
 use crate::events::*;
-use crate::transport::TransportAction;
+use crate::transport::{TransportAction, TransportState};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Layer trait
@@ -46,6 +46,19 @@ pub trait Layer: Send {
     /// layer keeps the no-op default of `(0, 0)`.
     fn last_rx_meta(&self) -> (u16, u8) {
         (0, 0)
+    }
+
+    /// Current reliable-transport state, if this layer tracks one.
+    ///
+    /// Lets a caller detect "the outstanding ACK just resolved" from the
+    /// transport's own state instead of inferring it from `up()`'s
+    /// `Ok`/`Err`/`Some`/`None` shape — a pure ACK PDU is consumed inside
+    /// `up()` and reported as `Ok(false)` (no payload for the app), so that
+    /// shape alone can't distinguish "ACK received" from "frame dropped".
+    /// Only meaningful for a reliable transport layer; every other layer
+    /// keeps the no-op default of `None`.
+    fn transport_state(&self) -> Option<TransportState> {
+        None
     }
 }
 
@@ -445,26 +458,15 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
         if self.stack.phy.read_rx(self.rx_frame.raw_buf_for_dma(), &meta).is_err() { return; }
         self.rx_frame.set_received_len(meta.pkt_len as usize);
 
+        let was_waiting_ack = self.state == AoState::WaitingAck;
+
         match self.stack.receive_raw(&mut self.rx_frame) {
             Ok(Some(app_frame)) => {
-                // Check if this is an ACK for our outstanding reliable TX.
-                // (The transport layer's `up` already mutated transport state;
-                //  here we just check whether we were waiting.)
-                if self.state == AoState::WaitingAck {
-                    // Transport's `up` already called `on_ack_received` internally
-                    // via the IS_ACK flag path.  If it returned Some(frame), that
-                    // means a data frame (not just ACK) arrived — pass it up anyway.
-                    // The ACK→TxComplete path is signalled by on_ack_received inside
-                    // transport.up(), but we need to act on the state change here.
-                    // Check: if transport is now Idle, the ACK was accepted.
-                    // (For a data-bearing ACK the payload goes to app too.)
-                    self.retransmit_frame = None;
-                    if let Some(ref timer) = self.retransmit_timer { timer.disarm(); }
-                    self.app_ao.post(DynEvent::empty_dyn(RF_TX_DONE_SIG));
-                    self.state = AoState::Idle;
-                }
-
-                // Deliver received payload to application.
+                // Deliver received payload to application. A pure ACK PDU
+                // never reaches here — `ReliableTransport::up` reports it as
+                // `Ok(false)` — so any frame here is real data, even one that
+                // happens to arrive while `WaitingAck` (the transport-state
+                // check below, not this arm, is what detects the ACK itself).
                 let mut data = heapless::Vec::new();
                 if data.extend_from_slice(app_frame.payload()).is_ok() {
                     let (src, kind) = self.stack.network.last_rx_meta();
@@ -481,11 +483,27 @@ impl<T: Layer, N: Layer, M: Layer, P: RfPhy> RfStackAO<T, N, M, P> {
                 let _ = ctx.emit_trace(crate::records::RF_NET_ROUTE, &[meta.rssi_dbm as u8]);
             }
             Ok(None) => {
-                // Frame dropped by stack (bad MIC, duplicate, wrong DevAddr, etc.)
+                // Frame dropped by stack (bad MIC, duplicate, wrong DevAddr,
+                // or a pure ACK PDU — see the transport-state check below).
             }
             Err(e) => {
                 ceprintln!("RfStackAO: RX stack error: {e}");
             }
+        }
+
+        // Detect ACK completion from the transport layer's own state rather
+        // than receive_raw's Some/None shape: a pure ACK PDU is consumed
+        // inside `transport.up()` and reported as `Ok(false)`, so inferring
+        // "ACK received" from `Ok(Some(..))` missed it entirely (the AO got
+        // stuck in `WaitingAck` forever) while also misclassifying an
+        // unrelated data frame arriving mid-wait as if it were the ACK.
+        if was_waiting_ack
+            && self.stack.transport.transport_state() == Some(TransportState::Idle)
+        {
+            self.retransmit_frame = None;
+            if let Some(ref timer) = self.retransmit_timer { timer.disarm(); }
+            self.app_ao.post(DynEvent::empty_dyn(RF_TX_DONE_SIG));
+            self.state = AoState::Idle;
         }
 
         // Return to idle regardless of RX outcome — stack is ready for next frame.
