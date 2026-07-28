@@ -242,7 +242,7 @@ mod tests {
         let kernel = build_kernel(ao);
         kernel.start();
 
-        let event = new_time_event(ao_id, TimeEventConfig::new(Signal(21)));
+        let event = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(21)));
         event.set_trace(kernel.trace_hook());
 
         let mut wheel = QkTimerWheel::new(kernel.clone());
@@ -253,7 +253,7 @@ mod tests {
         wheel.tick().expect("tick should succeed");
 
         let entries = log.lock().unwrap();
-        assert_eq!(entries.as_slice(), &[(ao_id, Signal(21))]);
+        assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(21))]);
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
         let kernel = build_kernel(ao);
         kernel.start();
 
-        let event = new_time_event(ao_id, TimeEventConfig::new(Signal(22)));
+        let event = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(22)));
         event.set_trace(kernel.trace_hook());
         event.set_trace_meta(TimeEventTraceInfo {
             time_event_addr: 0xAA,
@@ -285,7 +285,7 @@ mod tests {
         assert!(entries.len() >= 2);
         assert!(entries
             .iter()
-            .all(|(id, sig)| *id == ao_id && *sig == Signal(22)));
+            .all(|(id, sig)| *id == ao_id && *sig == Signal::from_raw(22)));
     }
 
     #[test]
@@ -297,11 +297,11 @@ mod tests {
         kernel.start();
 
         // Rate 0 event
-        let event0 = new_time_event(ao_id, TimeEventConfig::new(Signal(25)).with_tick_rate(0));
+        let event0 = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(25)).with_tick_rate(0));
         event0.arm(1, None);
 
         // Rate 1 event
-        let event1 = new_time_event(ao_id, TimeEventConfig::new(Signal(26)).with_tick_rate(1));
+        let event1 = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(26)).with_tick_rate(1));
         event1.arm(1, None);
 
         let mut wheel = QkTimerWheel::new(kernel.clone());
@@ -316,7 +316,7 @@ mod tests {
         wheel.tick_rate(0).expect("tick 0 should succeed");
         {
             let entries = log.lock().unwrap();
-            assert_eq!(entries.as_slice(), &[(ao_id, Signal(25))]);
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(25))]);
         }
 
         assert!(wheel.no_active(0));
@@ -326,7 +326,7 @@ mod tests {
         wheel.tick_rate(1).expect("tick 1 should succeed");
         {
             let entries = log.lock().unwrap();
-            assert_eq!(entries.as_slice(), &[(ao_id, Signal(25)), (ao_id, Signal(26))]);
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(25)), (ao_id, Signal::from_raw(26))]);
         }
 
         assert!(wheel.no_active(1));

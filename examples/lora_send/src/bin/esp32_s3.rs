@@ -69,7 +69,7 @@ fn sender_initial(_sm: &mut LoRaSenderData, _e: &DynEvent) -> QHsmResult<LoRaSen
 }
 
 fn sending(sm: &mut LoRaSenderData, e: &DynEvent) -> QHsmResult<LoRaSenderData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             println!("LoRaSenderAO: started — sending every 5 ticks");
             sm.timer.arm(5, Some(5));

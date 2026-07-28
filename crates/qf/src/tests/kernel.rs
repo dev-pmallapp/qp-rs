@@ -32,8 +32,8 @@ fn queue_high_watermark_is_sticky() {
     assert_eq!(ao.queue_len(), 0);
     assert_eq!(ao.queue_high_watermark(), 0);
 
-    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal(1)));
-    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal(2)));
+    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal::from_raw(1)));
+    ActiveRunnable::post(r, DynEvent::empty_dyn(Signal::from_raw(2)));
     assert_eq!(ao.queue_len(), 2);
     assert_eq!(ao.queue_high_watermark(), 2);
 
@@ -53,11 +53,11 @@ fn kernel_delivers_events() {
     kernel.start();
 
     kernel
-        .post(ActiveObjectId::new(1), DynEvent::empty_dyn(Signal(0x42)))
+        .post(ActiveObjectId::new(1), DynEvent::empty_dyn(Signal::from_raw(0x42)))
         .unwrap();
     kernel.run_until_idle();
 
     let events = probe.events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0], Signal(0x42));
+    assert_eq!(events[0], Signal::from_raw(0x42));
 }

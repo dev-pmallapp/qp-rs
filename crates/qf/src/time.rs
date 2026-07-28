@@ -557,7 +557,7 @@ impl TimeEvent {
                 let mut pos = 0;
                 buf[pos..pos + 8].copy_from_slice(&meta.time_event_addr.to_le_bytes());
                 pos += 8;
-                buf[pos..pos + 2].copy_from_slice(&signal.0.to_le_bytes());
+                buf[pos..pos + 2].copy_from_slice(&signal.raw().to_le_bytes());
                 pos += 2;
                 buf[pos..pos + 8].copy_from_slice(&meta.target_addr.to_le_bytes());
                 pos += 8;

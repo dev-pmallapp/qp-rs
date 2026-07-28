@@ -10,23 +10,27 @@ use qf::event::Signal;
 use hal::rf::PhyEvent;
 
 // ── Application → RfStackAO ───────────────────────────────────────────────
-pub const RF_TX_REQ_SIG:          Signal = Signal(20);
-pub const RF_RX_START_SIG:        Signal = Signal(21);  // enter RX mode
+pub const RF_TX_REQ_SIG:          Signal = Signal::user(20);
+pub const RF_RX_START_SIG:        Signal = Signal::user(21);  // enter RX mode
 
 // ── PHY ISR → RfStackAO (posted from port ISR bridge) ────────────────────
-pub const RF_PHY_IRQ_SIG:         Signal = Signal(22);  // generic DIO fire
-pub const RF_PHY_TX_DONE_SIG:     Signal = Signal(23);
-pub const RF_PHY_RX_DONE_SIG:     Signal = Signal(24);
-pub const RF_PHY_RX_TIMEOUT_SIG:  Signal = Signal(25);
-pub const RF_PHY_CRC_ERROR_SIG:   Signal = Signal(26);
+pub const RF_PHY_IRQ_SIG:         Signal = Signal::user(22);  // generic DIO fire
+pub const RF_PHY_TX_DONE_SIG:     Signal = Signal::user(23);
+pub const RF_PHY_RX_DONE_SIG:     Signal = Signal::user(24);
+pub const RF_PHY_RX_TIMEOUT_SIG:  Signal = Signal::user(25);
+pub const RF_PHY_CRC_ERROR_SIG:   Signal = Signal::user(26);
 
 // ── RfStackAO → Application ───────────────────────────────────────────────
-pub const RF_TX_DONE_SIG:         Signal = Signal(27);
-pub const RF_TX_FAIL_SIG:         Signal = Signal(28);
-pub const RF_RX_FRAME_SIG:        Signal = Signal(29);  // payload received
+pub const RF_TX_DONE_SIG:         Signal = Signal::user(27);
+pub const RF_TX_FAIL_SIG:         Signal = Signal::user(28);
+pub const RF_RX_FRAME_SIG:        Signal = Signal::user(29);  // payload received
 
 // ── Internal ──────────────────────────────────────────────────────────────
-pub const RF_TRANSPORT_TIMEOUT_SIG: Signal = Signal(30);
+pub const RF_TRANSPORT_TIMEOUT_SIG: Signal = Signal::user(30);
+
+/// This block's reservation (`20..=30`), for the tree-wide
+/// `assert_no_overlap` registry — see [`qf::SignalBlock`].
+pub const RF_SIGNAL_BLOCK: qf::SignalBlock = qf::SignalBlock::new("qp_rs::comms::RF_*", 20, 11);
 
 /// Broadcast destination address for the [`crate::net::Network`] layer.
 pub const NET_BROADCAST_ADDR: u16 = 0xFFFF;

@@ -65,7 +65,7 @@ fn initial(sm: &mut TestSm, _e: &DynEvent) -> QHsmResult<TestSm> {
 }
 
 fn s(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => { sm.trace.push("s-ENTRY"); q_handled!() }
         Q_EXIT_SIG_VAL  => { sm.trace.push("s-EXIT");  q_handled!() }
         Q_INIT_SIG_VAL  => { sm.trace.push("s-INIT");  q_tran!(s11) }
@@ -76,7 +76,7 @@ fn s(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
 }
 
 fn s1(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => { sm.trace.push("s1-ENTRY"); q_handled!() }
         Q_EXIT_SIG_VAL  => { sm.trace.push("s1-EXIT");  q_handled!() }
         Q_INIT_SIG_VAL  => { sm.trace.push("s1-INIT");  q_tran!(s11) }
@@ -100,7 +100,7 @@ fn s1(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
 }
 
 fn s11(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => { sm.trace.push("s11-ENTRY"); q_handled!() }
         Q_EXIT_SIG_VAL  => { sm.trace.push("s11-EXIT");  q_handled!() }
         G_SIG => { sm.trace.push("s11-G"); q_tran!(s1) }
@@ -109,7 +109,7 @@ fn s11(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
 }
 
 fn s2(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => { sm.trace.push("s2-ENTRY"); q_handled!() }
         Q_EXIT_SIG_VAL  => { sm.trace.push("s2-EXIT");  q_handled!() }
         Q_INIT_SIG_VAL  => { sm.trace.push("s2-INIT");  q_tran!(s21) }
@@ -120,7 +120,7 @@ fn s2(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
 }
 
 fn s21(sm: &mut TestSm, e: &DynEvent) -> QHsmResult<TestSm> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => { sm.trace.push("s21-ENTRY"); q_handled!() }
         Q_EXIT_SIG_VAL  => { sm.trace.push("s21-EXIT");  q_handled!() }
         _ => q_super!(s2),
@@ -134,7 +134,7 @@ fn make_hsm() -> QHsm<TestSm> {
 }
 
 fn dispatch(hsm: &mut QHsm<TestSm>, sig: u16) {
-    let e = DynEvent::empty_dyn(Signal(sig));
+    let e = DynEvent::empty_dyn(Signal::from_raw(sig));
     hsm.dispatch(&e);
 }
 
@@ -366,11 +366,11 @@ fn hsm_as_active_behavior_via_kernel() {
     }
 
     fn rec_active(sm: &mut Recorder, e: &DynEvent) -> QHsmResult<Recorder> {
-        match e.signal().0 {
+        match e.signal().raw() {
             // Reserved signals (0=EMPTY, 1=ENTRY, 2=EXIT, 3=INIT) — do not log.
             0..=3 => q_handled!(),
             sig => {
-                sm.trace.lock().unwrap().push(Signal(sig));
+                sm.trace.lock().unwrap().push(Signal::from_raw(sig));
                 q_handled!()
             }
         }
@@ -382,13 +382,13 @@ fn hsm_as_active_behavior_via_kernel() {
     kernel.start();
 
     kernel
-        .post(ActiveObjectId::new(1), DynEvent::empty_dyn(Signal(42)))
+        .post(ActiveObjectId::new(1), DynEvent::empty_dyn(Signal::from_raw(42)))
         .unwrap();
     kernel.run_until_idle();
 
     let recorded = log.lock().unwrap();
     assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0], Signal(42));
+    assert_eq!(recorded[0], Signal::from_raw(42));
 }
 
 #[test]

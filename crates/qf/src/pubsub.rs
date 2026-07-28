@@ -57,7 +57,7 @@ impl PubSubTable {
     }
 
     fn idx(&self, signal: Signal) -> usize {
-        let idx = signal.0 as usize;
+        let idx = signal.raw() as usize;
         assert!(idx <= self.max_signal as usize, "signal out of range");
         idx
     }

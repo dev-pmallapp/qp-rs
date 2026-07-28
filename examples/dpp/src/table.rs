@@ -99,7 +99,7 @@ pub(crate) fn table_initial(_sm: &mut TableData, _e: &DynEvent) -> QHsmResult<Ta
 }
 
 pub(crate) fn active(_sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_INIT_SIG_VAL => {
             q_tran!(serving)
         }
@@ -111,7 +111,7 @@ pub(crate) fn active(_sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData>
 }
 
 pub(crate) fn serving(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             println!("Table is ready");
             for idx in 0..N_PHILO {
@@ -143,7 +143,7 @@ pub(crate) fn serving(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData>
 }
 
 pub(crate) fn paused(sm: &mut TableData, e: &DynEvent) -> QHsmResult<TableData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             println!("Table paused");
             if let Some(port) = PORT.get() {

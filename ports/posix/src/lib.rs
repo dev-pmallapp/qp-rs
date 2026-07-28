@@ -242,7 +242,7 @@ mod tests {
         )
         .expect("runtime should build");
 
-        let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal(30))));
+        let event = Arc::new(TimeEvent::new(ao_id, TimeEventConfig::new(Signal::from_raw(30))));
         runtime.register_time_event(Arc::clone(&event));
 
         event.arm(1, None);
@@ -251,7 +251,7 @@ mod tests {
 
         {
             let entries = log.lock().unwrap();
-            assert_eq!(entries.as_slice(), &[(ao_id, Signal(30))]);
+            assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(30))]);
         }
 
         assert!(!runtime.has_pending_work());

@@ -357,21 +357,21 @@ impl QkKernel {
 
     fn emit_subscribe(&self, priority: u8, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
         }
     }
 
     fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
         }
     }
 
     fn emit_publish(&self, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
         }
     }
@@ -603,18 +603,18 @@ mod tests {
         kernel.start();
 
         kernel
-            .post(low_id, DynEvent::empty_dyn(Signal(1)))
+            .post(low_id, DynEvent::empty_dyn(Signal::from_raw(1)))
             .expect("low prio post");
         kernel
-            .post(high_id, DynEvent::empty_dyn(Signal(2)))
+            .post(high_id, DynEvent::empty_dyn(Signal::from_raw(2)))
             .expect("high prio post");
 
         kernel.run_until_idle();
 
         let events = log.lock().unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0], (high_id, Signal(2)));
-        assert_eq!(events[1], (low_id, Signal(1)));
+        assert_eq!(events[0], (high_id, Signal::from_raw(2)));
+        assert_eq!(events[1], (low_id, Signal::from_raw(1)));
         Ok(())
     }
 
@@ -645,10 +645,10 @@ mod tests {
         kernel.scheduler().configure_active(base_prio, 4);
 
         kernel
-            .post(mid_id, DynEvent::empty_dyn(Signal(1)))
+            .post(mid_id, DynEvent::empty_dyn(Signal::from_raw(1)))
             .expect("mid prio post");
         kernel
-            .post(high_id, DynEvent::empty_dyn(Signal(2)))
+            .post(high_id, DynEvent::empty_dyn(Signal::from_raw(2)))
             .expect("high prio post");
 
         assert!(kernel.dispatch_once(), "high priority should preempt");
@@ -656,7 +656,7 @@ mod tests {
         {
             let entries = log.lock().unwrap();
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0], (high_id, Signal(2)));
+            assert_eq!(entries[0], (high_id, Signal::from_raw(2)));
         }
 
         assert!(kernel.scheduler().is_ready(mid_prio));
@@ -677,11 +677,11 @@ mod tests {
         kernel.start();
 
         kernel
-            .post_and_run(ao_id, DynEvent::empty_dyn(Signal(9)))
+            .post_and_run(ao_id, DynEvent::empty_dyn(Signal::from_raw(9)))
             .expect("post should succeed");
 
         let entries = log.lock().unwrap();
-        assert_eq!(entries.as_slice(), &[(ao_id, Signal(9))]);
+        assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(9))]);
         Ok(())
     }
 
@@ -702,7 +702,7 @@ mod tests {
         assert!(matches!(status, SchedStatus::Locked(_)));
 
         kernel
-            .post(high_id, DynEvent::empty_dyn(Signal(11)))
+            .post(high_id, DynEvent::empty_dyn(Signal::from_raw(11)))
             .expect("post should succeed");
 
         assert!(
@@ -713,7 +713,7 @@ mod tests {
         kernel.unlock_scheduler(status);
 
         let entries = log.lock().unwrap();
-        assert_eq!(entries.as_slice(), &[(high_id, Signal(11))]);
+        assert_eq!(entries.as_slice(), &[(high_id, Signal::from_raw(11))]);
         assert!(!kernel.scheduler().is_ready(6));
         Ok(())
     }
@@ -735,12 +735,12 @@ mod tests {
 
         kernel.start();
 
-        kernel.publish_and_run(Signal(42), DynEvent::empty_dyn(Signal(0)));
+        kernel.publish_and_run(Signal::from_raw(42), DynEvent::empty_dyn(Signal::from_raw(0)));
 
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0], (high_id, Signal(42)));
-        assert_eq!(entries[1], (low_id, Signal(42)));
+        assert_eq!(entries[0], (high_id, Signal::from_raw(42)));
+        assert_eq!(entries[1], (low_id, Signal::from_raw(42)));
         Ok(())
     }
 
@@ -759,7 +759,7 @@ mod tests {
         assert!(!kernel.has_pending_work());
 
         kernel
-            .post(id, DynEvent::empty_dyn(Signal(1)))
+            .post(id, DynEvent::empty_dyn(Signal::from_raw(1)))
             .expect("post should succeed");
         assert!(kernel.has_pending_work());
 
@@ -811,24 +811,24 @@ mod tests {
 
         kernel.start();
 
-        // Subscribe low to Signal(20), high to Signal(30)
-        kernel.subscribe(Signal(20), 2);
-        kernel.subscribe(Signal(30), 5);
+        // Subscribe low to Signal::from_raw(20), high to Signal::from_raw(30)
+        kernel.subscribe(Signal::from_raw(20), 2);
+        kernel.subscribe(Signal::from_raw(30), 5);
 
-        // Publish Signal(20)
-        kernel.publish_and_run(Signal(20), DynEvent::empty_dyn(Signal(0)));
+        // Publish Signal::from_raw(20)
+        kernel.publish_and_run(Signal::from_raw(20), DynEvent::empty_dyn(Signal::from_raw(0)));
         {
             let entries = log.lock().unwrap();
-            assert_eq!(entries.as_slice(), &[(low_id, Signal(20))]);
+            assert_eq!(entries.as_slice(), &[(low_id, Signal::from_raw(20))]);
         }
 
-        // Publish Signal(30)
-        kernel.publish_and_run(Signal(30), DynEvent::empty_dyn(Signal(0)));
+        // Publish Signal::from_raw(30)
+        kernel.publish_and_run(Signal::from_raw(30), DynEvent::empty_dyn(Signal::from_raw(0)));
         {
             let entries = log.lock().unwrap();
             assert_eq!(
                 entries.as_slice(),
-                &[(low_id, Signal(20)), (high_id, Signal(30))]
+                &[(low_id, Signal::from_raw(20)), (high_id, Signal::from_raw(30))]
             );
         }
         Ok(())
@@ -887,7 +887,7 @@ mod tests {
         kernel.start();
 
         for i in 0..30 {
-            kernel.post(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+            kernel.post(ao_id, DynEvent::empty_dyn(Signal::from_raw(i))).unwrap();
         }
 
         let mut handles = Vec::new();

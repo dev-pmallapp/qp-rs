@@ -49,7 +49,7 @@ pub(crate) fn philo_initial(_sm: &mut PhiloData, _e: &DynEvent) -> QHsmResult<Ph
 }
 
 pub(crate) fn thinking(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             let ticks = sm.think_ticks();
             sm.timer.arm(ticks, None);
@@ -81,7 +81,7 @@ pub(crate) fn thinking(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData
 }
 
 pub(crate) fn hungry(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             sm.post_table(HUNGRY_SIG);
             sm.log_state("hungry");
@@ -95,7 +95,7 @@ pub(crate) fn hungry(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> 
 }
 
 pub(crate) fn eating(sm: &mut PhiloData, e: &DynEvent) -> QHsmResult<PhiloData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             let ticks = sm.eat_ticks();
             sm.timer.arm(ticks, None);

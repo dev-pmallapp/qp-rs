@@ -522,7 +522,7 @@ mod safety_margin_tests {
     use crate::event::{DynEvent, Signal};
 
     fn ev(sig: u16) -> DynEvent {
-        DynEvent::empty_dyn(Signal(sig))
+        DynEvent::empty_dyn(Signal::from_raw(sig))
     }
 
     #[test]
@@ -560,7 +560,7 @@ mod static_tests {
     use crate::event::{DynEvent, Signal};
 
     fn ev(sig: u16) -> DynEvent {
-        DynEvent::empty_dyn(Signal(sig))
+        DynEvent::empty_dyn(Signal::from_raw(sig))
     }
 
     #[test]
@@ -593,10 +593,10 @@ mod static_tests {
         assert_eq!(q.len(), 4);
         assert_eq!(q.get_free(), 0);
 
-        assert_eq!(q.get().unwrap().signal(), Signal(1));
-        assert_eq!(q.get().unwrap().signal(), Signal(2));
-        assert_eq!(q.get().unwrap().signal(), Signal(3));
-        assert_eq!(q.get().unwrap().signal(), Signal(4));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(1));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(2));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(3));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(4));
         assert!(q.get().is_none());
     }
 
@@ -615,8 +615,8 @@ mod static_tests {
         let q: StaticEQueue<3> = StaticEQueue::new();
         assert!(q.post(ev(1), 0));
         assert!(q.post_lifo(ev(99)));
-        assert_eq!(q.get().unwrap().signal(), Signal(99));
-        assert_eq!(q.get().unwrap().signal(), Signal(1));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(99));
+        assert_eq!(q.get().unwrap().signal(), Signal::from_raw(1));
     }
 
     #[test]

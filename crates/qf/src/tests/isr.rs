@@ -71,9 +71,9 @@ fn kernel_run_processes_events_and_stop_exits_loop() {
     let kernel = share_kernel(Kernel::builder().register(ao).build());
 
     // Post 3 events before starting run.
-    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal(1))).unwrap();
-    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal(2))).unwrap();
-    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal(3))).unwrap();
+    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal::from_raw(1))).unwrap();
+    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal::from_raw(2))).unwrap();
+    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal::from_raw(3))).unwrap();
 
     // run() with a tick_fn that stops the kernel immediately.
     // The loop still drains all pending events before checking stop_flag.
@@ -93,7 +93,7 @@ fn has_pending_work_reflects_queue_state() {
     kernel.start();
 
     assert!(!kernel.has_pending_work());
-    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal(1))).unwrap();
+    kernel.post(ao_id, crate::event::DynEvent::empty_dyn(Signal::from_raw(1))).unwrap();
     assert!(kernel.has_pending_work());
     kernel.run_until_idle();
     assert!(!kernel.has_pending_work());
@@ -111,7 +111,7 @@ fn post_from_isr_delivers_event() {
     kernel.start();
 
     crate::qk_isr_entry!();
-    kernel.post_from_isr(ao_id, crate::event::DynEvent::empty_dyn(Signal(5))).unwrap();
+    kernel.post_from_isr(ao_id, crate::event::DynEvent::empty_dyn(Signal::from_raw(5))).unwrap();
     crate::qk_isr_exit!();
 
     kernel.run_until_idle();
@@ -131,7 +131,7 @@ fn publish_from_isr_broadcasts_to_all_aos() {
     kernel.start();
 
     crate::qk_isr_entry!();
-    kernel.publish_from_isr(Signal(7), crate::event::DynEvent::empty_dyn(Signal(7)));
+    kernel.publish_from_isr(Signal::from_raw(7), crate::event::DynEvent::empty_dyn(Signal::from_raw(7)));
     crate::qk_isr_exit!();
 
     kernel.run_until_idle();
@@ -148,7 +148,7 @@ fn rearm_updates_counter_without_disarm_cycle() {
     let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x20)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(0x20)));
     te.arm(5, None);
     assert!(te.is_armed());
 
@@ -171,7 +171,7 @@ fn was_disarmed_set_on_explicit_disarm() {
     let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x21)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(0x21)));
     te.arm(5, None);
     assert!(!te.was_disarmed(), "not yet disarmed");
     te.disarm();
@@ -187,7 +187,7 @@ fn was_disarmed_set_when_oneshot_fires() {
     let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x22)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(0x22)));
     let mut wheel = TimerWheel::new(kernel.clone());
     wheel.register(te.clone());
 
@@ -211,7 +211,7 @@ fn tick_from_isr_advances_timer_wheel() {
     let kernel = share_kernel(Kernel::builder().register(ao).build());
     kernel.start();
 
-    let te = new_time_event(ao_id, TimeEventConfig::new(Signal(0x30)));
+    let te = new_time_event(ao_id, TimeEventConfig::new(Signal::from_raw(0x30)));
     let mut wheel = TimerWheel::new(kernel.clone());
     wheel.register(te.clone());
 

@@ -687,21 +687,21 @@ impl QvKernel {
 
     fn emit_subscribe(&self, priority: u8, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(12, &[priority, sig_bytes[0], sig_bytes[1]], true);
         }
     }
 
     fn emit_unsubscribe(&self, priority: u8, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(13, &[priority, sig_bytes[0], sig_bytes[1]], true);
         }
     }
 
     fn emit_publish(&self, signal: Signal) {
         if let Some(trace) = &self.trace {
-            let sig_bytes = signal.0.to_le_bytes();
+            let sig_bytes = signal.raw().to_le_bytes();
             let _ = trace(26, &[sig_bytes[0], sig_bytes[1]], true);
         }
     }
@@ -853,7 +853,7 @@ mod tests {
         let kernel = QvKernel::builder().register(ao).build();
         kernel.start();
 
-        kernel.post(ao_id, DynEvent::empty_dyn(Signal(42))).unwrap();
+        kernel.post(ao_id, DynEvent::empty_dyn(Signal::from_raw(42))).unwrap();
         assert!(kernel.has_pending_work());
         assert!(kernel.dispatch_once());
         assert!(!kernel.has_pending_work());
@@ -884,7 +884,7 @@ mod tests {
 
         // Queue multiple events to the SAME Active Object
         for i in 0..30 {
-            kernel.post(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+            kernel.post(ao_id, DynEvent::empty_dyn(Signal::from_raw(i))).unwrap();
         }
 
         // Spawn multiple worker threads representing core runloops

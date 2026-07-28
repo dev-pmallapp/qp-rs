@@ -145,7 +145,7 @@ impl QsRxContext {
                 if let Some(kernel) = KERNEL.get() {
                     let _ = kernel.post(
                         ActiveObjectId::new(prio),
-                        DynEvent::empty_dyn(Signal(signal)),
+                        DynEvent::empty_dyn(Signal::from_raw(signal)),
                     );
                 }
                 self.ack_done(rx_cmd::EVENT);

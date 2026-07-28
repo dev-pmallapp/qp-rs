@@ -55,7 +55,7 @@ use hal::lora::LoRaModulation;
 const SENDER_ID: ActiveObjectId = ActiveObjectId::new(1);
 const RF_AO_ID:  ActiveObjectId = ActiveObjectId::new(2);
 
-const TIMEOUT_SIG: Signal = Signal(10);
+const TIMEOUT_SIG: Signal = Signal::user(10);
 
 /// Concrete RF AO type for the host stack, so the loop can `pump()` it directly.
 type HostRfAo = RfStackAO<UnreliableTransport, NoopNetwork, LoRaWanMac, NullRf>;
@@ -76,7 +76,7 @@ fn sender_initial(_sm: &mut LoRaSenderData, _e: &DynEvent) -> QHsmResult<LoRaSen
 }
 
 fn sending(sm: &mut LoRaSenderData, e: &DynEvent) -> QHsmResult<LoRaSenderData> {
-    match e.signal().0 {
+    match e.signal().raw() {
         Q_ENTRY_SIG_VAL => {
             println!("LoRaSenderAO: started — sending every 5 ticks");
             sm.timer.arm(5, Some(5));
@@ -94,7 +94,7 @@ fn sending(sm: &mut LoRaSenderData, e: &DynEvent) -> QHsmResult<LoRaSenderData> 
             }
             q_handled!()
         }
-        sig if sig == RF_TX_DONE_SIG.0 => {
+        sig if sig == RF_TX_DONE_SIG.raw() => {
             println!("LoRaSenderAO: TX done ✓");
             q_handled!()
         }
@@ -117,9 +117,9 @@ fn init_port() -> Arc<PosixPort> {
 fn emit_dictionaries(port: &PosixPort) -> Result<(), TraceError> {
     port.emit_target_info(&TargetInfo::default())?;
     port.emit_usr_dict(LORA_TX_PKT, "LORA_TX_PKT")?;
-    port.emit_sig_dict(RF_TX_REQ_SIG.0, 0, "RF_TX_REQ_SIG")?;
-    port.emit_sig_dict(RF_TX_DONE_SIG.0, 0, "RF_TX_DONE_SIG")?;
-    port.emit_sig_dict(TIMEOUT_SIG.0, 0, "TIMEOUT_SIG")?;
+    port.emit_sig_dict(RF_TX_REQ_SIG.raw(), 0, "RF_TX_REQ_SIG")?;
+    port.emit_sig_dict(RF_TX_DONE_SIG.raw(), 0, "RF_TX_DONE_SIG")?;
+    port.emit_sig_dict(TIMEOUT_SIG.raw(), 0, "TIMEOUT_SIG")?;
     Ok(())
 }
 

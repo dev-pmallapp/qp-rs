@@ -32,7 +32,7 @@ fn time_event_fires_after_tick() {
     kernel.start();
 
     let mut wheel = TimerWheel::new(kernel.clone());
-    let time_evt = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)));
+    let time_evt = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal::from_raw(0x10)));
     time_evt.arm(1, None);
     wheel.register(time_evt);
 
@@ -41,7 +41,7 @@ fn time_event_fires_after_tick() {
 
     let events = probe.events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0], Signal(0x10));
+    assert_eq!(events[0], Signal::from_raw(0x10));
 }
 
 #[test]
@@ -55,12 +55,12 @@ fn multi_tick_rate_domains() {
     let mut wheel = TimerWheel::new(kernel.clone());
 
     // Event on domain 0
-    let time_evt0 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x10)).with_tick_rate(0));
+    let time_evt0 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal::from_raw(0x10)).with_tick_rate(0));
     time_evt0.arm(1, None);
     wheel.register(time_evt0);
 
     // Event on domain 1
-    let time_evt1 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal(0x20)).with_tick_rate(1));
+    let time_evt1 = new_time_event(ActiveObjectId::new(1), TimeEventConfig::new(Signal::from_raw(0x20)).with_tick_rate(1));
     time_evt1.arm(1, None);
     wheel.register(time_evt1);
 
@@ -76,7 +76,7 @@ fn multi_tick_rate_domains() {
     // Verify only domain 0 event fired
     {
         let events = probe.events.lock().unwrap();
-        assert_eq!(events.as_slice(), &[Signal(0x10)]);
+        assert_eq!(events.as_slice(), &[Signal::from_raw(0x10)]);
     }
 
     assert!(wheel.no_active(0));
@@ -89,7 +89,7 @@ fn multi_tick_rate_domains() {
     // Verify domain 1 event also fired
     {
         let events = probe.events.lock().unwrap();
-        assert_eq!(events.as_slice(), &[Signal(0x10), Signal(0x20)]);
+        assert_eq!(events.as_slice(), &[Signal::from_raw(0x10), Signal::from_raw(0x20)]);
     }
 
     assert!(wheel.no_active(1));

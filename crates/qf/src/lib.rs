@@ -45,7 +45,7 @@ pub use dis::{Dis, DisAtomicU16, DisInt};
 pub use equeue::{defer, flush_deferred, recall, PostStatus, QEQueue};
 #[cfg(feature = "static-alloc")]
 pub use equeue::StaticEQueue;
-pub use event::{Event, EventHeader, Signal};
+pub use event::{assert_no_overlap, Event, EventHeader, Signal, SignalBlock};
 pub use event_pool::{gc, q_new, q_new_x, EventBox, PoolRegistry, POOL_REGISTRY, MAX_POOLS};
 pub use fusa::{clear_error_handler, on_error, set_error_handler, ErrorHandler};
 pub use hsm::{SameState, QHsm, QHsmResult, StateHandler, MAX_NEST_DEPTH, QAsm};

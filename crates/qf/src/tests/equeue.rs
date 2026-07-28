@@ -10,7 +10,7 @@ use crate::equeue::{defer, flush_deferred, recall, QEQueue};
 use crate::event::{DynEvent, Signal};
 
 fn ev(sig: u16) -> DynEvent {
-    DynEvent::empty_dyn(Signal(sig))
+    DynEvent::empty_dyn(Signal::from_raw(sig))
 }
 
 // ── QEQueue basic operations ──────────────────────────────────────────────────
@@ -33,9 +33,9 @@ fn equeue_post_and_get_fifo() {
     assert_eq!(q.len(), 2);
 
     let first = q.get().expect("should have event");
-    assert_eq!(first.signal(), Signal(1));
+    assert_eq!(first.signal(), Signal::from_raw(1));
     let second = q.get().expect("should have event");
-    assert_eq!(second.signal(), Signal(2));
+    assert_eq!(second.signal(), Signal::from_raw(2));
     assert!(q.get().is_none());
 }
 
@@ -46,9 +46,9 @@ fn equeue_post_lifo_prepends() {
     q.post(ev(2), 0);
     // LIFO insert: goes to front
     q.post_lifo(ev(99));
-    assert_eq!(q.get().unwrap().signal(), Signal(99));
-    assert_eq!(q.get().unwrap().signal(), Signal(1));
-    assert_eq!(q.get().unwrap().signal(), Signal(2));
+    assert_eq!(q.get().unwrap().signal(), Signal::from_raw(99));
+    assert_eq!(q.get().unwrap().signal(), Signal::from_raw(1));
+    assert_eq!(q.get().unwrap().signal(), Signal::from_raw(2));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn recall_reinjects_lifo() {
     impl ActiveBehavior for Capture {
         fn on_start(&mut self, _: &mut ActiveContext) {}
         fn on_event(&mut self, _: &mut ActiveContext, e: DynEvent) {
-            self.0.lock().push(e.signal().0);
+            self.0.lock().push(e.signal().raw());
         }
     }
     let log = crate::sync::Arc::new(crate::sync::Mutex::new(alloc::vec::Vec::new()));

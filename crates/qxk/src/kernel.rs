@@ -548,10 +548,10 @@ mod tests {
         let mut kernel = QxkKernel::builder().register_ao(ao)?.build()?;
         kernel.start();
 
-        kernel.post_ao_and_run(ao_id, DynEvent::empty_dyn(Signal(42)))?;
+        kernel.post_ao_and_run(ao_id, DynEvent::empty_dyn(Signal::from_raw(42)))?;
 
         let entries = log.lock().unwrap();
-        assert_eq!(entries.as_slice(), &[(ao_id, Signal(42))]);
+        assert_eq!(entries.as_slice(), &[(ao_id, Signal::from_raw(42))]);
         Ok(())
     }
 
@@ -570,14 +570,14 @@ mod tests {
             .build()?;
         kernel.start();
 
-        kernel.publish_ao(Signal(99), DynEvent::empty_dyn(Signal(0)));
+        kernel.publish_ao(Signal::from_raw(99), DynEvent::empty_dyn(Signal::from_raw(0)));
         kernel.run_until_idle();
 
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2);
         // Higher priority dispatched first
-        assert_eq!(entries[0], (ao2_id, Signal(99)));
-        assert_eq!(entries[1], (ao1_id, Signal(99)));
+        assert_eq!(entries[0], (ao2_id, Signal::from_raw(99)));
+        assert_eq!(entries[1], (ao1_id, Signal::from_raw(99)));
         Ok(())
     }
 
@@ -632,7 +632,7 @@ mod tests {
         kernel.start();
 
         for i in 0..30 {
-            kernel.post_ao(ao_id, DynEvent::empty_dyn(Signal(i))).unwrap();
+            kernel.post_ao(ao_id, DynEvent::empty_dyn(Signal::from_raw(i))).unwrap();
         }
 
         let kernel_arc = Arc::new(kernel);

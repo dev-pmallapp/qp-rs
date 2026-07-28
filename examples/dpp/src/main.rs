@@ -31,13 +31,13 @@ const N_PHILO: usize = 5;
 const TABLE_ID: ActiveObjectId = ActiveObjectId::new(1);
 const PHILO_BASE_ID: u8 = 2;
 
-const EAT_SIG: Signal = Signal(4);
-const DONE_SIG: Signal = Signal(5);
-const PAUSE_SIG: Signal = Signal(6);
-const SERVE_SIG: Signal = Signal(7);
-const TEST_SIG: Signal = Signal(8);
-const TIMEOUT_SIG: Signal = Signal(10);
-const HUNGRY_SIG: Signal = Signal(11);
+const EAT_SIG: Signal = Signal::user(4);
+const DONE_SIG: Signal = Signal::user(5);
+const PAUSE_SIG: Signal = Signal::user(6);
+const SERVE_SIG: Signal = Signal::user(7);
+const TEST_SIG: Signal = Signal::user(8);
+const TIMEOUT_SIG: Signal = Signal::user(10);
+const HUNGRY_SIG: Signal = Signal::user(11);
 
 const PHILO_STAT_RECORD: u8 = 100;
 const PAUSED_STAT_RECORD: u8 = 101;
@@ -166,7 +166,7 @@ fn emit_reference_dictionary(port: &PosixPort) -> Result<(), TraceError> {
         (TIMEOUT_SIG, "TIMEOUT_SIG"),
         (HUNGRY_SIG, "HUNGRY_SIG"),
     ] {
-        port.emit_sig_dict(signal.0, 0, name)?;
+        port.emit_sig_dict(signal.raw(), 0, name)?;
     }
 
     port.emit_obj_dict(dict_handle(EVT_POOL_NAME), EVT_POOL_NAME)?;
